@@ -1,0 +1,12 @@
+# Keep EAS uploads small — not needed for the native build
+stitch_think_tap_mobile_app/
+OneTap_Mobile_App_Technical_Document.pdf
+.claude/
+.vscode/
+AGENTS.md
+CLAUDE.md
+*.md
+!README.md
+.env
+.env.*
+!.env.example

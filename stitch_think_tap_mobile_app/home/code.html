@@ -1,0 +1,189 @@
+<!DOCTYPE html><html class="light" lang="en" style=""><head>
+<meta charset="utf-8">
+<meta content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" name="viewport">
+<title>Idea Bank - Home</title>
+<!-- Fonts -->
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&amp;family=Hanken+Grotesk:wght@500;600;700;800&amp;family=Geist:wght@400;500;600&amp;display=swap" rel="stylesheet">
+<!-- Material Symbols -->
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet">
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<script id="tailwind-config">tailwind.config = {darkMode: "class", theme: {extend: {colors: {"tertiary-container": "#002109", "inverse-primary": "#c8c6c5", "surface-container": "#e7eefe", "surface-container-highest": "#dce2f3", "on-primary": "#ffffff", "secondary-container": "#645efb", "surface-container-high": "#e2e8f8", "on-primary-fixed": "#1c1b1b", "on-surface-variant": "#444748", "inverse-surface": "#2a313d", surface: "#f9f9ff", background: "#f9f9ff", "on-secondary": "#ffffff", "secondary-fixed": "#e2dfff", "surface-dim": "#d3daea", tertiary: "#000000", "surface-container-lowest": "#ffffff", "surface-container-low": "#f0f3ff", "on-error": "#ffffff", "inverse-on-surface": "#ebf1ff", outline: "#747878", "primary-container": "#1c1b1b", "on-tertiary": "#ffffff", secondary: "#4b41e1", "on-secondary-fixed": "#0f0069", "on-secondary-fixed-variant": "#3323cc", "secondary-fixed-dim": "#c3c0ff", "surface-bright": "#f9f9ff", "on-error-container": "#93000a", "surface-variant": "#dce2f3", "outline-variant": "#c4c7c7", "error-container": "#ffdad6", "on-surface": "#151c27", "tertiary-fixed-dim": "#4ae176", "on-primary-fixed-variant": "#474646", primary: "#000000", "tertiary-fixed": "#6bff8f", "on-tertiary-fixed": "#002109", error: "#ba1a1a", "primary-fixed": "#e5e2e1", "on-secondary-container": "#fffbff", "primary-fixed-dim": "#c8c6c5", "on-tertiary-container": "#009844", "on-primary-container": "#858383", "surface-tint": "#5f5e5e", "on-background": "#151c27", "on-tertiary-fixed-variant": "#005321"}, borderRadius: {DEFAULT: "0.25rem", lg: "0.5rem", xl: "0.75rem", full: "9999px"}, spacing: {gutter: "16px", "container-margin": "20px", "stack-lg": "32px", "stack-sm": "8px", "stack-md": "16px", "section-gap": "48px"}, fontFamily: {"body-lg": ["Inter"], "label-sm": ["Geist"], "title-md": ["Hanken Grotesk"], "display-lg": ["Hanken Grotesk"], "body-md": ["Inter"], "headline-lg-mobile": ["Hanken Grotesk"], "headline-lg": ["Hanken Grotesk"], "label-md": ["Geist"], headline: ["Hanken Grotesk"], display: ["Hanken Grotesk"], body: ["Inter"], label: ["Geist"]}, fontSize: {"body-lg": ["18px", {lineHeight: "28px", fontWeight: "400"}], "label-sm": ["12px", {lineHeight: "16px", letterSpacing: "0.04em", fontWeight: "500"}], "title-md": ["20px", {lineHeight: "28px", fontWeight: "500"}], "display-lg": ["48px", {lineHeight: "56px", letterSpacing: "-0.02em", fontWeight: "600"}], "body-md": ["16px", {lineHeight: "24px", fontWeight: "400"}], "headline-lg-mobile": ["28px", {lineHeight: "34px", fontWeight: "600"}], "headline-lg": ["32px", {lineHeight: "40px", letterSpacing: "-0.01em", fontWeight: "600"}], "label-md": ["14px", {lineHeight: "20px", letterSpacing: "0.02em", fontWeight: "500"}]}}}};</script>
+<style>
+        body {
+            -webkit-tap-highlight-color: transparent;
+            background-color: #f9f9ff;
+        }
+        .mic-pulse {
+            animation: pulse-ring 3s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+        }
+        @keyframes pulse-ring {
+            0% { transform: scale(0.95); opacity: 0.1; }
+            50% { transform: scale(1.1); opacity: 0.2; }
+            100% { transform: scale(0.95); opacity: 0.1; }
+        }
+        .glass-nav {
+            backdrop-filter: blur(20px);
+            -webkit-backdrop-filter: blur(20px);
+        }
+        .ios-scroll-hide::-webkit-scrollbar {
+            display: none;
+        }
+        .material-symbols-outlined {
+            font-variation-settings: 'FILL' 0, 'wght' 400, 'GRAD' 0, 'opsz' 24;
+        }
+    </style>
+<style>
+    body {
+      min-height: max(884px, 100dvh);
+    }
+  </style>
+<style>
+    body {
+      min-height: max(884px, 100dvh);
+    }
+  </style>
+  </head>
+<body class="bg-background text-on-background font-body-md selection:bg-secondary-fixed selection:text-on-secondary-fixed">
+<!-- Top App Bar -->
+<header class="fixed top-0 z-50 bg-background w-full flex justify-between items-center px-container-margin py-stack-md">
+<div class="flex flex-col">
+<h1 class="font-headline-lg-mobile text-headline-lg-mobile font-extrabold tracking-tight text-primary">Hello, Shri</h1>
+<p class="font-label-md text-label-md text-on-surface-variant">Ready for your next idea?</p>
+</div>
+<button class="w-10 h-10 rounded-full overflow-hidden bg-surface-container-high border border-outline-variant flex items-center justify-center hover:opacity-80 transition-opacity active:scale-95 duration-200">
+<img class="w-full h-full object-cover" data-alt="A professional, minimalist close-up studio portrait of a young creative professional with a clean aesthetic. The lighting is soft and high-key, emphasizing a light-mode UI atmosphere. The background is a solid, neutral off-white consistent with a premium digital stationery brand. The overall mood is focused and serene." src="https://lh3.googleusercontent.com/aida-public/AB6AXuAY7wwBTUpLBr3lmicI5iwmcozcfoT-cYPxCfoA2E7o5kGuNqrIv4UoZBt4_41pNTbFQEzt072s6ML5HL4cJB-THQ1mQaEqsZRucZmYVYlBzAeeyG6gfyrwUnpwPiEUhn6kiGdhnZ6_0GDEgzUQORebnl0qhl3ox7FCLmKrimHWshq0xSmJHl8ARyvMC2_QnOOKiymuV8SwVPdl2bnRGZtKB_4T94ZILM8XTuu6-XblRuFNHQ8OfXFnBUuedroIvheDUmjsc8Cu6nAclQ">
+</button>
+</header>
+<main class="pt-24 pb-32 px-container-margin min-h-screen">
+<!-- Recent Ideas Section -->
+<section class="mb-section-gap">
+<div class="flex justify-between items-end mb-stack-md">
+<h2 class="font-title-md text-title-md text-on-background font-semibold">Recent Ideas</h2>
+<button class="font-label-md text-label-md text-secondary hover:underline transition-all">View all</button>
+</div>
+<div class="space-y-stack-md">
+<!-- Card 1 -->
+<div class="bg-surface-container-lowest border border-[#EAEAEA] rounded-xl p-stack-md flex items-center gap-4 hover:shadow-md transition-all duration-300 group">
+<div class="w-12 h-12 rounded-lg bg-surface-container flex items-center justify-center text-primary">
+<span class="material-symbols-outlined">movie</span>
+</div>
+<div class="flex-1">
+<h3 class="font-body-md text-body-md font-semibold text-primary">Hostel Horror Web Show Synopsis</h3>
+<div class="flex items-center gap-2 mt-1">
+<span class="font-label-sm text-label-sm px-2 py-0.5 rounded-full bg-secondary-fixed text-on-secondary-fixed-variant">Movies</span>
+<span class="font-label-sm text-label-sm text-on-surface-variant">• Today</span>
+</div>
+</div>
+<div class="text-right">
+<p class="font-label-sm text-label-sm text-on-surface-variant">2m 14s</p>
+</div>
+</div>
+<!-- Card 2 -->
+<div class="bg-surface-container-lowest border border-[#EAEAEA] rounded-xl p-stack-md flex items-center gap-4 hover:shadow-md transition-all duration-300">
+<div class="w-12 h-12 rounded-lg bg-surface-container flex items-center justify-center text-primary">
+<span class="material-symbols-outlined">restaurant</span>
+</div>
+<div class="flex-1">
+<h3 class="font-body-md text-body-md font-semibold text-primary">Street Food App Brief</h3>
+<div class="flex items-center gap-2 mt-1">
+<span class="font-label-sm text-label-sm px-2 py-0.5 rounded-full bg-surface-variant text-on-surface-variant">Business</span>
+<span class="font-label-sm text-label-sm text-on-surface-variant">• Today</span>
+</div>
+</div>
+<div class="text-right">
+<p class="font-label-sm text-label-sm text-on-surface-variant">1m 05s</p>
+</div>
+</div>
+<!-- Card 3 -->
+<div class="bg-surface-container-lowest border border-[#EAEAEA] rounded-xl p-stack-md flex items-center gap-4 hover:shadow-md transition-all duration-300">
+<div class="w-12 h-12 rounded-lg bg-surface-container flex items-center justify-center text-primary">
+<span class="material-symbols-outlined">lightbulb</span>
+</div>
+<div class="flex-1">
+<h3 class="font-body-md text-body-md font-semibold text-primary">Chennai Monsoon Poster Concept</h3>
+<div class="flex items-center gap-2 mt-1">
+<span class="font-label-sm text-label-sm px-2 py-0.5 rounded-full bg-surface-variant text-on-surface-variant">Design</span>
+<span class="font-label-sm text-label-sm text-on-surface-variant">• Yesterday</span>
+</div>
+</div>
+<div class="text-right">
+<p class="font-label-sm text-label-sm text-on-surface-variant">4m 32s</p>
+</div>
+</div>
+</div>
+</section>
+<!-- Centered Microphone Hero -->
+<div class="flex flex-col items-center justify-center pt-8">
+<div class="relative flex items-center justify-center">
+<!-- Pulsing Background Rings -->
+<div class="absolute w-48 h-48 rounded-full bg-secondary opacity-10 mic-pulse"></div>
+<div class="absolute w-64 h-64 rounded-full bg-secondary opacity-5 mic-pulse" style="animation-delay: 1s;"></div>
+<!-- Main Mic Button -->
+<button class="relative z-10 w-32 h-32 rounded-full bg-primary text-white flex items-center justify-center shadow-2xl active:scale-90 transition-transform duration-300 group" id="micBtn">
+<span class="material-symbols-outlined !text-5xl group-hover:scale-110 transition-transform" style="font-variation-settings: 'FILL' 1;">mic</span>
+</button>
+</div>
+<div class="mt-8 text-center">
+<p class="font-title-md text-title-md font-bold text-primary tracking-wide" id="micLabel">Tap to Record</p>
+<p class="font-label-md text-label-md text-on-surface-variant mt-2">AI will transcribe and categorize instantly</p>
+</div>
+</div>
+</main>
+<!-- Bottom Navigation Shell -->
+<nav class="fixed bottom-0 w-full z-50 flex justify-around items-center px-4 pb-8 pt-4 bg-surface/80 backdrop-blur-xl border-t border-outline-variant shadow-md">
+<!-- Home (Active) -->
+<a class="flex flex-col items-center justify-center text-secondary font-semibold hover:opacity-80 active:scale-90 transition-all duration-300" href="#">
+<span class="material-symbols-outlined" style="font-variation-settings: 'FILL' 1;">home</span>
+<span class="font-label-sm text-label-sm mt-1">Home</span>
+</a>
+<!-- Ideas -->
+<a class="flex flex-col items-center justify-center text-on-surface-variant hover:text-primary active:scale-90 transition-all duration-300" href="#">
+<span class="material-symbols-outlined">lightbulb</span>
+<span class="font-label-sm text-label-sm mt-1">Ideas</span>
+</a>
+<!-- Search -->
+<a class="flex flex-col items-center justify-center text-on-surface-variant hover:text-primary active:scale-90 transition-all duration-300" href="#">
+<span class="material-symbols-outlined">search</span>
+<span class="font-label-sm text-label-sm mt-1">Search</span>
+</a>
+<!-- Settings -->
+<a class="flex flex-col items-center justify-center text-on-surface-variant hover:text-primary active:scale-90 transition-all duration-300" href="#">
+<span class="material-symbols-outlined">settings</span>
+<span class="font-label-sm text-label-sm mt-1">Settings</span>
+</a>
+</nav>
+<script>
+        const micBtn = document.getElementById('micBtn');
+        const micLabel = document.getElementById('micLabel');
+        let isRecording = false;
+
+        micBtn.addEventListener('click', () => {
+            isRecording = !isRecording;
+            if (isRecording) {
+                micBtn.classList.replace('bg-primary', 'bg-error');
+                micLabel.textContent = 'Listening...';
+                micLabel.classList.add('text-error');
+                // Haptic-like visual feedback
+                navigator.vibrate?.(50);
+            } else {
+                micBtn.classList.replace('bg-error', 'bg-primary');
+                micLabel.textContent = 'Tap to Record';
+                micLabel.classList.remove('text-error');
+                navigator.vibrate?.([30, 30]);
+            }
+        });
+
+        // Simple scroll behavior for header elevation
+        window.addEventListener('scroll', () => {
+            const header = document.querySelector('header');
+            if (window.scrollY > 20) {
+                header.classList.add('shadow-sm', 'bg-surface/90', 'backdrop-blur-md');
+            } else {
+                header.classList.remove('shadow-sm', 'bg-surface/90', 'backdrop-blur-md');
+            }
+        });
+    </script>
+
+
+</body></html>
