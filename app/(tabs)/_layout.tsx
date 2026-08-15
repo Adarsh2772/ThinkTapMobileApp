@@ -1,6 +1,6 @@
 import { Ionicons } from '@expo/vector-icons';
 import { Tabs } from 'expo-router';
-import { Platform } from 'react-native';
+import { Platform, StyleSheet } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { useSettingsStore } from '@/src/store/settingsStore';
@@ -22,7 +22,7 @@ export default function TabsLayout() {
         tabBarHideOnKeyboard: true,
         tabBarLabelStyle: {
           fontSize: 11,
-          fontWeight: '500',
+          fontWeight: '600',
           marginBottom: 2,
         },
         tabBarIconStyle: {
@@ -32,17 +32,17 @@ export default function TabsLayout() {
           paddingVertical: 2,
         },
         tabBarStyle: {
-          backgroundColor: colors.background,
-          borderTopColor: colors.outlineVariant,
-          borderTopWidth: 1,
-          height: 56 + bottom,
+          backgroundColor: colors.tabBar,
+          borderTopColor: colors.border,
+          borderTopWidth: StyleSheet.hairlineWidth,
+          height: 58 + bottom,
           paddingBottom: bottom,
           paddingTop: 6,
-          elevation: 8,
-          shadowColor: '#000',
-          shadowOpacity: 0.06,
-          shadowRadius: 8,
-          shadowOffset: { width: 0, height: -2 },
+          elevation: 12,
+          shadowColor: colors.shadow,
+          shadowOpacity: 0.08,
+          shadowRadius: 12,
+          shadowOffset: { width: 0, height: -4 },
         },
       }}
     >

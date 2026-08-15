@@ -11,8 +11,8 @@
       "supportsTablet": true,
       "bundleIdentifier": "com.thinktap.app",
       "infoPlist": {
-        "NSMicrophoneUsageDescription": "Allow Think Tap to use the microphone for Hey Think Tap.",
-        "NSSpeechRecognitionUsageDescription": "Allow Think Tap to recognize Hey Think Tap to start recording."
+        "NSMicrophoneUsageDescription": "Allow Think Tap to use the microphone to record ideas and for Hey Think Tap.",
+        "NSSpeechRecognitionUsageDescription": "Allow Think Tap to convert your spoken ideas to text in your chosen language, and to recognize Hey Think Tap."
       }
     },
     "android": {
@@ -26,10 +26,14 @@
       "permissions": [
         "RECORD_AUDIO",
         "MODIFY_AUDIO_SETTINGS",
+        "POST_NOTIFICATIONS",
+        "FOREGROUND_SERVICE",
+        "FOREGROUND_SERVICE_MICROPHONE",
         "android.permission.RECORD_AUDIO",
         "android.permission.MODIFY_AUDIO_SETTINGS",
+        "android.permission.POST_NOTIFICATIONS",
         "android.permission.FOREGROUND_SERVICE",
-        "android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK"
+        "android.permission.FOREGROUND_SERVICE_MICROPHONE"
       ],
       "predictiveBackGestureEnabled": false
     },
@@ -60,8 +64,13 @@
       [
         "expo-speech-recognition",
         {
-          "microphonePermission": "Allow Think Tap to use the microphone for Hey Think Tap.",
-          "speechRecognitionPermission": "Allow Think Tap to recognize Hey Think Tap to start recording."
+          "microphonePermission": "Allow Think Tap to use the microphone for speech transcription and Hey Think Tap.",
+          "speechRecognitionPermission": "Allow Think Tap to convert your spoken ideas to text in your chosen language.",
+          "androidSpeechServicePackages": [
+            "com.google.android.googlequicksearchbox",
+            "com.google.android.tts",
+            "com.google.android.as"
+          ]
         }
       ]
     ],

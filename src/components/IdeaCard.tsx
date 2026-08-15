@@ -1,14 +1,21 @@
 import { Ionicons } from '@expo/vector-icons';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 
-import { colors, fonts, radii, spacing, typography } from '@/src/theme/tokens';
+import {
+  categoryColor,
+  colors,
+  fonts,
+  radii,
+  spacing,
+  typography,
+} from '@/src/theme/tokens';
 import type { Idea } from '@/src/types';
 import { formatDuration, relativeDate } from '@/src/utils/format';
 
 const CATEGORY_ICONS: Record<string, keyof typeof Ionicons.glyphMap> = {
   Movies: 'film-outline',
-  Business: 'restaurant-outline',
-  Design: 'bulb-outline',
+  Business: 'briefcase-outline',
+  Design: 'color-palette-outline',
   Music: 'musical-notes-outline',
   Songs: 'musical-note-outline',
   Books: 'book-outline',
@@ -23,27 +30,31 @@ type Props = {
 
 export function IdeaCard({ idea, variant = 'compact', onPress }: Props) {
   const icon = CATEGORY_ICONS[idea.category] ?? 'bulb-outline';
+  const tint = categoryColor(idea.category);
 
   if (variant === 'archive') {
     return (
-      <Pressable onPress={onPress} style={({ pressed }) => [styles.archiveCard, pressed && styles.pressed]}>
+      <Pressable
+        onPress={onPress}
+        style={({ pressed }) => [styles.archiveCard, pressed && styles.pressed]}
+      >
         <View style={styles.archiveHeader}>
-          <View style={styles.categoryPillDark}>
-            <Text style={styles.categoryPillDarkText}>{idea.category.toUpperCase()}</Text>
+          <View style={[styles.categoryPill, { backgroundColor: tint.bg }]}>
+            <Text style={styles.categoryPillText}>{idea.category.toUpperCase()}</Text>
           </View>
           <Text style={styles.dateText}>{relativeDate(idea.createdAt)}</Text>
         </View>
         <Text style={styles.archiveTitle}>{idea.title}</Text>
         <Text style={styles.snippet} numberOfLines={2}>
-          {idea.summary}
+          {idea.analysis?.thought?.trim() || idea.summary}
         </Text>
         <View style={styles.archiveFooter}>
           <View style={styles.metaRow}>
-            <Ionicons name="mic-outline" size={16} color={colors.onSurfaceVariant} />
+            <Ionicons name="mic-outline" size={16} color={colors.secondary} />
             <Text style={styles.metaText}>{formatDuration(idea.durationSec)}</Text>
           </View>
           <View style={styles.metaRow}>
-            <Ionicons name="flash-outline" size={16} color={colors.onSurfaceVariant} />
+            <Ionicons name="flash-outline" size={16} color={colors.accent} />
             <Text style={styles.metaText}>AI Transcribed</Text>
           </View>
         </View>
@@ -52,17 +63,20 @@ export function IdeaCard({ idea, variant = 'compact', onPress }: Props) {
   }
 
   return (
-    <Pressable onPress={onPress} style={({ pressed }) => [styles.compactCard, pressed && styles.pressed]}>
-      <View style={styles.iconBox}>
-        <Ionicons name={icon} size={22} color={colors.primary} />
+    <Pressable
+      onPress={onPress}
+      style={({ pressed }) => [styles.compactCard, pressed && styles.pressed]}
+    >
+      <View style={[styles.iconBox, { backgroundColor: tint.soft }]}>
+        <Ionicons name={icon} size={22} color={tint.bg} />
       </View>
       <View style={{ flex: 1 }}>
         <Text style={styles.compactTitle} numberOfLines={1}>
           {idea.title}
         </Text>
         <View style={styles.chipRow}>
-          <View style={styles.chip}>
-            <Text style={styles.chipText}>{idea.category}</Text>
+          <View style={[styles.chip, { backgroundColor: tint.soft }]}>
+            <Text style={[styles.chipText, { color: tint.bg }]}>{idea.category}</Text>
           </View>
           <Text style={styles.metaText}>• {relativeDate(idea.createdAt)}</Text>
         </View>
@@ -73,7 +87,7 @@ export function IdeaCard({ idea, variant = 'compact', onPress }: Props) {
 }
 
 const styles = StyleSheet.create({
-  pressed: { transform: [{ scale: 0.98 }], opacity: 0.92 },
+  pressed: { transform: [{ scale: 0.985 }], opacity: 0.94 },
   compactCard: {
     backgroundColor: colors.surfaceContainerLowest,
     borderWidth: 1,
@@ -88,7 +102,6 @@ const styles = StyleSheet.create({
     width: 48,
     height: 48,
     borderRadius: radii.md,
-    backgroundColor: colors.surfaceContainer,
     alignItems: 'center',
     justifyContent: 'center',
   },
@@ -99,7 +112,6 @@ const styles = StyleSheet.create({
   },
   chipRow: { flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 4 },
   chip: {
-    backgroundColor: colors.secondaryFixed,
     paddingHorizontal: 8,
     paddingVertical: 2,
     borderRadius: radii.full,
@@ -107,7 +119,6 @@ const styles = StyleSheet.create({
   chipText: {
     fontFamily: fonts.label,
     fontSize: typography.labelSm.fontSize,
-    color: colors.onSecondaryFixedVariant,
   },
   metaText: {
     fontFamily: fonts.label,
@@ -117,14 +128,14 @@ const styles = StyleSheet.create({
   archiveCard: {
     backgroundColor: colors.surfaceContainerLowest,
     borderWidth: 1,
-    borderColor: colors.outlineVariant,
+    borderColor: colors.border,
     borderRadius: radii.card,
     padding: spacing.stackMd,
-    shadowColor: '#000',
-    shadowOpacity: 0.03,
-    shadowRadius: 20,
+    shadowColor: colors.shadow,
+    shadowOpacity: 0.05,
+    shadowRadius: 12,
     shadowOffset: { width: 0, height: 4 },
-    elevation: 1,
+    elevation: 2,
   },
   archiveHeader: {
     flexDirection: 'row',
@@ -132,13 +143,12 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     marginBottom: spacing.stackSm,
   },
-  categoryPillDark: {
-    backgroundColor: colors.primary,
+  categoryPill: {
     paddingHorizontal: 12,
     paddingVertical: 4,
     borderRadius: radii.full,
   },
-  categoryPillDarkText: {
+  categoryPillText: {
     color: colors.onPrimary,
     fontFamily: fonts.bodySemi,
     fontSize: 10,
@@ -165,8 +175,8 @@ const styles = StyleSheet.create({
   archiveFooter: {
     flexDirection: 'row',
     gap: spacing.stackMd,
-    borderTopWidth: 1,
-    borderTopColor: colors.outlineVariant,
+    borderTopWidth: StyleSheet.hairlineWidth,
+    borderTopColor: colors.border,
     paddingTop: spacing.stackSm,
   },
   metaRow: { flexDirection: 'row', alignItems: 'center', gap: 4 },

@@ -3,6 +3,10 @@ import { create } from 'zustand';
 type PendingRecording = {
   audioUri: string;
   durationSec: number;
+  /** OS speech-to-text result captured during recording (no AI). */
+  transcript: string;
+  /** BCP-47 locale used for OS STT, e.g. hi-IN */
+  speechLocale: string;
 };
 
 type PendingRecordingState = {

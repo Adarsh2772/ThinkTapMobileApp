@@ -1,12 +1,55 @@
-# Keep EAS uploads small — not needed for the native build
+# When .easignore exists it replaces .gitignore for EAS uploads.
+# Keep the archive small so upload does not time out / reset.
+
+# dependencies
+node_modules/
+
+# Expo / Metro
+.expo/
+dist/
+web-build/
+expo-env.d.ts
+.metro-health-check*
+
+# Native projects (EAS regenerates / uses prebuild as needed)
+/android
+/ios
+.kotlin/
+
+# Local secrets & env
+.env
+.env.*
+!.env.example
+!server/.env.example
+*.jks
+*.p8
+*.p12
+*.key
+*.mobileprovision
+*.pem
+
+# Debug / OS
+npm-debug.*
+yarn-debug.*
+yarn-error.*
+.DS_Store
+*.tsbuildinfo
+
+# Docs & design assets not needed for build
 stitch_think_tap_mobile_app/
 OneTap_Mobile_App_Technical_Document.pdf
+docs/
 .claude/
 .vscode/
 AGENTS.md
 CLAUDE.md
 *.md
 !README.md
-.env
-.env.*
-!.env.example
+
+# Native module build caches
+modules/**/build/
+modules/**/.gradle/
+modules/**/.cxx/
+
+# Misc
+.git/

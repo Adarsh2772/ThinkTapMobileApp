@@ -1,0 +1,1 @@
+export { AndroidWakeWord } from './src';

@@ -6,6 +6,7 @@ import { createId, validateEmail, validatePassword } from '@/src/utils/format';
 
 const USERS_KEY = '@thinktap/users';
 const SESSION_KEY = '@thinktap/session';
+const GUEST_EMAIL = 'guest@thinktap.local';
 
 type StoredUser = User & { password: string };
 
@@ -13,6 +14,7 @@ type AuthState = {
   session: AuthSession | null;
   hydrated: boolean;
   hydrate: () => Promise<void>;
+  ensureGuestSession: () => Promise<AuthSession>;
   signUp: (input: {
     firstName: string;
     lastName: string;
@@ -41,9 +43,30 @@ async function saveUsers(users: StoredUser[]) {
   await AsyncStorage.setItem(USERS_KEY, JSON.stringify(users));
 }
 
-export const useAuthStore = create<AuthState>((set) => ({
+async function createGuestSession(): Promise<AuthSession> {
+  const user: User = {
+    id: 'guest-local',
+    firstName: 'Think',
+    lastName: 'Tap',
+    email: GUEST_EMAIL,
+    createdAt: new Date().toISOString(),
+  };
+  const session: AuthSession = { user, token: 'guest-token' };
+  await AsyncStorage.setItem(SESSION_KEY, JSON.stringify(session));
+  return session;
+}
+
+export const useAuthStore = create<AuthState>((set, get) => ({
   session: null,
   hydrated: false,
+
+  ensureGuestSession: async () => {
+    const existing = get().session;
+    if (existing) return existing;
+    const session = await createGuestSession();
+    set({ session });
+    return session;
+  },
 
   hydrate: async () => {
     try {
@@ -55,7 +78,9 @@ export const useAuthStore = create<AuthState>((set) => ({
     } catch {
       // ignore
     }
-    set({ session: null, hydrated: true });
+    // No login for now — open straight into a local guest session.
+    const session = await createGuestSession();
+    set({ session, hydrated: true });
   },
 
   signUp: async ({ firstName, lastName, email, password, confirmPassword }) => {
@@ -110,7 +135,8 @@ export const useAuthStore = create<AuthState>((set) => ({
   },
 
   signOut: async () => {
-    await AsyncStorage.removeItem(SESSION_KEY);
-    set({ session: null });
+    // Stay in guest mode instead of forcing login.
+    const session = await createGuestSession();
+    set({ session });
   },
 }));

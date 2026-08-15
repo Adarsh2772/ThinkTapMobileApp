@@ -11,10 +11,19 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { IdeaCard } from '@/src/components/IdeaCard';
+import { ScreenHeader } from '@/src/components/ScreenHeader';
 import { useAuthStore } from '@/src/store/authStore';
 import { useIdeasStore } from '@/src/store/ideasStore';
 import { useSettingsStore } from '@/src/store/settingsStore';
-import { CATEGORIES, colors, fonts, radii, spacing, typography } from '@/src/theme/tokens';
+import {
+  CATEGORIES,
+  categoryColor,
+  colors,
+  fonts,
+  radii,
+  spacing,
+  typography,
+} from '@/src/theme/tokens';
 
 export default function IdeasScreen() {
   const router = useRouter();
@@ -36,8 +45,8 @@ export default function IdeasScreen() {
 
   return (
     <SafeAreaView style={styles.safe} edges={['top']}>
-      <View style={styles.header}>
-        <Text style={styles.brand}>Think Tap</Text>
+      <View style={styles.pad}>
+        <ScreenHeader title="Think Tap" subtitle={tx('myArchive')} />
       </View>
 
       <View style={styles.titleBlock}>
@@ -55,14 +64,23 @@ export default function IdeasScreen() {
         >
           {CATEGORIES.map((item) => {
             const active = item === category;
+            const tint = categoryColor(item);
             return (
               <Pressable
                 key={item}
                 onPress={() => setCategory(item)}
-                style={[styles.chip, active ? styles.chipActive : styles.chipInactive]}
+                style={[
+                  styles.chip,
+                  active
+                    ? { backgroundColor: tint.bg }
+                    : { backgroundColor: tint.soft },
+                ]}
               >
                 <Text
-                  style={[styles.chipText, active && styles.chipTextActive]}
+                  style={[
+                    styles.chipText,
+                    { color: active ? tint.fg : tint.bg },
+                  ]}
                   numberOfLines={1}
                 >
                   {item}
@@ -95,15 +113,7 @@ export default function IdeasScreen() {
 
 const styles = StyleSheet.create({
   safe: { flex: 1, backgroundColor: colors.background },
-  header: {
-    paddingHorizontal: spacing.containerMargin,
-    paddingVertical: spacing.stackMd,
-  },
-  brand: {
-    fontFamily: fonts.headlineBold,
-    fontSize: typography.titleMd.fontSize,
-    color: colors.primary,
-  },
+  pad: { paddingHorizontal: spacing.containerMargin },
   titleBlock: {
     paddingHorizontal: spacing.containerMargin,
     marginBottom: spacing.stackMd,
@@ -136,17 +146,13 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
-  chipActive: { backgroundColor: colors.primary },
-  chipInactive: { backgroundColor: colors.chipInactive },
   chipText: {
     fontFamily: fonts.label,
     fontSize: 14,
     lineHeight: 18,
     includeFontPadding: false,
     textAlignVertical: 'center',
-    color: colors.onSurfaceVariant,
   },
-  chipTextActive: { color: colors.onPrimary },
   list: {
     paddingHorizontal: spacing.containerMargin,
     paddingBottom: 120,

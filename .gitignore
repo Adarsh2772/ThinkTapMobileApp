@@ -43,3 +43,9 @@ yarn-error.*
 .env
 .env.*
 !.env.example
+!server/.env.example
+
+# Android generated files
+**/android/build/
+**/android/.gradle/
+**/.gradle/

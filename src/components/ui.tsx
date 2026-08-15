@@ -83,14 +83,14 @@ const styles = StyleSheet.create({
   button: {
     height: 52,
     borderRadius: radii.md,
-    backgroundColor: colors.primary,
+    backgroundColor: colors.secondary,
     alignItems: 'center',
     justifyContent: 'center',
   },
   buttonSecondary: {
-    backgroundColor: 'transparent',
+    backgroundColor: colors.secondarySoft,
     borderWidth: 1,
-    borderColor: colors.outlineVariant,
+    borderColor: colors.secondaryFixed,
   },
   buttonPressed: { opacity: 0.88, transform: [{ scale: 0.98 }] },
   buttonDisabled: { opacity: 0.5 },
@@ -99,5 +99,5 @@ const styles = StyleSheet.create({
     fontSize: typography.labelMd.fontSize,
     color: colors.onPrimary,
   },
-  buttonTextSecondary: { color: colors.primary },
+  buttonTextSecondary: { color: colors.onSecondaryFixedVariant },
 });

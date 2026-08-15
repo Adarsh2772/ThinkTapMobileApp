@@ -12,6 +12,7 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { IdeaCard } from '@/src/components/IdeaCard';
+import { ScreenHeader } from '@/src/components/ScreenHeader';
 import { useAuthStore } from '@/src/store/authStore';
 import { useIdeasStore } from '@/src/store/ideasStore';
 import { colors, fonts, radii, spacing, typography } from '@/src/theme/tokens';
@@ -34,19 +35,29 @@ export default function SearchScreen() {
     return allIdeas
       .filter((idea) => idea.userId === user.id)
       .filter((idea) => {
-        const haystack = `${idea.title} ${idea.summary} ${idea.transcript} ${idea.category}`.toLowerCase();
+        const analysisText = idea.analysis
+          ? [
+              idea.analysis.thought,
+              idea.analysis.sourceOfInspiration,
+              idea.analysis.potentialValue,
+              idea.analysis.expansionPaths,
+              idea.analysis.connectedThoughts,
+            ].join(' ')
+          : '';
+        const haystack =
+          `${idea.title} ${idea.summary} ${idea.transcript} ${idea.category} ${analysisText}`.toLowerCase();
         return haystack.includes(q);
       });
   }, [user, allIdeas, query]);
 
   return (
     <SafeAreaView style={styles.safe} edges={['top']}>
-      <View style={styles.header}>
-        <Text style={styles.brand}>Think Tap</Text>
+      <View style={styles.pad}>
+        <ScreenHeader title="Think Tap" subtitle="Deep discovery" />
       </View>
 
       <View style={styles.searchWrap}>
-        <Ionicons name="search" size={22} color={colors.outline} style={styles.searchIcon} />
+        <Ionicons name="search" size={22} color={colors.secondary} style={styles.searchIcon} />
         <TextInput
           value={query}
           onChangeText={setQuery}
@@ -73,7 +84,7 @@ export default function SearchScreen() {
 
           <View style={styles.emptyState}>
             <View style={styles.emptyIcon}>
-              <Ionicons name="compass-outline" size={36} color={colors.outlineVariant} />
+              <Ionicons name="compass-outline" size={36} color={colors.secondary} />
             </View>
             <Text style={styles.emptyTitle}>Deep Discovery</Text>
             <Text style={styles.emptyBody}>
@@ -105,15 +116,7 @@ export default function SearchScreen() {
 
 const styles = StyleSheet.create({
   safe: { flex: 1, backgroundColor: colors.background },
-  header: {
-    paddingHorizontal: spacing.containerMargin,
-    paddingVertical: spacing.stackMd,
-  },
-  brand: {
-    fontFamily: fonts.headlineBold,
-    fontSize: typography.titleMd.fontSize,
-    color: colors.primary,
-  },
+  pad: { paddingHorizontal: spacing.containerMargin },
   searchWrap: {
     marginHorizontal: spacing.containerMargin,
     position: 'relative',
@@ -121,10 +124,10 @@ const styles = StyleSheet.create({
   },
   searchIcon: { position: 'absolute', left: 16, zIndex: 1 },
   input: {
-    height: 64,
+    height: 56,
     borderRadius: radii.xl,
     borderWidth: 1,
-    borderColor: colors.outlineVariant,
+    borderColor: colors.border,
     backgroundColor: colors.surfaceContainerLowest,
     paddingLeft: 48,
     paddingRight: 16,
@@ -146,23 +149,23 @@ const styles = StyleSheet.create({
   suggestWrap: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
   suggestChip: {
     borderWidth: 1,
-    borderColor: colors.outlineVariant,
+    borderColor: colors.secondaryFixed,
     borderRadius: radii.full,
     paddingHorizontal: 16,
     paddingVertical: 8,
-    backgroundColor: colors.surfaceContainerLowest,
+    backgroundColor: colors.secondarySoft,
   },
   suggestText: {
     fontFamily: fonts.label,
     fontSize: typography.labelMd.fontSize,
-    color: colors.onSurface,
+    color: colors.onSecondaryFixedVariant,
   },
   emptyState: { alignItems: 'center', marginTop: spacing.sectionGap, paddingHorizontal: 24 },
   emptyIcon: {
     width: 96,
     height: 96,
     borderRadius: 24,
-    backgroundColor: colors.surfaceContainer,
+    backgroundColor: colors.secondarySoft,
     alignItems: 'center',
     justifyContent: 'center',
     marginBottom: 24,

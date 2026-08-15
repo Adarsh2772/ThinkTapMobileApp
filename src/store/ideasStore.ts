@@ -32,6 +32,7 @@ export const useIdeasStore = create<IdeasState>((set, get) => ({
         const normalized = parsed.map((idea) => ({
           ...idea,
           transcriptSource: idea.transcriptSource ?? 'demo',
+          analysis: idea.analysis ?? null,
         }));
         set({ ideas: normalized, hydrated: true });
         return;

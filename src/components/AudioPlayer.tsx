@@ -135,7 +135,7 @@ const styles = StyleSheet.create({
   card: {
     backgroundColor: colors.surfaceContainerLowest,
     borderWidth: 1,
-    borderColor: colors.outlineVariant,
+    borderColor: colors.border,
     borderRadius: radii.xl,
     padding: 20,
   },
@@ -144,7 +144,7 @@ const styles = StyleSheet.create({
     width: 48,
     height: 48,
     borderRadius: radii.full,
-    backgroundColor: colors.primary,
+    backgroundColor: colors.secondary,
     alignItems: 'center',
     justifyContent: 'center',
   },
@@ -169,7 +169,7 @@ const styles = StyleSheet.create({
   },
   waveFill: {
     height: '100%',
-    backgroundColor: colors.primary,
+    backgroundColor: colors.secondary,
   },
   skipRow: {
     marginTop: spacing.stackMd,

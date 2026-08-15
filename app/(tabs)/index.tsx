@@ -1,17 +1,25 @@
 import { useRouter } from 'expo-router';
-import { useEffect, useMemo, useRef } from 'react';
-import { Alert, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { useCallback, useEffect, useMemo, useRef } from 'react';
+import { Alert, Platform, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { IdeaCard } from '@/src/components/IdeaCard';
 import { MicButton } from '@/src/components/MicButton';
-import { useRecording } from '@/src/hooks/useRecording';
+import { ScreenHeader } from '@/src/components/ScreenHeader';
+import { useIdeaCapture } from '@/src/hooks/useIdeaCapture';
+import { getSpeechLocale } from '@/src/features/languageTranscript/locales';
+import { useDrawerOptional } from '@/src/navigation/DrawerContext';
+import {
+  announceRecordingStarted,
+  announceRecordingStopped,
+} from '@/src/services/recordingFeedback';
 import { useAuthStore } from '@/src/store/authStore';
 import { useIdeasStore } from '@/src/store/ideasStore';
 import { usePendingRecordingStore } from '@/src/store/pendingRecordingStore';
 import { useSettingsStore } from '@/src/store/settingsStore';
+import { showToast } from '@/src/store/toastStore';
 import { useWakeWordStore } from '@/src/store/wakeWordStore';
-import { colors, fonts, spacing, typography } from '@/src/theme/tokens';
+import { colors, fonts, radii, spacing, typography } from '@/src/theme/tokens';
 
 export default function HomeScreen() {
   const router = useRouter();
@@ -19,13 +27,19 @@ export default function HomeScreen() {
   const allIdeas = useIdeasStore((s) => s.ideas);
   const setPending = usePendingRecordingStore((s) => s.setPending);
   const languageCode = useSettingsStore((s) => s.languageCode);
+  const speechLocale = useSettingsStore((s) => s.speechLocale);
   const tx = useSettingsStore((s) => s.tx);
+  const speechLang = getSpeechLocale(speechLocale);
   const wakeEnabled = useWakeWordStore((s) => s.enabled);
   const wakeListening = useWakeWordStore((s) => s.listening);
+  const wakeLastHeard = useWakeWordStore((s) => s.lastHeard);
+  const wakeAvailable = useWakeWordStore((s) => s.available);
   const triggerToken = useWakeWordStore((s) => s.triggerToken);
   const setPausedForRecording = useWakeWordStore((s) => s.setPausedForRecording);
   const lastTrigger = useRef(0);
+  const drawer = useDrawerOptional();
   void languageCode;
+
   const ideas = useMemo(() => {
     if (!user) return [];
     return allIdeas
@@ -33,47 +47,136 @@ export default function HomeScreen() {
       .sort((a, b) => b.createdAt.localeCompare(a.createdAt))
       .slice(0, 3);
   }, [allIdeas, user]);
-  const { isRecording, durationSec, error, start, stop, discard } = useRecording();
 
-  // Free the mic for recording / return it to wake listening afterward.
-  useEffect(() => {
-    setPausedForRecording(isRecording);
-  }, [isRecording, setPausedForRecording]);
+  const {
+    isRecording,
+    isPaused,
+    durationSec,
+    error,
+    start,
+    pause,
+    resume,
+    stop,
+    discard,
+    status,
+    setVoiceStopHandler,
+    liveTranscript,
+  } = useIdeaCapture();
+  const stoppingRef = useRef(false);
+  const finishLockRef = useRef(false);
+  const pauseBusyRef = useRef(false);
 
-  // "Hey Think Tap" → start recording on Home.
-  useEffect(() => {
-    if (!triggerToken || triggerToken === lastTrigger.current) return;
-    lastTrigger.current = triggerToken;
-    if (isRecording) return;
+  const finishRecording = useCallback(async () => {
+    if (finishLockRef.current || stoppingRef.current) return;
+    finishLockRef.current = true;
+    stoppingRef.current = true;
     setPausedForRecording(true);
-    void (async () => {
-      const ok = await start();
-      if (!ok) {
-        setPausedForRecording(false);
-        Alert.alert('Hey Think Tap', 'Heard the wake phrase, but recording could not start.');
-      }
-    })();
-  }, [triggerToken, isRecording, start, setPausedForRecording]);
-
-  const onMicPress = async () => {
-    if (isRecording) {
+    try {
       const result = await stop();
       if (!result) {
-        Alert.alert('Recording', error ?? 'Could not save recording');
+        showToast(error ?? 'Could not stop recording', 'error');
+        Alert.alert('Recording', error ?? 'Could not stop recording. Try again.');
         return;
       }
-      // Keep file URI in memory — never pass file:// through route params.
+      showToast('Recording stopped');
+      await announceRecordingStopped();
       setPending({
         audioUri: result.uri,
         durationSec: result.durationSec,
+        transcript: result.transcript,
+        speechLocale: result.speechLocale,
       });
       router.push('/processing');
+    } finally {
+      stoppingRef.current = false;
+      finishLockRef.current = false;
+    }
+  }, [stop, error, setPausedForRecording, setPending, router]);
+
+  // OS STT session calls this when user says "Stop".
+  useEffect(() => {
+    setVoiceStopHandler(() => {
+      showToast('Heard “Stop” — finishing recording');
+      void finishRecording();
+    });
+    return () => setVoiceStopHandler(null);
+  }, [setVoiceStopHandler, finishRecording]);
+
+  // Pause wake word while a take is open (recording or paused); delay resume after stop.
+  useEffect(() => {
+    if (isRecording || status === 'stopping' || status === 'paused') {
+      setPausedForRecording(true);
+      return;
+    }
+    const timer = setTimeout(() => {
+      setPausedForRecording(false);
+    }, 2800);
+    return () => clearTimeout(timer);
+  }, [isRecording, status, setPausedForRecording]);
+
+  // "Hey Think Tap" → Home → start recording.
+  useEffect(() => {
+    if (!triggerToken || triggerToken === lastTrigger.current) return;
+    lastTrigger.current = triggerToken;
+    if (isRecording || status === 'stopping' || stoppingRef.current) return;
+
+    setPausedForRecording(true);
+    router.replace('/(tabs)');
+
+    void (async () => {
+      showToast('Hey Think Tap — recording started');
+      await announceRecordingStarted();
+      // Give wake FGS / in-app listener time to release the mic before recording.
+      await new Promise((r) => setTimeout(r, 450));
+      const ok = await start();
+      if (!ok) {
+        setPausedForRecording(false);
+        showToast('Could not start recording', 'error');
+        Alert.alert('Hey Think Tap', 'Heard the wake phrase, but recording could not start.');
+      }
+    })();
+  }, [triggerToken, isRecording, status, start, setPausedForRecording, router]);
+
+  const onMicPress = async () => {
+    if (stoppingRef.current || status === 'stopping') return;
+
+    if (isRecording) {
+      await finishRecording();
       return;
     }
 
+    setPausedForRecording(true);
+    showToast('Recording started');
+    await announceRecordingStarted();
     const ok = await start();
-    if (!ok && error) {
-      Alert.alert('Microphone', error);
+    if (!ok) {
+      setPausedForRecording(false);
+      showToast(error ?? 'Microphone permission required', 'error');
+      if (error) Alert.alert('Microphone', error);
+    }
+  };
+
+  const onPausePress = async () => {
+    if (pauseBusyRef.current || stoppingRef.current || !isRecording || isPaused) return;
+    pauseBusyRef.current = true;
+    try {
+      const ok = await pause();
+      if (ok) showToast('Recording paused');
+      else showToast(error ?? 'Could not pause', 'error');
+    } finally {
+      pauseBusyRef.current = false;
+    }
+  };
+
+  const onResumePress = async () => {
+    if (pauseBusyRef.current || stoppingRef.current || !isPaused) return;
+    pauseBusyRef.current = true;
+    try {
+      const ok = await resume();
+      if (ok) showToast('Recording resumed');
+      else showToast(error ?? 'Could not resume', 'error');
+    } finally {
+      pauseBusyRef.current = false;
     }
   };
 
@@ -81,23 +184,42 @@ export default function HomeScreen() {
     if (!isRecording) return;
     Alert.alert('Discard recording?', 'This will delete the current take.', [
       { text: 'Cancel', style: 'cancel' },
-      { text: 'Discard', style: 'destructive', onPress: () => void discard() },
+      {
+        text: 'Discard',
+        style: 'destructive',
+        onPress: () => {
+          void (async () => {
+            await discard();
+            showToast('Recording discarded', 'info');
+          })();
+        },
+      },
     ]);
   };
 
   return (
     <SafeAreaView style={styles.safe} edges={['top']}>
       <ScrollView contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
-        <View style={styles.header}>
-          <View>
-            <Text style={styles.hello}>Hello, {user?.firstName ?? 'Creator'}</Text>
-            <Text style={styles.ready}>{tx('readyForIdea')}</Text>
-          </View>
-          <View style={styles.avatar}>
-            <Text style={styles.avatarText}>
-              {(user?.firstName?.[0] ?? 'T').toUpperCase()}
-            </Text>
-          </View>
+        <ScreenHeader
+          title={`Hello, ${user?.firstName ?? 'Creator'}`}
+          subtitle={tx('readyForIdea')}
+          right={
+            <Pressable
+              onPress={() => drawer?.openDrawer()}
+              style={({ pressed }) => [styles.avatar, pressed && { opacity: 0.85 }]}
+            >
+              <Text style={styles.avatarText}>
+                {(user?.firstName?.[0] ?? 'T').toUpperCase()}
+              </Text>
+            </Pressable>
+          }
+        />
+
+        <View style={styles.heroBand}>
+          <Text style={styles.heroLabel}>Voice capture</Text>
+          <Text style={styles.heroBody}>
+            Speak in {speechLang.nativeName} — ideas land in your archive instantly.
+          </Text>
         </View>
 
         <View style={styles.sectionHeader}>
@@ -121,21 +243,55 @@ export default function HomeScreen() {
           )}
         </View>
 
-        <Pressable onLongPress={onLongDiscard} delayLongPress={500}>
-          <MicButton
-            isRecording={isRecording}
-            durationSec={durationSec}
-            onPress={() => void onMicPress()}
-            labelIdle={tx('tapToRecord')}
-            labelRecording={tx('recording')}
-            helperIdle={tx('aiTranscribeHint')}
-          />
-        </Pressable>
+        <MicButton
+          isRecording={isRecording || status === 'stopping'}
+          isPaused={isPaused}
+          durationSec={durationSec}
+          onPress={() => void onMicPress()}
+          onPause={() => void onPausePress()}
+          onResume={() => void onResumePress()}
+          onLongPress={onLongDiscard}
+          labelIdle={tx('tapToRecord')}
+          labelRecording={status === 'stopping' ? 'Stopping…' : tx('recording')}
+          labelPaused="Paused — tap Resume to continue"
+          helperIdle={`Transcribe in ${speechLang.nativeName} — change in Settings`}
+        />
+        {isRecording && !isPaused ? (
+          <View style={styles.liveBox}>
+            <Text style={styles.wakeHint}>
+              Listening as {speechLang.name} ({speechLang.nativeName}) — speak this language
+            </Text>
+            {liveTranscript ? (
+              <Text style={styles.liveTranscript} numberOfLines={4}>
+                {liveTranscript}
+              </Text>
+            ) : null}
+          </View>
+        ) : null}
+        {isPaused ? (
+          <Text style={styles.wakeHint}>
+            Recording paused — tap Resume to continue, or Stop to finish
+          </Text>
+        ) : null}
+        {!isRecording ? (
+          <Text style={styles.wakeHint}>
+            Transcription: {speechLang.nativeName} · change under Settings
+          </Text>
+        ) : null}
+
         {wakeEnabled && !isRecording ? (
           <Text style={styles.wakeHint}>
-            {wakeListening
-              ? 'Listening for “Hey Think Tap”…'
-              : 'Wake word on — say “Hey Think Tap” to record'}
+            {wakeAvailable === false
+              ? 'Wake word unavailable — check mic / notification permissions.'
+              : wakeListening
+                ? wakeLastHeard
+                  ? `Listening… heard “${wakeLastHeard}”`
+                  : Platform.OS === 'android'
+                    ? 'Listening (notification on) — works when minimized'
+                    : 'Listening for “Hey Think Tap”…'
+                : Platform.OS === 'android'
+                  ? 'Wake word on — keep the listening notification enabled'
+                  : 'Wake word on — say “Hey Think Tap” clearly'}
           </Text>
         ) : null}
         {error && !isRecording ? <Text style={styles.error}>{error}</Text> : null}
@@ -150,37 +306,39 @@ const styles = StyleSheet.create({
     paddingHorizontal: spacing.containerMargin,
     paddingBottom: 120,
   },
-  header: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    paddingVertical: spacing.stackMd,
-  },
-  hello: {
-    fontFamily: fonts.headlineExtra,
-    fontSize: typography.headlineLgMobile.fontSize,
-    lineHeight: typography.headlineLgMobile.lineHeight,
-    color: colors.primary,
-  },
-  ready: {
-    fontFamily: fonts.label,
-    fontSize: typography.labelMd.fontSize,
-    color: colors.onSurfaceVariant,
-    marginTop: 4,
-  },
   avatar: {
-    width: 40,
-    height: 40,
-    borderRadius: 20,
-    backgroundColor: colors.surfaceContainerHigh,
-    borderWidth: 1,
-    borderColor: colors.outlineVariant,
+    width: 42,
+    height: 42,
+    borderRadius: 14,
+    backgroundColor: colors.secondary,
     alignItems: 'center',
     justifyContent: 'center',
   },
   avatarText: {
     fontFamily: fonts.bodySemi,
-    color: colors.primary,
+    color: colors.onPrimary,
+  },
+  heroBand: {
+    backgroundColor: colors.secondarySoft,
+    borderRadius: radii.card,
+    padding: spacing.stackMd,
+    borderWidth: 1,
+    borderColor: colors.secondaryFixed,
+    marginBottom: spacing.stackMd,
+  },
+  heroLabel: {
+    fontFamily: fonts.label,
+    fontSize: typography.labelSm.fontSize,
+    color: colors.onSecondaryFixedVariant,
+    textTransform: 'uppercase',
+    letterSpacing: 0.6,
+    marginBottom: 4,
+  },
+  heroBody: {
+    fontFamily: fonts.body,
+    fontSize: typography.bodyMd.fontSize,
+    lineHeight: 22,
+    color: colors.onSurface,
   },
   sectionHeader: {
     flexDirection: 'row',
@@ -211,6 +369,23 @@ const styles = StyleSheet.create({
     color: colors.onSurfaceVariant,
     fontFamily: fonts.label,
     fontSize: typography.labelSm.fontSize,
+  },
+  liveBox: {
+    marginTop: spacing.stackSm,
+    marginHorizontal: 4,
+    padding: spacing.stackMd,
+    gap: 8,
+    backgroundColor: colors.accentSoft,
+    borderRadius: radii.xl,
+    borderWidth: 1,
+    borderColor: colors.accent + '33',
+  },
+  liveTranscript: {
+    textAlign: 'center',
+    color: colors.primary,
+    fontFamily: fonts.body,
+    fontSize: typography.bodyMd.fontSize,
+    lineHeight: 22,
   },
   error: {
     marginTop: spacing.stackMd,

@@ -4,27 +4,80 @@ import { Alert, Pressable, ScrollView, StyleSheet, Text, View } from 'react-nati
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { AudioPlayer } from '@/src/components/AudioPlayer';
-import { getLanguage } from '@/src/i18n/languages';
+import { findLanguageByWhisperCode, resolveSpokenLanguage } from '@/src/i18n/languages';
 import { useIdeasStore } from '@/src/store/ideasStore';
-import { colors, fonts, radii, spacing, typography } from '@/src/theme/tokens';
+import { categoryColor, colors, fonts, radii, spacing, typography } from '@/src/theme/tokens';
+import type { TranscriptAnalysis } from '@/src/types';
 import { relativeDate } from '@/src/utils/format';
 
+type AnalysisField = {
+  key: keyof TranscriptAnalysis;
+  label: string;
+  icon: keyof typeof Ionicons.glyphMap;
+  accent: string;
+  soft: string;
+};
+
+const ANALYSIS_FIELDS: AnalysisField[] = [
+  {
+    key: 'expansionPaths',
+    label: 'Expansion paths',
+    icon: 'git-branch-outline',
+    accent: '#4F46E5',
+    soft: '#E0E7FF',
+  },
+  {
+    key: 'sourceOfInspiration',
+    label: 'Source of inspiration',
+    icon: 'sparkles-outline',
+    accent: '#0EA5E9',
+    soft: '#E0F2FE',
+  },
+  {
+    key: 'thought',
+    label: 'Thought',
+    icon: 'bulb-outline',
+    accent: colors.secondary,
+    soft: colors.secondarySoft,
+  },
+  {
+    key: 'potentialValue',
+    label: 'Potential value',
+    icon: 'diamond-outline',
+    accent: '#16A34A',
+    soft: colors.successSoft,
+  },
+  {
+    key: 'connectedThoughts',
+    label: 'Connected thoughts',
+    icon: 'link-outline',
+    accent: '#D97706',
+    soft: colors.warningSoft,
+  },
+];
+
 export default function IdeaDetailScreen() {
-  const { id } = useLocalSearchParams<{ id: string }>();
+  const params = useLocalSearchParams<{ id: string | string[] }>();
+  const id = Array.isArray(params.id) ? params.id[0] : params.id;
   const router = useRouter();
-  const getIdea = useIdeasStore((s) => s.getIdea);
+  const idea = useIdeasStore((s) => (id ? s.ideas.find((item) => item.id === id) : undefined));
   const updateIdea = useIdeasStore((s) => s.updateIdea);
   const deleteIdea = useIdeasStore((s) => s.deleteIdea);
-  const idea = id ? getIdea(id) : undefined;
-  const language = idea ? getLanguage(idea.language) : null;
+  const knownLanguage = idea ? findLanguageByWhisperCode(idea.language) : undefined;
+  const spoken = idea ? resolveSpokenLanguage(idea.language) : null;
   const isLive = idea?.transcriptSource === 'live';
+  const isDevice = idea?.transcriptSource === 'device';
+
+  const goBack = () => {
+    router.replace('/(tabs)');
+  };
 
   if (!idea) {
     return (
       <SafeAreaView style={styles.safe}>
         <View style={styles.missing}>
           <Text style={styles.missingText}>Idea not found.</Text>
-          <Pressable onPress={() => router.back()}>
+          <Pressable onPress={goBack}>
             <Text style={styles.link}>Go back</Text>
           </Pressable>
         </View>
@@ -46,13 +99,24 @@ export default function IdeaDetailScreen() {
     ]);
   };
 
+  const sourceLabel = isDevice
+    ? 'Device transcript — analyzed into structured insights'
+    : isLive
+      ? 'Live transcript — auto-detected language from your recording'
+      : 'Demo transcript — sample text (legacy)';
+  const tint = categoryColor(idea.category);
+  const analysis = idea.analysis ?? null;
+  const showAnalysis = analysis !== null;
+
   return (
     <SafeAreaView style={styles.safe} edges={['top']}>
       <View style={styles.topBar}>
-        <Pressable onPress={() => router.back()} hitSlop={12} style={styles.iconBtn}>
+        <Pressable onPress={goBack} hitSlop={12} style={styles.iconBtn} accessibilityLabel="Go back">
           <Ionicons name="arrow-back" size={22} color={colors.primary} />
         </Pressable>
-        <Text style={styles.brand}>Think Tap</Text>
+        <View style={styles.brandHit}>
+          <Text style={styles.brand}>Think Tap</Text>
+        </View>
         <View style={styles.topActions}>
           <Pressable
             onPress={() => void updateIdea(idea.id, { favorite: !idea.favorite })}
@@ -62,23 +126,24 @@ export default function IdeaDetailScreen() {
             <Ionicons
               name={idea.favorite ? 'star' : 'star-outline'}
               size={22}
-              color={colors.primary}
+              color={idea.favorite ? colors.accent : colors.primary}
             />
           </Pressable>
           <Pressable onPress={onDelete} hitSlop={12} style={styles.iconBtn}>
-            <Ionicons name="trash-outline" size={22} color={colors.primary} />
+            <Ionicons name="trash-outline" size={22} color={colors.error} />
           </Pressable>
         </View>
       </View>
 
       <ScrollView contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
         <View style={styles.metaRow}>
-          <View style={styles.category}>
+          <View style={[styles.category, { backgroundColor: tint.bg }]}>
             <Text style={styles.categoryText}>{idea.category}</Text>
           </View>
-          {language ? (
+          {spoken ? (
             <Text style={styles.date}>
-              {language.flag} {language.name}
+              {knownLanguage ? `${knownLanguage.flag} ` : ''}
+              {knownLanguage?.name ?? spoken.name}
             </Text>
           ) : null}
           <Text style={styles.date}>{relativeDate(idea.createdAt)}</Text>
@@ -88,33 +153,77 @@ export default function IdeaDetailScreen() {
 
         <AudioPlayer uri={idea.audioUri} durationSec={idea.durationSec} />
 
-        <View style={[styles.sourceBanner, isLive ? styles.sourceLive : styles.sourceDemo]}>
+        <View
+          style={[
+            styles.sourceBanner,
+            isDevice || isLive ? styles.sourceLive : styles.sourceDemo,
+          ]}
+        >
           <Ionicons
-            name={isLive ? 'mic' : 'information-circle-outline'}
+            name={isDevice || isLive ? 'mic' : 'information-circle-outline'}
             size={16}
             color={colors.primary}
           />
-          <Text style={styles.sourceText}>
-            {isLive
-              ? 'Live transcript — converted from your recording'
-              : 'Demo transcript — add OpenAI API key in Settings for real speech-to-text'}
-          </Text>
+          <Text style={styles.sourceText}>{sourceLabel}</Text>
         </View>
 
         <View style={styles.section}>
           <View style={styles.sectionHeader}>
-            <Ionicons name="sparkles" size={18} color={colors.secondary} />
-            <Text style={styles.sectionTitle}>AI Summary</Text>
+            <Ionicons name="mic-outline" size={18} color={colors.secondary} />
+            <Text style={[styles.sectionTitle, styles.sectionTitleInline]}>Transcript</Text>
           </View>
-          <View style={styles.summaryCard}>
-            <View style={styles.summaryAccent} />
-            <Text style={styles.body}>{idea.summary}</Text>
+          <View style={styles.transcriptCard}>
+            <Text style={styles.body}>
+              {idea.transcript?.trim()
+                ? idea.transcript
+                : 'Transcript was empty. Try recording again and speak clearly.'}
+            </Text>
           </View>
         </View>
 
         <View style={styles.section}>
-          <Text style={styles.sectionTitle}>Transcript</Text>
-          <Text style={styles.body}>{idea.transcript}</Text>
+          <View style={styles.sectionHeader}>
+            <Ionicons name="sparkles-outline" size={18} color={colors.secondary} />
+            <Text style={[styles.sectionTitle, styles.sectionTitleInline]}>Analysis</Text>
+          </View>
+          <Text style={styles.sectionHint}>Response from analyzing the transcript above</Text>
+
+          {showAnalysis ? (
+            <View style={styles.analysisStack}>
+              {ANALYSIS_FIELDS.map((field) => {
+                const value = analysis?.[field.key]?.trim() ?? '';
+                return (
+                  <View
+                    key={field.key}
+                    style={[styles.analysisCard, { backgroundColor: field.soft }]}
+                  >
+                    <View style={[styles.analysisAccent, { backgroundColor: field.accent }]} />
+                    <View style={styles.analysisHeader}>
+                      <View
+                        style={[
+                          styles.analysisIcon,
+                          { backgroundColor: colors.surfaceContainerLowest },
+                        ]}
+                      >
+                        <Ionicons name={field.icon} size={16} color={field.accent} />
+                      </View>
+                      <Text style={[styles.analysisLabel, { color: field.accent }]}>
+                        {field.label}
+                      </Text>
+                    </View>
+                    <Text style={[styles.body, !value && styles.emptyValue]}>
+                      {value || '—'}
+                    </Text>
+                  </View>
+                );
+              })}
+            </View>
+          ) : (
+            <View style={styles.summaryCard}>
+              <View style={styles.summaryAccent} />
+              <Text style={styles.body}>{idea.summary}</Text>
+            </View>
+          )}
         </View>
       </ScrollView>
     </SafeAreaView>
@@ -131,12 +240,13 @@ const styles = StyleSheet.create({
     paddingVertical: spacing.stackMd,
   },
   iconBtn: { padding: 4 },
+  brandHit: { flex: 1, alignItems: 'center' },
   brand: {
     fontFamily: fonts.headlineBold,
     fontSize: typography.titleMd.fontSize,
     color: colors.primary,
   },
-  topActions: { flexDirection: 'row', gap: 8 },
+  topActions: { flexDirection: 'row', gap: 4, alignItems: 'center' },
   content: {
     paddingHorizontal: spacing.containerMargin,
     paddingBottom: 48,
@@ -149,7 +259,6 @@ const styles = StyleSheet.create({
     flexWrap: 'wrap',
   },
   category: {
-    backgroundColor: colors.primary,
     paddingHorizontal: 12,
     paddingVertical: 4,
     borderRadius: radii.full,
@@ -181,7 +290,7 @@ const styles = StyleSheet.create({
     padding: 12,
     borderRadius: radii.md,
   },
-  sourceLive: { backgroundColor: '#DCFCE7' },
+  sourceLive: { backgroundColor: colors.successSoft },
   sourceDemo: { backgroundColor: colors.surfaceContainer },
   sourceText: {
     flex: 1,
@@ -203,12 +312,26 @@ const styles = StyleSheet.create({
     color: colors.primary,
     marginBottom: spacing.stackSm,
   },
-  summaryCard: {
-    backgroundColor: colors.surfaceContainerLow,
+  sectionTitleInline: { marginBottom: 0 },
+  sectionHint: {
+    fontFamily: fonts.label,
+    fontSize: typography.labelSm.fontSize,
+    color: colors.onSurfaceVariant,
+    marginBottom: spacing.stackMd,
+  },
+  transcriptCard: {
+    backgroundColor: colors.surfaceContainerLowest,
     borderRadius: radii.xl,
     padding: 20,
     borderWidth: 1,
-    borderColor: 'rgba(196,199,199,0.3)',
+    borderColor: colors.border,
+  },
+  summaryCard: {
+    backgroundColor: colors.secondarySoft,
+    borderRadius: radii.xl,
+    padding: 20,
+    borderWidth: 1,
+    borderColor: colors.secondaryFixed,
     overflow: 'hidden',
   },
   summaryAccent: {
@@ -219,11 +342,51 @@ const styles = StyleSheet.create({
     width: 4,
     backgroundColor: colors.secondary,
   },
+  analysisStack: { gap: 12 },
+  analysisCard: {
+    borderRadius: radii.xl,
+    paddingVertical: 16,
+    paddingHorizontal: 18,
+    paddingLeft: 22,
+    overflow: 'hidden',
+    borderWidth: 1,
+    borderColor: colors.border,
+  },
+  analysisAccent: {
+    position: 'absolute',
+    left: 0,
+    top: 0,
+    bottom: 0,
+    width: 4,
+  },
+  analysisHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    marginBottom: 8,
+  },
+  analysisIcon: {
+    width: 28,
+    height: 28,
+    borderRadius: radii.sm,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  analysisLabel: {
+    fontFamily: fonts.bodySemi,
+    fontSize: typography.labelMd.fontSize,
+    letterSpacing: 0.2,
+    textTransform: 'uppercase',
+  },
   body: {
     fontFamily: fonts.body,
     fontSize: typography.bodyMd.fontSize,
     lineHeight: typography.bodyMd.lineHeight,
     color: colors.onSurface,
+  },
+  emptyValue: {
+    color: colors.onSurfaceVariant,
+    fontStyle: 'italic',
   },
   missing: { flex: 1, alignItems: 'center', justifyContent: 'center', gap: 12 },
   missingText: { fontFamily: fonts.body, color: colors.onSurfaceVariant },

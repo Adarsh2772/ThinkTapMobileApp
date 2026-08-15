@@ -4,20 +4,20 @@ import { useEffect, useRef, useState } from 'react';
 import { ActivityIndicator, BackHandler, Pressable, StyleSheet, Text, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
-import { enrichIdeaFromAudio } from '@/src/services/aiService';
+import { enrichIdeaFromDeviceTranscript } from '@/src/services/aiService';
+import { analyzeTranscript } from '@/src/services/transcriptAnalysisService';
 import { useAuthStore } from '@/src/store/authStore';
 import { useIdeasStore } from '@/src/store/ideasStore';
 import { usePendingRecordingStore } from '@/src/store/pendingRecordingStore';
-import { useSettingsStore } from '@/src/store/settingsStore';
 import { colors, fonts, spacing, typography } from '@/src/theme/tokens';
-import type { ProcessingStage } from '@/src/types';
+import type { ProcessingStage, TranscriptAnalysis } from '@/src/types';
 import { createId } from '@/src/utils/format';
 
 const STAGE_COPY: Record<Exclude<ProcessingStage, 'done' | 'error'>, string> = {
   uploading: 'Saving your recording…',
-  transcribing: 'Analyzing transcript',
+  transcribing: 'Reading your transcript',
   extracting: 'Extracting key themes',
-  summarizing: 'Drafting summary',
+  summarizing: 'Analyzing your idea',
   saving: 'Saving your idea…',
 };
 
@@ -27,7 +27,6 @@ export default function ProcessingScreen() {
   const addIdea = useIdeasStore((s) => s.addIdea);
   const pending = usePendingRecordingStore((s) => s.pending);
   const clearPending = usePendingRecordingStore((s) => s.clearPending);
-  const languageCode = useSettingsStore((s) => s.languageCode);
   const [stage, setStage] = useState<ProcessingStage>('uploading');
   const [error, setError] = useState<string | null>(null);
   const started = useRef(false);
@@ -48,17 +47,29 @@ export default function ProcessingScreen() {
           throw new Error('Missing recording. Go back and record again.');
         }
 
-        const { audioUri, durationSec } = pending;
+        const { audioUri, durationSec, transcript, speechLocale } = pending;
 
         setStage('uploading');
-        await delay(400);
+        await delay(300);
 
-        const enrichment = await enrichIdeaFromAudio({
-          audioUri,
-          durationSec,
-          languageCode,
-          onStage: (s) => setStage(s),
+        // Local title/category from OS transcript, then cloud analyze for Summary buckets.
+        const enrichment = enrichIdeaFromDeviceTranscript({
+          transcript: transcript ?? '',
+          speechLocale,
+          onStage: (s) => {
+            if (s !== 'summarizing') setStage(s);
+          },
         });
+
+        setStage('summarizing');
+        let analysis: TranscriptAnalysis | null = null;
+        let summary = enrichment.summary;
+        try {
+          analysis = await analyzeTranscript(enrichment.transcript);
+          summary = analysis.thought || enrichment.summary;
+        } catch (analyzeError) {
+          console.warn('Transcript analyze failed; using local summary', analyzeError);
+        }
 
         setStage('saving');
         const now = new Date().toISOString();
@@ -68,12 +79,13 @@ export default function ProcessingScreen() {
           userId: user.id,
           title: enrichment.title,
           category: enrichment.category,
-          summary: enrichment.summary,
+          summary,
           transcript: enrichment.transcript,
           aiStory: enrichment.aiStory,
+          analysis,
           audioUri,
           durationSec,
-          language: languageCode,
+          language: enrichment.detectedLanguage,
           transcriptSource: enrichment.source,
           favorite: false,
           createdAt: now,
@@ -88,7 +100,7 @@ export default function ProcessingScreen() {
         setError(e instanceof Error ? e.message : 'Processing failed');
       }
     })();
-  }, [addIdea, clearPending, languageCode, pending, router, user]);
+  }, [addIdea, clearPending, pending, router, user]);
 
   const activeSteps = ['transcribing', 'extracting', 'summarizing'] as const;
 
@@ -99,7 +111,9 @@ export default function ProcessingScreen() {
         <Ionicons name="sparkles" size={28} color={colors.primary} style={styles.sparkle} />
 
         <Text style={styles.title}>Organizing your idea...</Text>
-        <Text style={styles.subtitle}>AI is generating titles, tags, and a summary.</Text>
+        <Text style={styles.subtitle}>
+          Creating a title and analyzing your transcript into thought, value, and expansion paths.
+        </Text>
 
         <View style={styles.barTrack}>
           <View style={styles.barFill} />
@@ -170,7 +184,7 @@ const styles = StyleSheet.create({
     width: 12,
     height: 12,
     borderRadius: 6,
-    backgroundColor: colors.primary,
+    backgroundColor: colors.secondary,
     marginBottom: spacing.stackLg,
   },
   sparkle: { position: 'absolute', top: '32%', left: '30%', opacity: 0.2 },
@@ -199,7 +213,7 @@ const styles = StyleSheet.create({
   barFill: {
     width: '40%',
     height: '100%',
-    backgroundColor: colors.primary,
+    backgroundColor: colors.secondary,
   },
   steps: { marginTop: spacing.stackLg, gap: 8, alignItems: 'flex-start' },
   stepRow: { flexDirection: 'row', alignItems: 'center', gap: 8 },
@@ -219,7 +233,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: 16,
     paddingVertical: 10,
     borderRadius: 8,
-    backgroundColor: colors.primary,
+    backgroundColor: colors.secondary,
   },
   backText: {
     color: colors.onPrimary,
