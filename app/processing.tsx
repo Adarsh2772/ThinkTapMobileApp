@@ -43,18 +43,22 @@ export default function ProcessingScreen() {
     (async () => {
       try {
         if (!user) throw new Error('You must be signed in');
-        if (!pending?.audioUri) {
+        if (!pending) {
           throw new Error('Missing recording. Go back and record again.');
         }
 
         const { audioUri, durationSec, transcript, speechLocale } = pending;
+
+        if (!(transcript ?? '').trim()) {
+          throw new Error('No speech detected in this recording. Try speaking more clearly.');
+        }
 
         setStage('uploading');
         await delay(300);
 
         // Local title/category from OS transcript, then cloud analyze for Summary buckets.
         const enrichment = enrichIdeaFromDeviceTranscript({
-          transcript: transcript ?? '',
+          transcript,
           speechLocale,
           onStage: (s) => {
             if (s !== 'summarizing') setStage(s);

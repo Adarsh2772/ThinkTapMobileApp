@@ -1,10 +1,12 @@
-import {
-  useSpeechRecognitionEvent,
-} from 'expo-speech-recognition';
+import { useSpeechRecognitionEvent } from 'expo-speech-recognition';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Platform } from 'react-native';
 
-import { matchesStopPhrase } from '@/src/features/wakeWord/phrases';
+import {
+  matchesPausePhrase,
+  matchesResumePhrase,
+  matchesStopPhrase,
+} from '@/src/features/wakeWord/phrases';
 import type { SpeechLocaleCode } from '@/src/features/languageTranscript/locales';
 import {
   abortLiveRecognition,
@@ -16,19 +18,32 @@ import {
 } from '@/src/services/languageTranscriptService';
 
 type Options = {
-  /** BCP-47 locale for OS STT */
   speechLocale: SpeechLocaleCode;
+  /** Session is open (recording or paused). */
   enabled: boolean;
+  /** When true, spoken words are added to the idea transcript. */
+  capturing: boolean;
   onStopPhrase?: () => void;
+  onPausePhrase?: () => void;
+  onResumePhrase?: () => void;
 };
 
+function normalize(text: string): string {
+  return text.replace(/\s+/g, ' ').trim();
+}
+
 /**
- * Live OS speech-to-text while recording.
- * Accumulates final segments + current interim; detects stop phrases in the same stream.
- *
- * Important: when disabled, do NOT abort the shared SpeechRecognizer — wake word owns the mic.
+ * Live OS speech-to-text for idea capture.
+ * Session generation ignores stale abort/end events so take #2+ can start.
  */
-export function useLanguageTranscript({ speechLocale, enabled, onStopPhrase }: Options) {
+export function useLanguageTranscript({
+  speechLocale,
+  enabled,
+  capturing,
+  onStopPhrase,
+  onPausePhrase,
+  onResumePhrase,
+}: Options) {
   const [transcript, setTranscript] = useState('');
   const [interim, setInterim] = useState('');
   const [listening, setListening] = useState(false);
@@ -36,19 +51,32 @@ export function useLanguageTranscript({ speechLocale, enabled, onStopPhrase }: O
 
   const finalsRef = useRef<string[]>([]);
   const interimRef = useRef('');
+  const audioUriRef = useRef<string | null>(null);
   const onStopRef = useRef(onStopPhrase);
+  const onPauseRef = useRef(onPausePhrase);
+  const onResumeRef = useRef(onResumePhrase);
   onStopRef.current = onStopPhrase;
+  onPauseRef.current = onPausePhrase;
+  onResumeRef.current = onResumePhrase;
 
-  const intentionalRef = useRef(false);
-  const activeRef = useRef(false);
+  const genRef = useRef(0);
+  const nativeGenRef = useRef(0);
+  const nativeActiveRef = useRef(false);
   const stopFiredRef = useRef(false);
+  const pauseFiredRef = useRef(false);
+  const resumeFiredRef = useRef(false);
   const restartTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const endWaiters = useRef<Array<() => void>>([]);
   const enabledRef = useRef(enabled);
   enabledRef.current = enabled;
+  const capturingRef = useRef(capturing);
+  capturingRef.current = capturing;
   const localeRef = useRef(speechLocale);
   localeRef.current = speechLocale;
-  /** Prefer selected locale; every 3rd pass use en-US so English “stop” is heard. */
-  const passCount = useRef(0);
+  const fileSeq = useRef(0);
+  const persistRef = useRef(true);
+  const startAttempts = useRef(0);
+  const startingRef = useRef(false);
 
   const clearRestart = () => {
     if (restartTimer.current) {
@@ -57,155 +85,286 @@ export function useLanguageTranscript({ speechLocale, enabled, onStopPhrase }: O
     }
   };
 
+  const notifyEnded = () => {
+    const waiters = endWaiters.current;
+    endWaiters.current = [];
+    waiters.forEach((fn) => fn());
+  };
+
   const publish = () => {
-    const joined = finalsRef.current.join(' ').replace(/\s+/g, ' ').trim();
-    setTranscript(joined);
+    setTranscript(normalize(finalsRef.current.join(' ')));
     setInterim(interimRef.current);
   };
+
+  const commitText = (incoming: string, asFinal: boolean) => {
+    const text = normalize(incoming);
+    if (!text) {
+      if (asFinal) interimRef.current = '';
+      publish();
+      return;
+    }
+
+    const committed = normalize(finalsRef.current.join(' '));
+
+    if (!asFinal) {
+      if (committed && text.startsWith(committed)) {
+        interimRef.current = text.slice(committed.length).trim();
+      } else {
+        interimRef.current = text;
+      }
+      publish();
+      return;
+    }
+
+    if (!committed) {
+      finalsRef.current = [text];
+    } else if (text.startsWith(committed)) {
+      const rest = text.slice(committed.length).trim();
+      if (rest) finalsRef.current.push(rest);
+    } else if (committed.endsWith(text) || text === committed) {
+      // duplicate final from the engine — ignore
+    } else {
+      finalsRef.current.push(text);
+    }
+    interimRef.current = '';
+    publish();
+  };
+
+  const commitInterimRef = useRef(() => {});
+
+  const commitInterim = () => {
+    if (interimRef.current.trim()) {
+      commitText(interimRef.current, true);
+    }
+  };
+  commitInterimRef.current = commitInterim;
 
   const getFullTranscript = useCallback(() => {
     const parts = [...finalsRef.current];
     if (interimRef.current.trim()) parts.push(interimRef.current.trim());
-    return stripTrailingStopCommand(parts.join(' ').replace(/\s+/g, ' ').trim());
+    return stripTrailingStopCommand(normalize(parts.join(' ')));
+  }, []);
+
+  const getAudioUri = useCallback(() => audioUriRef.current, []);
+
+  const waitForIdle = useCallback((timeoutMs = 2000) => {
+    if (!nativeActiveRef.current) return Promise.resolve();
+    return new Promise<void>((resolve) => {
+      const t = setTimeout(() => {
+        resolve();
+      }, timeoutMs);
+      endWaiters.current.push(() => {
+        clearTimeout(t);
+        resolve();
+      });
+    });
   }, []);
 
   const stopListening = useCallback((abort = true) => {
-    intentionalRef.current = true;
+    commitInterimRef.current();
     clearRestart();
-    activeRef.current = false;
     setListening(false);
-    if (abort) abortLiveRecognition();
-    else stopLiveRecognition();
+    if (abort) {
+      nativeActiveRef.current = false;
+      genRef.current += 1;
+      abortLiveRecognition();
+      notifyEnded();
+    } else {
+      stopFiredRef.current = true;
+      stopLiveRecognition();
+    }
   }, []);
 
-  const startListening = useCallback(async () => {
+  const startListening = useCallback(async (fromRestart = false) => {
     if (!enabledRef.current || stopFiredRef.current) return;
+    startingRef.current = true;
+    const gen = fromRestart ? genRef.current : ++genRef.current;
+
     try {
       const granted = await requestSpeechPermissions();
       if (!granted) {
+        startingRef.current = false;
         setError('Speech recognition permission is required to transcribe.');
         return;
       }
       if (!isSpeechRecognitionAvailable()) {
+        startingRef.current = false;
         setError('Speech recognition is unavailable on this device.');
         return;
       }
 
-      // Ignore abort/end noise from tearing down the previous session.
-      intentionalRef.current = true;
       abortLiveRecognition();
-      await new Promise((r) => setTimeout(r, 250));
-      if (!enabledRef.current || stopFiredRef.current) return;
-
-      intentionalRef.current = false;
-      setError(null);
-
-      const isIndic = localeRef.current !== 'en-IN';
-      // Prefer the selected Indian locale most of the time; briefly use en-US so
-      // “stop” / “stop recording” are heard reliably.
-      let lang: SpeechLocaleCode | 'en-US' = localeRef.current;
-      if (isIndic && passCount.current % 3 === 2) {
-        lang = 'en-US';
+      await new Promise((r) => setTimeout(r, fromRestart ? 900 : 800));
+      if (gen !== genRef.current || !enabledRef.current || stopFiredRef.current) {
+        startingRef.current = false;
+        return;
       }
-      passCount.current += 1;
 
-      startLiveRecognition({ lang });
-      activeRef.current = true;
+      setError(null);
+      fileSeq.current += 1;
+      nativeGenRef.current = gen;
+      nativeActiveRef.current = true;
+      await startLiveRecognition({
+        lang: localeRef.current,
+        outputFileName: `idea-${Date.now()}-${fileSeq.current}.wav`,
+        persist: persistRef.current,
+      });
+      if (gen !== genRef.current || !enabledRef.current) {
+        nativeActiveRef.current = false;
+        startingRef.current = false;
+        abortLiveRecognition();
+        return;
+      }
       setListening(true);
+      startingRef.current = false;
     } catch (e) {
       console.warn('Language transcript failed to start', e);
+      nativeActiveRef.current = false;
+      persistRef.current = false;
+      startingRef.current = false;
       setError(e instanceof Error ? e.message : 'Could not start transcription');
-      intentionalRef.current = false;
-      scheduleRestart(Platform.OS === 'android' ? 1200 : 800);
+      if (gen === genRef.current && enabledRef.current && !stopFiredRef.current) {
+        startAttempts.current += 1;
+        const wait = Math.min(2500, 900 + startAttempts.current * 400);
+        scheduleRestart(wait);
+      }
     }
   }, []);
 
   const scheduleRestart = (ms: number) => {
     clearRestart();
     restartTimer.current = setTimeout(() => {
-      if (enabledRef.current && !stopFiredRef.current) void startListening();
+      if (enabledRef.current && !stopFiredRef.current) void startListening(true);
     }, ms);
   };
 
   useSpeechRecognitionEvent('result', (event) => {
-    if (!enabledRef.current || stopFiredRef.current) return;
+    if (nativeGenRef.current !== genRef.current) return;
 
     const results = event.results ?? [];
     const top = results[0]?.transcript?.trim() ?? '';
     if (!top) return;
 
+    // After Stop, still accept the engine's final flush so the last words are kept.
+    if (stopFiredRef.current) {
+      commitText(stripTrailingStopCommand(top), true);
+      return;
+    }
+
+    if (!enabledRef.current) return;
+
     if (matchesStopPhrase(top)) {
       stopFiredRef.current = true;
-      if (event.isFinal) {
-        const cleaned = stripTrailingStopCommand(top);
-        if (cleaned) finalsRef.current.push(cleaned);
-      }
-      interimRef.current = '';
-      publish();
-      stopListening(true);
+      commitText(stripTrailingStopCommand(top), true);
+      stopListening(false);
       onStopRef.current?.();
       return;
     }
 
-    if (event.isFinal) {
-      finalsRef.current.push(top);
-      interimRef.current = '';
-    } else {
-      interimRef.current = top;
+    if (capturingRef.current && matchesPausePhrase(top)) {
+      if (pauseFiredRef.current) return;
+      pauseFiredRef.current = true;
+      resumeFiredRef.current = false;
+      commitText(stripTrailingStopCommand(top), true);
+      onPauseRef.current?.();
+      return;
     }
-    publish();
+
+    if (!capturingRef.current && matchesResumePhrase(top)) {
+      if (resumeFiredRef.current) return;
+      resumeFiredRef.current = true;
+      pauseFiredRef.current = false;
+      onResumeRef.current?.();
+      return;
+    }
+
+    if (!capturingRef.current) return;
+    commitText(top, Boolean(event.isFinal));
+  });
+
+  useSpeechRecognitionEvent('audioend', (event) => {
+    const uri = event?.uri;
+    if (typeof uri === 'string' && uri.trim()) {
+      audioUriRef.current = uri;
+    }
   });
 
   useSpeechRecognitionEvent('end', () => {
-    activeRef.current = false;
+    if (startingRef.current) {
+      notifyEnded();
+      return;
+    }
+    if (nativeGenRef.current !== genRef.current) {
+      nativeActiveRef.current = false;
+      notifyEnded();
+      return;
+    }
+    commitInterim();
+    nativeActiveRef.current = false;
     setListening(false);
-    if (!enabledRef.current || intentionalRef.current || stopFiredRef.current) return;
-    scheduleRestart(400);
+    notifyEnded();
+    if (!enabledRef.current || stopFiredRef.current) return;
+    scheduleRestart(500);
   });
 
   useSpeechRecognitionEvent('error', (event) => {
-    activeRef.current = false;
+    if (startingRef.current) {
+      notifyEnded();
+      return;
+    }
+    if (nativeGenRef.current !== genRef.current) {
+      nativeActiveRef.current = false;
+      notifyEnded();
+      return;
+    }
+    commitInterim();
+    nativeActiveRef.current = false;
     setListening(false);
-    if (!enabledRef.current || intentionalRef.current || stopFiredRef.current) return;
+    notifyEnded();
+    if (!enabledRef.current || stopFiredRef.current) return;
     const code = event?.error ?? '';
     if (code === 'aborted') return;
+    if (code === 'client' || code === 'busy' || code === 'audio-capture' || code === 'network') {
+      persistRef.current = false;
+      scheduleRestart(Platform.OS === 'android' ? 1400 : 800);
+      return;
+    }
     if (code !== 'no-speech') {
       console.warn('Language transcript error', code);
     }
-    scheduleRestart(Platform.OS === 'android' ? 1000 : 700);
+    scheduleRestart(Platform.OS === 'android' ? 900 : 600);
   });
 
   useEffect(() => {
     stopFiredRef.current = false;
-    passCount.current = 0; // reset English-stop rotation each session
+    pauseFiredRef.current = false;
+    resumeFiredRef.current = false;
+    persistRef.current = true;
+    startAttempts.current = 0;
 
     if (enabled) {
-      finalsRef.current = [];
-      interimRef.current = '';
-      setTranscript('');
-      setInterim('');
-      setError(null);
-      // Let expo-audio claim the mic first, then start OS STT.
-      const t = setTimeout(() => void startListening(), 700);
+      const t = setTimeout(() => void startListening(false), 200);
       return () => {
         clearTimeout(t);
         stopListening(true);
       };
     }
 
-    // Disabled: do NOT abort — Hey Think Tap / wake word owns the mic.
     clearRestart();
-    intentionalRef.current = true;
-    activeRef.current = false;
     setListening(false);
+    notifyEnded();
     return undefined;
   }, [enabled, speechLocale, startListening, stopListening]);
 
   const reset = useCallback(() => {
     finalsRef.current = [];
     interimRef.current = '';
+    audioUriRef.current = null;
     stopFiredRef.current = false;
-    passCount.current = 0;
+    pauseFiredRef.current = false;
+    resumeFiredRef.current = false;
+    persistRef.current = true;
+    startAttempts.current = 0;
     setTranscript('');
     setInterim('');
     setError(null);
@@ -218,6 +377,8 @@ export function useLanguageTranscript({ speechLocale, enabled, onStopPhrase }: O
     listening,
     error,
     getFullTranscript,
+    getAudioUri,
+    waitForIdle,
     stopListening,
     reset,
   };

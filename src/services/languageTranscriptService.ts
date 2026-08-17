@@ -1,5 +1,8 @@
 import { ExpoSpeechRecognitionModule } from 'expo-speech-recognition';
 import { Platform } from 'react-native';
+import { AndroidWakeWord } from 'android-wake-word';
+
+import { ensureRecordingsDirectory } from '@/src/services/audioStorage';
 
 import {
   INDIAN_SPEECH_LOCALES,
@@ -38,7 +41,17 @@ function resolveAndroidSpeechPackage(): string | undefined {
 
 /** Stop / bias phrases in the selected script so English bias does not force Latin output. */
 function contextualStringsForLocale(lang: string): string[] {
-  const sharedEn = ['stop', 'stop recording', 'please stop'];
+  const sharedEn = [
+    'stop',
+    'stop recording',
+    'please stop',
+    'pause',
+    'pause recording',
+    'resume',
+    'resume recording',
+    'continue',
+    'start recording',
+  ];
   switch (lang) {
     case 'hi-IN':
       return ['थांबा', 'थांब', 'बंद करो', 'बंद', 'रुको', 'बस', ...sharedEn];
@@ -67,7 +80,17 @@ function contextualStringsForLocale(lang: string): string[] {
     case 'en-US':
     case 'en-IN':
     default:
-      return ['stop', 'stop recording', 'please stop', 'end recording', 'Hey Think Tap'];
+      return [
+        'stop',
+        'stop recording',
+        'please stop',
+        'end recording',
+        'pause',
+        'pause recording',
+        'resume',
+        'start recording',
+        'Hey Think Tap',
+      ];
   }
 }
 
@@ -135,39 +158,58 @@ export async function triggerOfflineModelDownload(locale: SpeechLocaleCode): Pro
 }
 
 export type LiveRecognitionOptions = {
-  /** BCP-47 locale, or en-US when alternating for voice-stop detection. */
   lang: SpeechLocaleCode | 'en-US';
-  /** Prefer offline packs when installed; default false for broader Indian coverage. */
   requiresOnDeviceRecognition?: boolean;
+  outputFileName?: string;
+  /** Persist recognized audio. Disable on retries — persist can leave the mic busy. */
+  persist?: boolean;
 };
 
-/**
- * Start a live OS recognition session (mic).
- *
- * Important: `lang` + Android EXTRA_LANGUAGE must match the spoken language
- * (e.g. hi-IN) or Google defaults to English / Latin script.
- */
-export function startLiveRecognition(options: LiveRecognitionOptions): void {
+function canPersistRecognitionAudio(): boolean {
+  try {
+    return (
+      typeof ExpoSpeechRecognitionModule.supportsRecording === 'function' &&
+      ExpoSpeechRecognitionModule.supportsRecording()
+    );
+  } catch {
+    return false;
+  }
+}
+
+export async function startLiveRecognition(options: LiveRecognitionOptions): Promise<void> {
   const lang = options.lang;
   const androidPackage = resolveAndroidSpeechPackage();
+  const persist = (options.persist ?? true) && canPersistRecognitionAudio();
+
+  let recordingOptions: { persist: true; outputDirectory: string; outputFileName: string } | undefined;
+  if (persist) {
+    const outputDirectory = await ensureRecordingsDirectory();
+    if (outputDirectory) {
+      recordingOptions = {
+        persist: true,
+        outputDirectory,
+        outputFileName: options.outputFileName ?? `idea-${Date.now()}.wav`,
+      };
+    }
+  }
+
+  AndroidWakeWord.silenceRecognitionUi();
 
   ExpoSpeechRecognitionModule.start({
     lang,
     interimResults: true,
-    continuous: Platform.OS === 'ios',
-    // Punctuation formatting can force Latin output on some Android builds — keep off for Indic.
+    continuous: true,
     addsPunctuation: lang === 'en-IN' || lang === 'en-US',
     requiresOnDeviceRecognition: options.requiresOnDeviceRecognition ?? false,
     iosTaskHint: 'dictation',
     contextualStrings: contextualStringsForLocale(lang),
     androidRecognitionServicePackage: androidPackage,
+    ...(recordingOptions ? { recordingOptions } : {}),
     androidIntentOptions: {
       EXTRA_LANGUAGE_MODEL: 'free_form',
-      EXTRA_SPEECH_INPUT_COMPLETE_SILENCE_LENGTH_MILLIS: 2500,
-      EXTRA_SPEECH_INPUT_POSSIBLY_COMPLETE_SILENCE_LENGTH_MILLIS: 2500,
-      EXTRA_SPEECH_INPUT_MINIMUM_LENGTH_MILLIS: 500,
-      // Not in the TS type surface, but RecognizerIntent.EXTRA_LANGUAGE exists and
-      // reinforces hi-IN / mr-IN so the engine does not fall back to English.
+      EXTRA_SPEECH_INPUT_COMPLETE_SILENCE_LENGTH_MILLIS: 10000,
+      EXTRA_SPEECH_INPUT_POSSIBLY_COMPLETE_SILENCE_LENGTH_MILLIS: 10000,
+      EXTRA_SPEECH_INPUT_MINIMUM_LENGTH_MILLIS: 400,
       ...({ EXTRA_LANGUAGE: lang } as Record<string, string>),
     },
   });
@@ -197,6 +239,8 @@ export function stripTrailingStopCommand(transcript: string): string {
   const patterns = [
     /\b(please\s+)?stop(\s+recording)?\s*$/i,
     /\b(end|finish)\s+recording\s*$/i,
+    /\b(please\s+)?pause(\s+(the\s+)?recording)?\s*$/i,
+    /\b(resume|continue)(\s+recording)?\s*$/i,
     /(थांबा|थांब|थांबवा|बंद\s*करा?|बंद\s*करो|रोका|रुको|बस)\s*$/u,
     /(நிறுத்து|நிறுத்துங்கள்|ரூகோ|போதும்)\s*$/u,
     /(বন্ধ\s*কর|থামো|থামুন)\s*$/u,

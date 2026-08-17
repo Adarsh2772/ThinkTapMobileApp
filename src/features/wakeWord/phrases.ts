@@ -19,8 +19,30 @@ const WAKE_PHRASES = [
   'hey think tap start',
 ];
 
+/** Phrases that should pause an active recording. */
+const PAUSE_PHRASES = [
+  'pause',
+  'pause recording',
+  'pause the recording',
+  'please pause',
+  'hold',
+  'hold on',
+];
+
+/** Phrases that should resume a paused recording. */
+const RESUME_PHRASES = [
+  'resume',
+  'resume recording',
+  'continue',
+  'continue recording',
+  'start',
+  'start recording',
+  'start record',
+];
+
 /** Phrases that should end an active recording (English + Hindi/Marathi). */
 const STOP_PHRASES = [
+  'stop',
   'stop recording',
   'stop record',
   'stop the recording',
@@ -76,22 +98,32 @@ export function matchesWakePhrase(text: string): boolean {
   );
 }
 
+function matchesTrailingCommand(text: string, phrases: string[]): boolean {
+  const normalized = normalizeSpeech(text);
+  if (!normalized) return false;
+  return phrases.some((phrase) => normalized === phrase || normalized.endsWith(` ${phrase}`));
+}
+
 export function matchesStopPhrase(text: string): boolean {
   const normalized = normalizeSpeech(text);
   if (!normalized) return false;
+  if (matchesTrailingCommand(text, STOP_PHRASES)) return true;
+  const embedded = [
+    'stop recording',
+    'stop record',
+    'end recording',
+    'finish recording',
+    'please stop',
+  ];
+  return embedded.some((phrase) => normalized.includes(phrase));
+}
 
-  if (STOP_PHRASES.some((phrase) => normalized === phrase || normalized.includes(phrase))) {
-    return true;
-  }
+export function matchesPausePhrase(text: string): boolean {
+  return matchesTrailingCommand(text, PAUSE_PHRASES);
+}
 
-  const words = normalized.split(' ').filter(Boolean);
-  if (words.length === 1 && (words[0] === 'stop' || words[0] === 'थांब' || words[0] === 'थांबा')) {
-    return true;
-  }
-  if (words.includes('stop')) return true;
-  if (words.includes('थांब') || words.includes('थांबा') || words.includes('थांबवा')) return true;
-  if (words.includes('बंद')) return true;
-  return false;
+export function matchesResumePhrase(text: string): boolean {
+  return matchesTrailingCommand(text, RESUME_PHRASES);
 }
 
 export function hasDevanagari(text: string): boolean {

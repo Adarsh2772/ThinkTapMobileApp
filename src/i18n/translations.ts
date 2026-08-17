@@ -77,7 +77,7 @@ const en: Dict = {
   tapToRecord: 'Tap to Record',
   recording: 'Recording…',
   aiTranscribeHint: 'On-device speech-to-text — set your transcription language in Settings',
-  myArchive: 'My Archive',
+  myArchive: 'My Thoughts',
   thoughtsCaptured: 'thoughts captured',
   languageSaved: 'App language updated. Transcription language was synced when applicable — check Settings → Transcription language.',
   subscribe: 'Subscribe',
@@ -128,7 +128,7 @@ const hi: Dict = {
   tapToRecord: 'रिकॉर्ड करने के लिए टैप करें',
   recording: 'रिकॉर्डिंग…',
   aiTranscribeHint: 'डिवाइस स्पीच-टू-टेक्स्ट — सेटिंग्स में ट्रांसक्रिप्शन भाषा चुनें',
-  myArchive: 'मेरा आर्काइव',
+  myArchive: 'मेरे विचार',
   thoughtsCaptured: 'विचार सहेजे गए',
   languageSaved: 'ऐप भाषा अपडेट हुई। ट्रांसक्रिप्शन भाषा भी सिंक हो सकती है — सेटिंग्स → ट्रांसक्रिप्शन भाषा देखें।',
 };
@@ -155,7 +155,7 @@ const mr: Dict = {
   tapToRecord: 'रेकॉर्ड करण्यासाठी टॅप करा',
   recording: 'रेकॉर्डिंग…',
   aiTranscribeHint: 'डिव्हाइस स्पीच-टू-टेक्स्ट — सेटिंग्जमध्ये ट्रान्सक्रिप्शन भाषा निवडा',
-  myArchive: 'माझे आर्काइव्ह',
+  myArchive: 'माझे विचार',
   thoughtsCaptured: 'विचार जतन',
   languageSaved: 'अ‍ॅप भाषा अपडेट झाली. ट्रान्सक्रिप्शन भाषाही सिंक होऊ शकते — सेटिंग्ज → ट्रान्सक्रिप्शन भाषा पाहा.',
 };
@@ -179,7 +179,7 @@ const fr: Dict = {
   tapToRecord: 'Appuyer pour enregistrer',
   recording: 'Enregistrement…',
   aiTranscribeHint: "L'IA détecte votre langue et transcrit instantanément",
-  myArchive: 'Mon archive',
+  myArchive: 'Mes pensées',
   thoughtsCaptured: 'pensées capturées',
   languageSaved: "Langue de l'app mise à jour. La transcription détecte toujours la langue parlée.",
 };
@@ -203,7 +203,7 @@ const es: Dict = {
   tapToRecord: 'Toca para grabar',
   recording: 'Grabando…',
   aiTranscribeHint: 'La IA detecta tu idioma y transcribe al instante',
-  myArchive: 'Mi archivo',
+  myArchive: 'Mis pensamientos',
   thoughtsCaptured: 'ideas capturadas',
   languageSaved: 'Idioma de la app actualizado. La transcripción sigue detectando lo que hablas.',
 };
@@ -227,7 +227,7 @@ const de: Dict = {
   tapToRecord: 'Tippen zum Aufnehmen',
   recording: 'Aufnahme…',
   aiTranscribeHint: 'KI erkennt deine Sprache und transkribiert sofort',
-  myArchive: 'Mein Archiv',
+  myArchive: 'Meine Gedanken',
   thoughtsCaptured: 'Gedanken erfasst',
   languageSaved: 'App-Sprache aktualisiert. Die Transkription erkennt weiterhin automatisch die gesprochene Sprache.',
 };
@@ -251,7 +251,7 @@ const pt: Dict = {
   tapToRecord: 'Toque para gravar',
   recording: 'A gravar…',
   aiTranscribeHint: 'A IA deteta o seu idioma e transcreve na hora',
-  myArchive: 'O meu arquivo',
+  myArchive: 'Os meus pensamentos',
   thoughtsCaptured: 'ideias capturadas',
   languageSaved: 'Idioma da app atualizado. A transcrição continua a detetar o que fala.',
 };
@@ -275,7 +275,7 @@ const ar: Dict = {
   tapToRecord: 'انقر للتسجيل',
   recording: 'جاري التسجيل…',
   aiTranscribeHint: 'يكتشف الذكاء الاصطناعي لغتك وينسخها فوراً',
-  myArchive: 'أرشيفي',
+  myArchive: 'أفكاري',
   thoughtsCaptured: 'أفكار محفوظة',
   languageSaved: 'تم تحديث لغة التطبيق. النسخ النصي ما زال يكتشف اللغة المنطوقة تلقائياً.',
 };
@@ -299,7 +299,7 @@ const zh: Dict = {
   tapToRecord: '点击录音',
   recording: '录音中…',
   aiTranscribeHint: 'AI 自动识别语言并即时转写',
-  myArchive: '我的归档',
+  myArchive: '我的想法',
   thoughtsCaptured: '条灵感已保存',
   languageSaved: '应用语言已更新。语音转写仍会自动检测您所说的语言。',
 };
@@ -323,7 +323,7 @@ const ja: Dict = {
   tapToRecord: 'タップして録音',
   recording: '録音中…',
   aiTranscribeHint: 'AIが言語を自動検出し、すぐに文字起こしします',
-  myArchive: 'マイアーカイブ',
+  myArchive: 'マイ思考',
   thoughtsCaptured: '件のメモ',
   languageSaved: 'アプリ言語を更新しました。文字起こしは引き続き話した言語を自動検出します。',
 };
