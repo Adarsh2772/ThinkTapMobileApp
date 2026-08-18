@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Platform } from 'react-native';
 
+import { resolveCaptureMode } from '@/src/features/capture/captureMode';
 import { useLanguageTranscript } from '@/src/hooks/useLanguageTranscript';
 import { useRecording } from '@/src/hooks/useRecording';
 import { persistRecording } from '@/src/services/audioStorage';
@@ -10,6 +11,7 @@ import {
   requestSpeechPermissions,
 } from '@/src/services/languageTranscriptService';
 import { useSettingsStore } from '@/src/store/settingsStore';
+import { useWakeWordStore } from '@/src/store/wakeWordStore';
 
 type CaptureResult = {
   uri: string;
@@ -27,8 +29,12 @@ export type RecordingStatus = 'idle' | 'recording' | 'paused' | 'stopping';
  */
 export function useIdeaCapture() {
   const speechLocale = useSettingsStore((s) => s.speechLocale);
+  const preferSavedAudio = useSettingsStore((s) => s.saveAudioRecording);
   const audio = useRecording();
-  const fileRecorder = Platform.OS !== 'android';
+  // In audio-file mode the recorder owns the mic, so live speech-to-text is off
+  // and the transcript comes from the saved file after the take.
+  const audioOnly = resolveCaptureMode(preferSavedAudio) === 'audio-file';
+  const fileRecorder = Platform.OS !== 'android' || audioOnly;
   const onVoiceStopRef = useRef<(() => void) | null>(null);
   const onVoicePauseRef = useRef<(() => void) | null>(null);
   const onVoiceResumeRef = useRef<(() => void) | null>(null);
@@ -43,6 +49,14 @@ export function useIdeaCapture() {
   const pausedAccumMsRef = useRef(0);
   const activeRef = useRef(false);
   const pausedRef = useRef(false);
+  const lastErrorRef = useRef<string | null>(null);
+
+  const fail = useCallback((message: string) => {
+    lastErrorRef.current = message;
+    setError(message);
+  }, []);
+
+  const getLastError = useCallback(() => lastErrorRef.current, []);
 
   const setVoiceStopHandler = useCallback((handler: (() => void) | null) => {
     onVoiceStopRef.current = handler;
@@ -65,8 +79,8 @@ export function useIdeaCapture() {
     reset,
   } = useLanguageTranscript({
     speechLocale,
-    enabled: active,
-    capturing: active && !paused,
+    enabled: active && !audioOnly,
+    capturing: active && !paused && !audioOnly,
     onStopPhrase: () => {
       onVoiceStopRef.current?.();
     },
@@ -94,19 +108,25 @@ export function useIdeaCapture() {
 
     const granted = await requestSpeechPermissions();
     if (!granted) {
-      setError('Speech recognition permission is required to transcribe.');
+      fail('Speech recognition permission is required to transcribe.');
       return null;
     }
-    if (!isSpeechRecognitionAvailable()) {
-      setError('Speech recognition is unavailable on this device.');
+    if (!audioOnly && !isSpeechRecognitionAvailable()) {
+      fail('Speech recognition is unavailable on this device.');
       return null;
     }
 
     reset();
     abortLiveRecognition();
     if (fileRecorder) {
-      await audio.start();
+      const started = await audio.start();
+      // Without this the UI would show "Recording" while nothing is captured.
+      if (!started) {
+        fail(audio.error ?? 'Could not start the recorder. Try again.');
+        return null;
+      }
     }
+    lastErrorRef.current = null;
     setError(null);
     pausedAccumMsRef.current = 0;
     startedAtRef.current = Date.now();
@@ -116,7 +136,7 @@ export function useIdeaCapture() {
     setPaused(false);
     setActive(true);
     return true;
-  }, [reset, audio, fileRecorder]);
+  }, [reset, audio, audioOnly, fail, fileRecorder]);
 
   const pause = useCallback(async () => {
     if (!activeRef.current || pausedRef.current) return false;
@@ -145,18 +165,23 @@ export function useIdeaCapture() {
       }
       const seconds = Math.max(1, Math.round(pausedAccumMsRef.current / 1000));
       const audioResult = fileRecorder ? await audio.stop() : null;
-      stopListening(false);
-      await waitForIdle(2200);
-      await new Promise((r) => setTimeout(r, 350));
+      if (!audioOnly) {
+        // Let the engine flush its last words before reading the transcript.
+        stopListening(false);
+        await waitForIdle(2200);
+        await new Promise((r) => setTimeout(r, 350));
+      }
 
-      const transcript = getFullTranscript();
+      const transcript = audioOnly ? '' : getFullTranscript();
       const speechUri = getAudioUri();
       const uri =
         audioResult?.uri || (speechUri ? await persistRecording(speechUri) : '');
       const durationSec = audioResult?.durationSec || seconds;
 
-      abortLiveRecognition();
-      await new Promise((r) => setTimeout(r, 450));
+      if (!audioOnly) {
+        abortLiveRecognition();
+        await new Promise((r) => setTimeout(r, 450));
+      }
 
       activeRef.current = false;
       pausedRef.current = false;
@@ -165,11 +190,16 @@ export function useIdeaCapture() {
       setPaused(false);
       setDurationSec(0);
 
-      if (!transcript.trim()) {
-        setError('No speech detected in this recording. Try speaking more clearly.');
+      if (!transcript.trim() && !uri) {
+        fail(
+          audioOnly
+            ? 'The recording could not be saved. Try again.'
+            : 'No speech was captured. Speak after the cue, then say “stop recording”.',
+        );
         return null;
       }
 
+      lastErrorRef.current = null;
       setError(null);
       return {
         uri,
@@ -180,7 +210,17 @@ export function useIdeaCapture() {
     } finally {
       setStopping(false);
     }
-  }, [audio, fileRecorder, getAudioUri, getFullTranscript, speechLocale, stopListening, waitForIdle]);
+  }, [
+    audio,
+    audioOnly,
+    fail,
+    fileRecorder,
+    getAudioUri,
+    getFullTranscript,
+    speechLocale,
+    stopListening,
+    waitForIdle,
+  ]);
 
   const discard = useCallback(async () => {
     stopListening(true);
@@ -192,11 +232,19 @@ export function useIdeaCapture() {
     setActive(false);
     setPaused(false);
     setDurationSec(0);
+    lastErrorRef.current = null;
     setError(null);
   }, [reset, stopListening, audio, fileRecorder]);
 
+  // Published globally so the wake listener stays paused for the whole take,
+  // even if the user navigates away from Home mid-recording.
+  useEffect(() => {
+    useWakeWordStore.getState().setCaptureActive(active || stopping);
+  }, [active, stopping]);
+
   useEffect(() => {
     return () => {
+      useWakeWordStore.getState().setCaptureActive(false);
       onVoiceStopRef.current = null;
       onVoicePauseRef.current = null;
       onVoiceResumeRef.current = null;
@@ -217,6 +265,7 @@ export function useIdeaCapture() {
     isPaused: paused && active,
     durationSec,
     error: error ?? sttError,
+    getLastError,
     status,
     start,
     pause,
@@ -226,8 +275,9 @@ export function useIdeaCapture() {
     setVoiceStopHandler,
     setVoicePauseHandler,
     setVoiceResumeHandler,
-    supportsVoiceStop: true,
-    captureMode: 'device' as const,
+    supportsVoiceStop: !audioOnly,
+    savesAudioFile: fileRecorder,
+    captureMode: audioOnly ? ('audio-file' as const) : ('device' as const),
     liveTranscript: displayText,
     listening,
     speechLocale,

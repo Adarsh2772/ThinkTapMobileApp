@@ -284,6 +284,13 @@ export function useWakeWordListener() {
           return;
         }
 
+        // Permission prompts above are async, so re-read the live flag: a take
+        // may have started meanwhile and the FGS would steal its microphone.
+        if (useWakeWordStore.getState().pausedForRecording) {
+          setListening(false);
+          return;
+        }
+
         if (!AndroidWakeWord.isRunning()) {
           try {
             await AndroidWakeWord.startService();

@@ -165,20 +165,17 @@ export type LiveRecognitionOptions = {
   persist?: boolean;
 };
 
+/**
+ * Only Android 13+ writes the recognized audio to a file — below that the
+ * recognizer cannot share the mic with a recorder at all. Other platforms
+ * capture the take with expo-audio instead, so a second file is not needed.
+ */
 function canPersistRecognitionAudio(): boolean {
-  try {
-    return (
-      typeof ExpoSpeechRecognitionModule.supportsRecording === 'function' &&
-      ExpoSpeechRecognitionModule.supportsRecording()
-    );
-  } catch {
-    return false;
-  }
+  return Platform.OS === 'android' && Number(Platform.Version) >= 33;
 }
 
 export async function startLiveRecognition(options: LiveRecognitionOptions): Promise<void> {
   const lang = options.lang;
-  const androidPackage = resolveAndroidSpeechPackage();
   const persist = (options.persist ?? true) && canPersistRecognitionAudio();
 
   let recordingOptions: { persist: true; outputDirectory: string; outputFileName: string } | undefined;
@@ -203,14 +200,12 @@ export async function startLiveRecognition(options: LiveRecognitionOptions): Pro
     requiresOnDeviceRecognition: options.requiresOnDeviceRecognition ?? false,
     iosTaskHint: 'dictation',
     contextualStrings: contextualStringsForLocale(lang),
-    androidRecognitionServicePackage: androidPackage,
     ...(recordingOptions ? { recordingOptions } : {}),
+    // Silence lengths are deliberately not set here: expo-speech-recognition
+    // applies its own long continuous-mode values last, and overriding them
+    // makes the engine close the session on every natural pause.
     androidIntentOptions: {
       EXTRA_LANGUAGE_MODEL: 'free_form',
-      EXTRA_SPEECH_INPUT_COMPLETE_SILENCE_LENGTH_MILLIS: 10000,
-      EXTRA_SPEECH_INPUT_POSSIBLY_COMPLETE_SILENCE_LENGTH_MILLIS: 10000,
-      EXTRA_SPEECH_INPUT_MINIMUM_LENGTH_MILLIS: 400,
-      ...({ EXTRA_LANGUAGE: lang } as Record<string, string>),
     },
   });
 }

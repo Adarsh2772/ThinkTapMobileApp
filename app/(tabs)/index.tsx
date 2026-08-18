@@ -34,6 +34,7 @@ export default function HomeScreen() {
     isPaused,
     durationSec,
     error,
+    getLastError,
     start,
     pause,
     resume,
@@ -43,6 +44,7 @@ export default function HomeScreen() {
     setVoiceStopHandler,
     setVoicePauseHandler,
     setVoiceResumeHandler,
+    supportsVoiceStop,
     liveTranscript,
   } = useIdeaCapture();
   const stoppingRef = useRef(false);
@@ -57,8 +59,9 @@ export default function HomeScreen() {
     try {
       const result = await stop();
       if (!result) {
-        showToast(error ?? 'Could not stop recording', 'error');
-        Alert.alert('Recording', error ?? 'Could not stop recording. Try again.');
+        const reason = getLastError() ?? 'Nothing was captured in this take.';
+        showToast(reason, 'error');
+        Alert.alert('Recording stopped', reason);
         return;
       }
       showToast('Recording stopped');
@@ -74,7 +77,7 @@ export default function HomeScreen() {
       stoppingRef.current = false;
       finishLockRef.current = false;
     }
-  }, [stop, error, setPausedForRecording, setPending, router]);
+  }, [stop, getLastError, setPausedForRecording, setPending, router]);
 
   const onPausePress = useCallback(async () => {
     if (pauseBusyRef.current || stoppingRef.current) return;
@@ -127,18 +130,6 @@ export default function HomeScreen() {
     onPausePress,
     onResumePress,
   ]);
-
-  // Pause wake word while a take is open (recording or paused); delay resume after stop.
-  useEffect(() => {
-    if (isRecording || status === 'stopping' || status === 'paused') {
-      setPausedForRecording(true);
-      return;
-    }
-    const timer = setTimeout(() => {
-      setPausedForRecording(false);
-    }, 6000);
-    return () => clearTimeout(timer);
-  }, [isRecording, status, setPausedForRecording]);
 
   // "Hey Think Tap" / "start recording" → Home → start capture after the wake mic is free.
   useEffect(() => {
@@ -231,12 +222,20 @@ export default function HomeScreen() {
             labelPaused="Paused — tap Resume to continue"
             helperIdle=""
           />
+          {isRecording && !isPaused && !supportsVoiceStop ? (
+            <Text style={styles.modeHint}>
+              Saving audio — spoken commands are off. Tap Stop to finish.
+            </Text>
+          ) : null}
+          {isRecording && !isPaused && supportsVoiceStop && !liveTranscript ? (
+            <Text style={styles.modeHint}>Say “stop recording” or tap Stop</Text>
+          ) : null}
           {isRecording && !isPaused && liveTranscript ? (
             <Text style={styles.liveTranscript} numberOfLines={4}>
               {liveTranscript}
             </Text>
           ) : null}
-          {isPaused ? (
+          {isPaused && supportsVoiceStop ? (
             <Text style={styles.liveTranscript}>Paused — say “Resume” or “Stop”</Text>
           ) : null}
         </View>
@@ -267,6 +266,15 @@ const styles = StyleSheet.create({
   avatarText: {
     fontFamily: fonts.bodySemi,
     color: colors.onPrimary,
+  },
+  modeHint: {
+    marginTop: spacing.stackMd,
+    textAlign: 'center',
+    color: colors.textSecondary,
+    fontFamily: fonts.body,
+    fontSize: typography.labelMd.fontSize,
+    lineHeight: typography.labelMd.lineHeight,
+    paddingHorizontal: 24,
   },
   liveTranscript: {
     marginTop: spacing.stackMd,

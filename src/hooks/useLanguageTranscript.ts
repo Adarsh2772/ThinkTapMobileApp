@@ -99,7 +99,17 @@ export function useLanguageTranscript({
   const commitText = (incoming: string, asFinal: boolean) => {
     const text = normalize(incoming);
     if (!text) {
-      if (asFinal) interimRef.current = '';
+      // A spoken command strips down to nothing. Finalising that empty string
+      // must not discard words the engine is still holding as interim — those
+      // words are the idea the user just dictated.
+      if (asFinal) {
+        const pending = stripTrailingStopCommand(interimRef.current);
+        interimRef.current = '';
+        if (pending.trim()) {
+          commitText(pending, true);
+          return;
+        }
+      }
       publish();
       return;
     }
@@ -193,8 +203,12 @@ export function useLanguageTranscript({
         return;
       }
 
-      abortLiveRecognition();
-      await new Promise((r) => setTimeout(r, fromRestart ? 900 : 800));
+      // Android ends a session on every silence gap. Aborting a session that is
+      // already torn down only adds deaf time, so settle just long enough for the
+      // engine to release the mic when one is actually running.
+      const settleMs = nativeActiveRef.current ? 450 : fromRestart ? 120 : 250;
+      if (nativeActiveRef.current) abortLiveRecognition();
+      await new Promise((r) => setTimeout(r, settleMs));
       if (gen !== genRef.current || !enabledRef.current || stopFiredRef.current) {
         startingRef.current = false;
         return;
@@ -304,7 +318,7 @@ export function useLanguageTranscript({
     setListening(false);
     notifyEnded();
     if (!enabledRef.current || stopFiredRef.current) return;
-    scheduleRestart(500);
+    scheduleRestart(150);
   });
 
   useSpeechRecognitionEvent('error', (event) => {
@@ -326,13 +340,14 @@ export function useLanguageTranscript({
     if (code === 'aborted') return;
     if (code === 'client' || code === 'busy' || code === 'audio-capture' || code === 'network') {
       persistRef.current = false;
-      scheduleRestart(Platform.OS === 'android' ? 1400 : 800);
+      scheduleRestart(Platform.OS === 'android' ? 800 : 600);
       return;
     }
-    if (code !== 'no-speech') {
+    if (code !== 'no-speech' && code !== 'speech-timeout') {
       console.warn('Language transcript error', code);
     }
-    scheduleRestart(Platform.OS === 'android' ? 900 : 600);
+    // A silence gap must not leave the mic deaf, or the next sentence is lost.
+    scheduleRestart(150);
   });
 
   useEffect(() => {
