@@ -20,14 +20,18 @@ import { t } from '@/src/i18n/translations';
 
 const LANGUAGE_KEY = '@thinktap/app_language';
 const SPEECH_LOCALE_KEY = '@thinktap/speech_locale';
+const SAVE_AUDIO_KEY = '@thinktap/save_audio';
 
 type SettingsState = {
   languageCode: AppLanguageCode;
   speechLocale: SpeechLocaleCode;
+  /** Android 12 and below: keep the audio file instead of the live transcript. */
+  saveAudioRecording: boolean;
   hydrated: boolean;
   hydrate: () => Promise<void>;
   setLanguage: (code: AppLanguageCode) => Promise<void>;
   setSpeechLocale: (code: SpeechLocaleCode) => Promise<void>;
+  setSaveAudioRecording: (value: boolean) => Promise<void>;
   language: () => AppLanguage;
   speechLanguage: () => SpeechLocale;
   tx: (key: Parameters<typeof t>[1]) => string;
@@ -36,11 +40,13 @@ type SettingsState = {
 export const useSettingsStore = create<SettingsState>((set, get) => ({
   languageCode: DEFAULT_LANGUAGE,
   speechLocale: DEFAULT_SPEECH_LOCALE,
+  saveAudioRecording: false,
   hydrated: false,
 
   hydrate: async () => {
     let languageCode: AppLanguageCode = DEFAULT_LANGUAGE;
     let speechLocale: SpeechLocaleCode = DEFAULT_SPEECH_LOCALE;
+    let saveAudioRecording = false;
 
     try {
       const raw = await AsyncStorage.getItem(LANGUAGE_KEY);
@@ -62,7 +68,13 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
       speechLocale = speechLocaleFromAppLanguage(languageCode);
     }
 
-    set({ languageCode, speechLocale, hydrated: true });
+    try {
+      saveAudioRecording = (await AsyncStorage.getItem(SAVE_AUDIO_KEY)) === 'true';
+    } catch {
+      // ignore
+    }
+
+    set({ languageCode, speechLocale, saveAudioRecording, hydrated: true });
   },
 
   setLanguage: async (code) => {
@@ -83,6 +95,11 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
   setSpeechLocale: async (code) => {
     set({ speechLocale: code });
     await AsyncStorage.setItem(SPEECH_LOCALE_KEY, code);
+  },
+
+  setSaveAudioRecording: async (value) => {
+    set({ saveAudioRecording: value });
+    await AsyncStorage.setItem(SAVE_AUDIO_KEY, value ? 'true' : 'false');
   },
 
   language: () => getLanguage(get().languageCode),

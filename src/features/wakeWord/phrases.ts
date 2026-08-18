@@ -19,38 +19,40 @@ const WAKE_PHRASES = [
   'hey think tap start',
 ];
 
-/** Phrases that should pause an active recording. */
-const PAUSE_PHRASES = [
-  'pause',
-  'pause recording',
-  'pause the recording',
-  'please pause',
-  'hold',
-  'hold on',
-];
+/**
+ * Commands come in two strengths, because the recognizer reports a partial
+ * hypothesis for every word you speak while dictating.
+ *
+ * COMMANDS are unambiguous enough to honour anywhere in a sentence. WORDS are
+ * everyday speech ("stop", "hold", "बस") and only count when they are the whole
+ * utterance — otherwise "we should stop doing that" ends the take mid-idea.
+ */
+const PAUSE_COMMANDS = ['pause recording', 'pause the recording', 'pause record'];
+const PAUSE_WORDS = ['pause', 'please pause', 'hold', 'hold on'];
 
-/** Phrases that should resume a paused recording. */
-const RESUME_PHRASES = [
-  'resume',
+const RESUME_COMMANDS = [
   'resume recording',
-  'continue',
   'continue recording',
-  'start',
   'start recording',
   'start record',
 ];
+const RESUME_WORDS = ['resume', 'continue', 'start', 'go on', 'carry on'];
 
-/** Phrases that should end an active recording (English + Hindi/Marathi). */
-const STOP_PHRASES = [
-  'stop',
+/** Ends an active recording (English + Indian languages). */
+const STOP_COMMANDS = [
   'stop recording',
   'stop record',
   'stop the recording',
-  'please stop',
   'hey think tap stop',
   'think tap stop',
   'end recording',
   'finish recording',
+  'रिकॉर्डिंग बंद करा',
+  'रिकॉर्डिंग बंद करो',
+];
+const STOP_WORDS = [
+  'stop',
+  'please stop',
   'that is all',
   "that's all",
   'im done',
@@ -66,7 +68,6 @@ const STOP_PHRASES = [
   'रोका',
   'रुको',
   'बस',
-  'होराहा है बंद',
   // Other Indian languages (common “stop” commands)
   'நிறுத்து',
   'বন্ধ কর',
@@ -98,32 +99,23 @@ export function matchesWakePhrase(text: string): boolean {
   );
 }
 
-function matchesTrailingCommand(text: string, phrases: string[]): boolean {
+function matchesCommand(text: string, commands: string[], words: string[]): boolean {
   const normalized = normalizeSpeech(text);
   if (!normalized) return false;
-  return phrases.some((phrase) => normalized === phrase || normalized.endsWith(` ${phrase}`));
+  if (commands.some((phrase) => normalized.includes(phrase))) return true;
+  return words.some((phrase) => normalized === phrase);
 }
 
 export function matchesStopPhrase(text: string): boolean {
-  const normalized = normalizeSpeech(text);
-  if (!normalized) return false;
-  if (matchesTrailingCommand(text, STOP_PHRASES)) return true;
-  const embedded = [
-    'stop recording',
-    'stop record',
-    'end recording',
-    'finish recording',
-    'please stop',
-  ];
-  return embedded.some((phrase) => normalized.includes(phrase));
+  return matchesCommand(text, STOP_COMMANDS, STOP_WORDS);
 }
 
 export function matchesPausePhrase(text: string): boolean {
-  return matchesTrailingCommand(text, PAUSE_PHRASES);
+  return matchesCommand(text, PAUSE_COMMANDS, PAUSE_WORDS);
 }
 
 export function matchesResumePhrase(text: string): boolean {
-  return matchesTrailingCommand(text, RESUME_PHRASES);
+  return matchesCommand(text, RESUME_COMMANDS, RESUME_WORDS);
 }
 
 export function hasDevanagari(text: string): boolean {

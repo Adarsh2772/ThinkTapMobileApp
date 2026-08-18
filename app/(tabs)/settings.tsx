@@ -17,6 +17,7 @@ import { ScreenHeader } from '@/src/components/ScreenHeader';
 import { SpeechLocalePickerModal } from '@/src/components/SpeechLocalePickerModal';
 import { SubscribeModal } from '@/src/components/SubscribeModal';
 import { Button } from '@/src/components/ui';
+import { supportsAudioWithLiveTranscript } from '@/src/features/capture/captureMode';
 import { getSpeechLocale } from '@/src/features/languageTranscript/locales';
 import { getLanguage } from '@/src/i18n/languages';
 import { useAuthStore } from '@/src/store/authStore';
@@ -29,6 +30,8 @@ export default function SettingsScreen() {
   const user = useAuthStore((s) => s.session?.user);
   const languageCode = useSettingsStore((s) => s.languageCode);
   const speechLocale = useSettingsStore((s) => s.speechLocale);
+  const saveAudio = useSettingsStore((s) => s.saveAudioRecording);
+  const setSaveAudioRecording = useSettingsStore((s) => s.setSaveAudioRecording);
   const tx = useSettingsStore((s) => s.tx);
   const language = getLanguage(languageCode);
   const speechLang = getSpeechLocale(speechLocale);
@@ -36,6 +39,7 @@ export default function SettingsScreen() {
   const wakeEnabled = useWakeWordStore((s) => s.enabled);
   const wakeAvailable = useWakeWordStore((s) => s.available);
   const wakeListening = useWakeWordStore((s) => s.listening);
+  const wakeLastHeard = useWakeWordStore((s) => s.lastHeard);
   const setWakeEnabled = useWakeWordStore((s) => s.setEnabled);
   const [pickerOpen, setPickerOpen] = useState(false);
   const [speechPickerOpen, setSpeechPickerOpen] = useState(false);
@@ -139,7 +143,32 @@ export default function SettingsScreen() {
                   : ' Enabled.'
               : ''}
           </Text>
+          {wakeEnabled && wakeLastHeard ? (
+            <Text style={styles.hint}>Last heard: “{wakeLastHeard}”</Text>
+          ) : null}
         </View>
+
+        {!supportsAudioWithLiveTranscript() ? (
+          <View style={styles.card}>
+            <View style={styles.wakeRow}>
+              <View style={{ flex: 1 }}>
+                <Text style={styles.label}>Save audio recording</Text>
+                <Text style={styles.value}>Keep the voice file for playback</Text>
+              </View>
+              <Switch
+                value={saveAudio}
+                onValueChange={(v) => void setSaveAudioRecording(v)}
+                trackColor={{ false: colors.outlineVariant, true: colors.secondary }}
+                thumbColor={colors.surfaceContainerLowest}
+              />
+            </View>
+            <Text style={styles.hint}>
+              {saveAudio
+                ? 'Your voice is saved and transcribed after you tap Stop, which gives more accurate transcripts. Live text and spoken “pause”/“stop” are off while recording, because this Android version gives the mic to one app at a time.'
+                : 'Live text appears while you speak and spoken “pause”/“stop” work, but no audio file is kept. This Android version cannot do both at once.'}
+            </Text>
+          </View>
+        ) : null}
 
         <View style={styles.card}>
           <Text style={styles.label}>{tx('comingSoon')}</Text>

@@ -4,11 +4,12 @@ import { useEffect, useRef, useState } from 'react';
 import { ActivityIndicator, BackHandler, Pressable, StyleSheet, Text, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
-import { enrichIdeaFromDeviceTranscript } from '@/src/services/aiService';
+import { enrichIdeaFromAudio, enrichIdeaFromDeviceTranscript } from '@/src/services/aiService';
 import { analyzeTranscript } from '@/src/services/transcriptAnalysisService';
 import { useAuthStore } from '@/src/store/authStore';
 import { useIdeasStore } from '@/src/store/ideasStore';
 import { usePendingRecordingStore } from '@/src/store/pendingRecordingStore';
+import { useSettingsStore } from '@/src/store/settingsStore';
 import { colors, fonts, spacing, typography } from '@/src/theme/tokens';
 import type { ProcessingStage, TranscriptAnalysis } from '@/src/types';
 import { createId } from '@/src/utils/format';
@@ -27,6 +28,7 @@ export default function ProcessingScreen() {
   const addIdea = useIdeasStore((s) => s.addIdea);
   const pending = usePendingRecordingStore((s) => s.pending);
   const clearPending = usePendingRecordingStore((s) => s.clearPending);
+  const languageCode = useSettingsStore((s) => s.languageCode);
   const [stage, setStage] = useState<ProcessingStage>('uploading');
   const [error, setError] = useState<string | null>(null);
   const started = useRef(false);
@@ -48,22 +50,33 @@ export default function ProcessingScreen() {
         }
 
         const { audioUri, durationSec, transcript, speechLocale } = pending;
+        const deviceTranscript = (transcript ?? '').trim();
 
-        if (!(transcript ?? '').trim()) {
+        if (!deviceTranscript && !audioUri) {
           throw new Error('No speech detected in this recording. Try speaking more clearly.');
         }
 
         setStage('uploading');
         await delay(300);
 
-        // Local title/category from OS transcript, then cloud analyze for Summary buckets.
-        const enrichment = enrichIdeaFromDeviceTranscript({
-          transcript,
-          speechLocale,
-          onStage: (s) => {
-            if (s !== 'summarizing') setStage(s);
-          },
-        });
+        const onStage = (s: 'transcribing' | 'extracting' | 'summarizing') => {
+          if (s !== 'summarizing') setStage(s);
+        };
+
+        // Takes recorded to a file carry no device transcript (the recorder owns
+        // the mic), so those are transcribed from the audio instead.
+        const enrichment = deviceTranscript
+          ? enrichIdeaFromDeviceTranscript({
+              transcript: deviceTranscript,
+              speechLocale,
+              onStage,
+            })
+          : await enrichIdeaFromAudio({
+              audioUri,
+              durationSec,
+              languageCode,
+              onStage,
+            });
 
         setStage('summarizing');
         let analysis: TranscriptAnalysis | null = null;
@@ -104,7 +117,7 @@ export default function ProcessingScreen() {
         setError(e instanceof Error ? e.message : 'Processing failed');
       }
     })();
-  }, [addIdea, clearPending, pending, router, user]);
+  }, [addIdea, clearPending, languageCode, pending, router, user]);
 
   const activeSteps = ['transcribing', 'extracting', 'summarizing'] as const;
 
