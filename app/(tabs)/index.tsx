@@ -1,18 +1,21 @@
 import { useRouter } from 'expo-router';
-import { useCallback, useEffect, useRef } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { Alert, Pressable, StyleSheet, Text, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
+import { AudioSavedModal } from '@/src/components/AudioSavedModal';
 import { MicButton } from '@/src/components/MicButton';
 import { ScreenHeader } from '@/src/components/ScreenHeader';
 import { useIdeaCapture } from '@/src/hooks/useIdeaCapture';
 import { useDrawerOptional } from '@/src/navigation/DrawerContext';
 import { releaseWakeMicForCapture } from '@/src/services/micHandoff';
+import { processPendingRecording } from '@/src/services/processRecording';
 import {
   announceRecordingStarted,
   announceRecordingStopped,
 } from '@/src/services/recordingFeedback';
 import { useAuthStore } from '@/src/store/authStore';
+import { useIdeasStore } from '@/src/store/ideasStore';
 import { usePendingRecordingStore } from '@/src/store/pendingRecordingStore';
 import { useSettingsStore } from '@/src/store/settingsStore';
 import { showToast } from '@/src/store/toastStore';
@@ -23,11 +26,18 @@ export default function HomeScreen() {
   const router = useRouter();
   const user = useAuthStore((s) => s.session?.user);
   const setPending = usePendingRecordingStore((s) => s.setPending);
+  const clearPending = usePendingRecordingStore((s) => s.clearPending);
+  const addIdea = useIdeasStore((s) => s.addIdea);
+  const languageCode = useSettingsStore((s) => s.languageCode);
   const tx = useSettingsStore((s) => s.tx);
   const drawer = useDrawerOptional();
   const triggerToken = useWakeWordStore((s) => s.triggerToken);
   const setPausedForRecording = useWakeWordStore((s) => s.setPausedForRecording);
   const lastTrigger = useRef(0);
+
+  const [saveModalVisible, setSaveModalVisible] = useState(false);
+  const [organizing, setOrganizing] = useState(false);
+  const processLockRef = useRef(false);
 
   const {
     isRecording,
@@ -51,6 +61,37 @@ export default function HomeScreen() {
   const finishLockRef = useRef(false);
   const pauseBusyRef = useRef(false);
 
+  const runOrganizeInBackground = useCallback(
+    async (pending: {
+      audioUri: string;
+      durationSec: number;
+      transcript: string;
+      speechLocale: string;
+    }) => {
+      if (!user || processLockRef.current) return;
+      processLockRef.current = true;
+      setOrganizing(true);
+      try {
+        const idea = await processPendingRecording({
+          userId: user.id,
+          pending,
+          languageCode,
+        });
+        await addIdea(idea);
+        clearPending();
+        showToast('Idea ready in Ideas');
+      } catch (e) {
+        const message = e instanceof Error ? e.message : 'Could not organize this idea';
+        showToast(message, 'error');
+        clearPending();
+      } finally {
+        setOrganizing(false);
+        processLockRef.current = false;
+      }
+    },
+    [user, languageCode, addIdea, clearPending],
+  );
+
   const finishRecording = useCallback(async () => {
     if (finishLockRef.current || stoppingRef.current) return;
     finishLockRef.current = true;
@@ -66,18 +107,26 @@ export default function HomeScreen() {
       }
       showToast('Recording stopped');
       await announceRecordingStopped();
-      setPending({
+      const pending = {
         audioUri: result.uri,
         durationSec: result.durationSec,
         transcript: result.transcript,
         speechLocale: result.speechLocale,
-      });
-      router.push('/processing');
+      };
+      setPending(pending);
+      setSaveModalVisible(true);
+      void runOrganizeInBackground(pending);
     } finally {
       stoppingRef.current = false;
       finishLockRef.current = false;
     }
-  }, [stop, getLastError, setPausedForRecording, setPending, router]);
+  }, [
+    stop,
+    getLastError,
+    setPausedForRecording,
+    setPending,
+    runOrganizeInBackground,
+  ]);
 
   const onPausePress = useCallback(async () => {
     if (pauseBusyRef.current || stoppingRef.current) return;
@@ -240,6 +289,12 @@ export default function HomeScreen() {
           ) : null}
         </View>
       </View>
+
+      <AudioSavedModal
+        visible={saveModalVisible}
+        organizing={organizing}
+        onClose={() => setSaveModalVisible(false)}
+      />
     </SafeAreaView>
   );
 }
