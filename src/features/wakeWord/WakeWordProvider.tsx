@@ -12,7 +12,27 @@ import { useWakeWordStore } from '@/src/store/wakeWordStore';
 export function WakeWordProvider({ children }: { children: ReactNode }) {
   useWakeWordListener();
   useNavigateHomeOnWake();
+  usePauseWakeWhileCapturing();
   return children;
+}
+
+/**
+ * Owns the pause/resume window around a take. This lives here, not on Home:
+ * navigating to Processing or an idea tears Home's effects down, which used to
+ * strand the listener in the paused state so the wake phrase stopped working.
+ */
+function usePauseWakeWhileCapturing() {
+  const captureActive = useWakeWordStore((s) => s.captureActive);
+  const setPausedForRecording = useWakeWordStore((s) => s.setPausedForRecording);
+
+  useEffect(() => {
+    if (captureActive) {
+      setPausedForRecording(true);
+      return;
+    }
+    const timer = setTimeout(() => setPausedForRecording(false), 4000);
+    return () => clearTimeout(timer);
+  }, [captureActive, setPausedForRecording]);
 }
 
 function useNavigateHomeOnWake() {

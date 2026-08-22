@@ -1,9 +1,11 @@
 import { Ionicons } from '@expo/vector-icons';
 import { useLocalSearchParams, useRouter } from 'expo-router';
-import { Alert, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { useEffect, useState } from 'react';
+import { BackHandler, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { AudioPlayer } from '@/src/components/AudioPlayer';
+import { DeleteThoughtDialog } from '@/src/components/DeleteThoughtDialog';
 import { findLanguageByWhisperCode, resolveSpokenLanguage } from '@/src/i18n/languages';
 import { useIdeasStore } from '@/src/store/ideasStore';
 import { categoryColor, colors, fonts, radii, spacing, typography } from '@/src/theme/tokens';
@@ -63,14 +65,23 @@ export default function IdeaDetailScreen() {
   const idea = useIdeasStore((s) => (id ? s.ideas.find((item) => item.id === id) : undefined));
   const updateIdea = useIdeasStore((s) => s.updateIdea);
   const deleteIdea = useIdeasStore((s) => s.deleteIdea);
+  const [confirmDelete, setConfirmDelete] = useState(false);
   const knownLanguage = idea ? findLanguageByWhisperCode(idea.language) : undefined;
   const spoken = idea ? resolveSpokenLanguage(idea.language) : null;
   const isLive = idea?.transcriptSource === 'live';
   const isDevice = idea?.transcriptSource === 'device';
 
   const goBack = () => {
-    router.replace('/(tabs)');
+    router.replace('/(tabs)/ideas');
   };
+
+  useEffect(() => {
+    const sub = BackHandler.addEventListener('hardwareBackPress', () => {
+      router.replace('/(tabs)/ideas');
+      return true;
+    });
+    return () => sub.remove();
+  }, [router]);
 
   if (!idea) {
     return (
@@ -85,18 +96,10 @@ export default function IdeaDetailScreen() {
     );
   }
 
-  const onDelete = () => {
-    Alert.alert('Delete idea?', 'This cannot be undone.', [
-      { text: 'Cancel', style: 'cancel' },
-      {
-        text: 'Delete',
-        style: 'destructive',
-        onPress: async () => {
-          await deleteIdea(idea.id);
-          router.replace('/(tabs)/ideas');
-        },
-      },
-    ]);
+  const onDeleteConfirm = async () => {
+    setConfirmDelete(false);
+    await deleteIdea(idea.id);
+    router.replace('/(tabs)/ideas');
   };
 
   const sourceLabel = isDevice
@@ -114,7 +117,7 @@ export default function IdeaDetailScreen() {
         <Pressable onPress={goBack} hitSlop={12} style={styles.iconBtn} accessibilityLabel="Go back">
           <Ionicons name="arrow-back" size={22} color={colors.primary} />
         </Pressable>
-        <View style={styles.brandHit}>
+        <View style={[styles.brandHit, { pointerEvents: 'none' }]}>
           <Text style={styles.brand}>Think Tap</Text>
         </View>
         <View style={styles.topActions}>
@@ -129,7 +132,12 @@ export default function IdeaDetailScreen() {
               color={idea.favorite ? colors.accent : colors.primary}
             />
           </Pressable>
-          <Pressable onPress={onDelete} hitSlop={12} style={styles.iconBtn}>
+          <Pressable
+            onPress={() => setConfirmDelete(true)}
+            hitSlop={12}
+            style={styles.iconBtn}
+            accessibilityLabel="Delete thought"
+          >
             <Ionicons name="trash-outline" size={22} color={colors.error} />
           </Pressable>
         </View>
@@ -226,6 +234,12 @@ export default function IdeaDetailScreen() {
           )}
         </View>
       </ScrollView>
+      <DeleteThoughtDialog
+        visible={confirmDelete}
+        title={idea.title}
+        onCancel={() => setConfirmDelete(false)}
+        onConfirm={() => void onDeleteConfirm()}
+      />
     </SafeAreaView>
   );
 }
@@ -235,11 +249,17 @@ const styles = StyleSheet.create({
   topBar: {
     flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'space-between',
     paddingHorizontal: spacing.containerMargin,
     paddingVertical: spacing.stackMd,
+    zIndex: 4,
   },
-  iconBtn: { padding: 4 },
+  iconBtn: {
+    width: 44,
+    height: 44,
+    alignItems: 'center',
+    justifyContent: 'center',
+    zIndex: 5,
+  },
   brandHit: { flex: 1, alignItems: 'center' },
   brand: {
     fontFamily: fonts.headlineBold,

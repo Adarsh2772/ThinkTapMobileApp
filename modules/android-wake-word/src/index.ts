@@ -23,9 +23,13 @@ type AndroidWakeWordNativeModule = {
   isPaused(): boolean;
   startService(): Promise<boolean>;
   stopService(): Promise<boolean>;
+  stopServiceSilent(): Promise<boolean>;
   pauseService(): Promise<boolean>;
   resumeService(): Promise<boolean>;
   consumePendingWake(): Promise<PendingWake>;
+  silenceRecognitionUi(): void;
+  restoreRecognitionUi(): void;
+  playRecordingStartCue(): Promise<boolean>;
   addListener(
     eventName: string,
     listener: (event: Record<string, unknown>) => void,
@@ -85,6 +89,15 @@ export const AndroidWakeWord = {
     return Native.stopService();
   },
 
+  async stopServiceSilent(): Promise<boolean> {
+    if (!Native) return false;
+    try {
+      return Native.stopServiceSilent();
+    } catch {
+      return Native.stopService();
+    }
+  },
+
   async pauseService(): Promise<boolean> {
     if (!Native) return false;
     return Native.pauseService();
@@ -98,6 +111,33 @@ export const AndroidWakeWord = {
   async consumePendingWake(): Promise<PendingWake> {
     if (!Native) return null;
     return Native.consumePendingWake();
+  },
+
+  silenceRecognitionUi(): void {
+    if (!Native) return;
+    try {
+      Native.silenceRecognitionUi();
+    } catch {
+      // ignore
+    }
+  },
+
+  restoreRecognitionUi(): void {
+    if (!Native) return;
+    try {
+      Native.restoreRecognitionUi();
+    } catch {
+      // ignore
+    }
+  },
+
+  async playRecordingStartCue(): Promise<boolean> {
+    if (!Native) return false;
+    try {
+      return Native.playRecordingStartCue();
+    } catch {
+      return false;
+    }
   },
 
   addListener,

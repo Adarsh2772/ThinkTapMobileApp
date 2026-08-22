@@ -14,6 +14,20 @@ function normalizeFileUri(uri: string): string {
   return uri;
 }
 
+function extensionFor(uri: string): string {
+  const match = uri.match(/\.[a-zA-Z0-9]+(?:\?.*)?$/);
+  const ext = match?.[0]?.replace(/\?.*$/, '').toLowerCase() ?? '';
+  if (ext && ext !== '.') return ext;
+  return '.wav';
+}
+
+export async function ensureRecordingsDirectory(): Promise<string> {
+  if (!documentDirectory) return '';
+  const folder = `${documentDirectory}recordings/`;
+  await makeDirectoryAsync(folder, { intermediates: true }).catch(() => undefined);
+  return folder;
+}
+
 /**
  * Keep recordings in a stable app documents folder.
  */
@@ -24,22 +38,17 @@ export async function persistRecording(tempUri: string): Promise<string> {
     return source;
   }
 
-  // Already in our recordings folder — reuse as-is.
   if (source.includes('/recordings/')) {
     return source;
   }
 
-  const folder = `${documentDirectory}recordings/`;
-  await makeDirectoryAsync(folder, { intermediates: true }).catch(() => undefined);
-
-  const extensionMatch = source.match(/\.[a-zA-Z0-9]+$/);
-  const extension = extensionMatch?.[0] ?? '.m4a';
-  const dest = `${folder}idea-${Date.now()}${extension}`;
+  const folder = await ensureRecordingsDirectory();
+  const dest = `${folder}idea-${Date.now()}${extensionFor(source)}`;
 
   try {
     await copyAsync({ from: source, to: dest });
     const info = await getInfoAsync(dest);
-    if (info.exists) {
+    if (info.exists && (!('size' in info) || (info.size ?? 0) > 0)) {
       return dest;
     }
   } catch {
@@ -51,6 +60,7 @@ export async function persistRecording(tempUri: string): Promise<string> {
 
 export async function recordingExists(uri: string): Promise<boolean> {
   const normalized = normalizeFileUri(uri);
+  if (!normalized) return false;
   try {
     const info = await getInfoAsync(normalized);
     return Boolean(info.exists && !info.isDirectory);

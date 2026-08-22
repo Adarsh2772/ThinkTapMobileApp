@@ -1,7 +1,7 @@
 import { Ionicons } from '@expo/vector-icons';
 import { setAudioModeAsync, useAudioPlayer, useAudioPlayerStatus } from 'expo-audio';
-import { useEffect, useMemo, useState } from 'react';
-import { Alert, Pressable, StyleSheet, Text, View } from 'react-native';
+import { createElement, useEffect, useMemo, useState } from 'react';
+import { Platform, Pressable, StyleSheet, Text, View } from 'react-native';
 
 import { normalizeFileUri } from '@/src/services/audioStorage';
 import { colors, fonts, radii, spacing, typography } from '@/src/theme/tokens';
@@ -13,16 +13,18 @@ type Props = {
 };
 
 export function AudioPlayer({ uri, durationSec }: Props) {
-  const sourceUri = useMemo(() => normalizeFileUri(uri), [uri]);
+  const sourceUri = useMemo(() => (uri ? normalizeFileUri(uri) : ''), [uri]);
   const player = useAudioPlayer(sourceUri || null, { updateInterval: 250 });
   const status = useAudioPlayerStatus(player);
   const [busy, setBusy] = useState(false);
+  const [playError, setPlayError] = useState<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
+    setPlayError(null);
 
     (async () => {
-      if (!sourceUri) return;
+      if (!sourceUri || Platform.OS === 'web') return;
       try {
         await setAudioModeAsync({
           playsInSilentMode: true,
@@ -32,7 +34,7 @@ export function AudioPlayer({ uri, durationSec }: Props) {
           player.replace(sourceUri);
         }
       } catch {
-        // ignore — play() will surface errors
+        // play() will surface errors
       }
     })();
 
@@ -53,35 +55,35 @@ export function AudioPlayer({ uri, durationSec }: Props) {
   const progress = Math.min(1, positionSec / totalSec);
 
   const toggle = async () => {
-    if (busy || !sourceUri) return;
+    if (busy) return;
+    if (!sourceUri) {
+      setPlayError('No audio file was saved for this thought.');
+      return;
+    }
     setBusy(true);
+    setPlayError(null);
     try {
-      await setAudioModeAsync({
-        playsInSilentMode: true,
-        allowsRecording: false,
-      });
-
-      player.replace(sourceUri);
+      if (Platform.OS !== 'web') {
+        await setAudioModeAsync({
+          playsInSilentMode: true,
+          allowsRecording: false,
+        });
+      }
 
       if (playing) {
         player.pause();
         return;
       }
 
-      if (
-        status.duration > 0 &&
-        status.currentTime >= Math.max(0, status.duration - 0.25)
-      ) {
+      const duration = status.duration || 0;
+      if (duration > 0 && status.currentTime >= Math.max(0, duration - 0.25)) {
         await player.seekTo(0);
       }
 
       player.play();
     } catch (e) {
-      Alert.alert(
-        'Playback failed',
-        e instanceof Error
-          ? e.message
-          : 'Could not play this recording. Try recording a new idea.',
+      setPlayError(
+        e instanceof Error ? e.message : 'Could not play this recording. Try recording a new thought.',
       );
     } finally {
       setBusy(false);
@@ -92,6 +94,26 @@ export function AudioPlayer({ uri, durationSec }: Props) {
     const next = Math.max(0, Math.min(totalSec, positionSec + delta));
     await player.seekTo(next);
   };
+
+  if (Platform.OS === 'web') {
+    return (
+      <View style={styles.card}>
+        <Text style={styles.title}>Voice Recording</Text>
+        {sourceUri ? (
+          createElement('audio', {
+            src: sourceUri,
+            controls: true,
+            preload: 'auto',
+            style: { width: '100%', marginTop: 12 },
+          })
+        ) : (
+          <Text style={styles.meta}>
+            No audio file was saved for this thought. Record a new one to play it back.
+          </Text>
+        )}
+      </View>
+    );
+  }
 
   return (
     <View style={styles.card}>
@@ -110,7 +132,9 @@ export function AudioPlayer({ uri, durationSec }: Props) {
         <View style={{ flex: 1 }}>
           <Text style={styles.title}>Voice Recording</Text>
           <Text style={styles.meta}>
-            {formatClock(positionSec)} / {formatClock(totalSec)}
+            {sourceUri
+              ? `${formatClock(positionSec)} / ${formatClock(totalSec)}`
+              : 'No audio file saved'}
           </Text>
         </View>
       </View>
@@ -118,6 +142,8 @@ export function AudioPlayer({ uri, durationSec }: Props) {
       <View style={styles.waveTrack}>
         <View style={[styles.waveFill, { width: `${progress * 100}%` }]} />
       </View>
+
+      {playError ? <Text style={styles.error}>{playError}</Text> : null}
 
       <View style={styles.skipRow}>
         <Pressable onPress={() => void skip(-10)} hitSlop={8}>
@@ -158,7 +184,13 @@ const styles = StyleSheet.create({
     fontFamily: fonts.label,
     fontSize: 12,
     color: colors.onSurfaceVariant,
-    marginTop: 2,
+    marginTop: 8,
+  },
+  error: {
+    marginTop: 10,
+    fontFamily: fonts.label,
+    fontSize: 12,
+    color: colors.error,
   },
   waveTrack: {
     height: 4,

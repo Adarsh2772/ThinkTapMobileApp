@@ -4,14 +4,13 @@ import { useEffect, useRef, useState } from 'react';
 import { ActivityIndicator, BackHandler, Pressable, StyleSheet, Text, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
-import { enrichIdeaFromDeviceTranscript } from '@/src/services/aiService';
-import { analyzeTranscript } from '@/src/services/transcriptAnalysisService';
+import { processPendingRecording } from '@/src/services/processRecording';
 import { useAuthStore } from '@/src/store/authStore';
 import { useIdeasStore } from '@/src/store/ideasStore';
 import { usePendingRecordingStore } from '@/src/store/pendingRecordingStore';
+import { useSettingsStore } from '@/src/store/settingsStore';
 import { colors, fonts, spacing, typography } from '@/src/theme/tokens';
-import type { ProcessingStage, TranscriptAnalysis } from '@/src/types';
-import { createId } from '@/src/utils/format';
+import type { ProcessingStage } from '@/src/types';
 
 const STAGE_COPY: Record<Exclude<ProcessingStage, 'done' | 'error'>, string> = {
   uploading: 'Saving your recording…',
@@ -27,6 +26,7 @@ export default function ProcessingScreen() {
   const addIdea = useIdeasStore((s) => s.addIdea);
   const pending = usePendingRecordingStore((s) => s.pending);
   const clearPending = usePendingRecordingStore((s) => s.clearPending);
+  const languageCode = useSettingsStore((s) => s.languageCode);
   const [stage, setStage] = useState<ProcessingStage>('uploading');
   const [error, setError] = useState<string | null>(null);
   const started = useRef(false);
@@ -43,64 +43,27 @@ export default function ProcessingScreen() {
     (async () => {
       try {
         if (!user) throw new Error('You must be signed in');
-        if (!pending?.audioUri) {
+        if (!pending) {
           throw new Error('Missing recording. Go back and record again.');
         }
 
-        const { audioUri, durationSec, transcript, speechLocale } = pending;
-
-        setStage('uploading');
-        await delay(300);
-
-        // Local title/category from OS transcript, then cloud analyze for Summary buckets.
-        const enrichment = enrichIdeaFromDeviceTranscript({
-          transcript: transcript ?? '',
-          speechLocale,
-          onStage: (s) => {
-            if (s !== 'summarizing') setStage(s);
-          },
-        });
-
-        setStage('summarizing');
-        let analysis: TranscriptAnalysis | null = null;
-        let summary = enrichment.summary;
-        try {
-          analysis = await analyzeTranscript(enrichment.transcript);
-          summary = analysis.thought || enrichment.summary;
-        } catch (analyzeError) {
-          console.warn('Transcript analyze failed; using local summary', analyzeError);
-        }
-
-        setStage('saving');
-        const now = new Date().toISOString();
-        const ideaId = createId();
-        await addIdea({
-          id: ideaId,
+        const idea = await processPendingRecording({
           userId: user.id,
-          title: enrichment.title,
-          category: enrichment.category,
-          summary,
-          transcript: enrichment.transcript,
-          aiStory: enrichment.aiStory,
-          analysis,
-          audioUri,
-          durationSec,
-          language: enrichment.detectedLanguage,
-          transcriptSource: enrichment.source,
-          favorite: false,
-          createdAt: now,
-          updatedAt: now,
+          pending,
+          languageCode,
+          onStage: (s) => setStage(s),
         });
 
+        await addIdea(idea);
         clearPending();
         setStage('done');
-        router.replace(`/idea/${ideaId}`);
+        router.replace('/(tabs)');
       } catch (e) {
         setStage('error');
         setError(e instanceof Error ? e.message : 'Processing failed');
       }
     })();
-  }, [addIdea, clearPending, pending, router, user]);
+  }, [addIdea, clearPending, languageCode, pending, router, user]);
 
   const activeSteps = ['transcribing', 'extracting', 'summarizing'] as const;
 
@@ -166,10 +129,6 @@ export default function ProcessingScreen() {
       </View>
     </SafeAreaView>
   );
-}
-
-function delay(ms: number) {
-  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 const styles = StyleSheet.create({

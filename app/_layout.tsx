@@ -13,6 +13,7 @@ import { Stack, useRouter, useSegments } from 'expo-router';
 import * as SplashScreen from 'expo-splash-screen';
 import { useEffect } from 'react';
 import { StatusBar } from 'expo-status-bar';
+import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import 'react-native-reanimated';
 
 import { ToastHost } from '@/src/components/ToastHost';
@@ -89,35 +90,37 @@ export default function RootLayout() {
   }
 
   return (
-    <WakeWordProvider>
-      <DrawerProvider>
-        <DrawerLayout>
-          <StatusBar style="dark" />
-          <Stack
-            screenOptions={{
-              headerShown: false,
-              contentStyle: { backgroundColor: colors.background },
-              animation: 'slide_from_right',
-              animationDuration: 280,
-            }}
-          >
-            <Stack.Screen name="index" />
-            <Stack.Screen name="(tabs)" />
-            <Stack.Screen name="(auth)" />
-            <Stack.Screen name="processing" options={{ gestureEnabled: false, animation: 'fade' }} />
-            <Stack.Screen
-              name="idea/[id]"
-              options={{
+    <GestureHandlerRootView style={{ flex: 1 }}>
+      <WakeWordProvider>
+        <DrawerProvider>
+          <DrawerLayout>
+            <StatusBar style="dark" />
+            <Stack
+              screenOptions={{
                 headerShown: false,
+                contentStyle: { backgroundColor: colors.background },
                 animation: 'slide_from_right',
-                animationDuration: 300,
+                animationDuration: 280,
               }}
-            />
-          </Stack>
-          <WakeWordPermissionGate />
-          <ToastHost />
-        </DrawerLayout>
-      </DrawerProvider>
-    </WakeWordProvider>
+            >
+              <Stack.Screen name="index" />
+              <Stack.Screen name="(tabs)" />
+              <Stack.Screen name="(auth)" />
+              <Stack.Screen name="processing" options={{ gestureEnabled: false, animation: 'fade' }} />
+              <Stack.Screen
+                name="idea/[id]"
+                options={{
+                  headerShown: false,
+                  animation: 'slide_from_right',
+                  animationDuration: 300,
+                }}
+              />
+            </Stack>
+            <WakeWordPermissionGate />
+            <ToastHost />
+          </DrawerLayout>
+        </DrawerProvider>
+      </WakeWordProvider>
+    </GestureHandlerRootView>
   );
 }

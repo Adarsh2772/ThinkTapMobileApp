@@ -29,6 +29,7 @@ export default function IdeasScreen() {
   const router = useRouter();
   const user = useAuthStore((s) => s.session?.user);
   const allIdeas = useIdeasStore((s) => s.ideas);
+  const deleteIdea = useIdeasStore((s) => s.deleteIdea);
   const languageCode = useSettingsStore((s) => s.languageCode);
   const tx = useSettingsStore((s) => s.tx);
   void languageCode;
@@ -97,13 +98,14 @@ export default function IdeasScreen() {
         contentContainerStyle={styles.list}
         ItemSeparatorComponent={() => <View style={{ height: spacing.stackMd }} />}
         ListEmptyComponent={
-          <Text style={styles.empty}>No ideas in this category yet.</Text>
+          <Text style={styles.empty}>No thoughts in this category yet.</Text>
         }
         renderItem={({ item }) => (
           <IdeaCard
             idea={item}
             variant="archive"
             onPress={() => router.push(`/idea/${item.id}`)}
+            onDelete={() => void deleteIdea(item.id)}
           />
         )}
       />

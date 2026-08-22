@@ -99,9 +99,11 @@ export function MicButton({
       </View>
 
       <Text style={styles.label}>{label}</Text>
-      <Text style={styles.helper}>
-        {isRecording ? formatClock(durationSec) : helperIdle}
-      </Text>
+      {isRecording || helperIdle ? (
+        <Text style={styles.helper}>
+          {isRecording ? formatClock(durationSec) : helperIdle}
+        </Text>
+      ) : null}
 
       {isRecording ? (
         <View style={styles.controls}>

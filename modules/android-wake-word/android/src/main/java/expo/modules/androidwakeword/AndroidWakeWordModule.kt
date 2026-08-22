@@ -70,8 +70,31 @@ class AndroidWakeWordModule : Module() {
     AsyncFunction("stopService") {
       val intent = Intent(context, WakeWordForegroundService::class.java).apply {
         action = WakeWordForegroundService.ACTION_STOP
+        putExtra(WakeWordForegroundService.EXTRA_KEEP_SILENT, false)
       }
       context.startService(intent)
+      return@AsyncFunction true
+    }
+
+    AsyncFunction("stopServiceSilent") {
+      val intent = Intent(context, WakeWordForegroundService::class.java).apply {
+        action = WakeWordForegroundService.ACTION_STOP
+        putExtra(WakeWordForegroundService.EXTRA_KEEP_SILENT, true)
+      }
+      context.startService(intent)
+      return@AsyncFunction true
+    }
+
+    Function("silenceRecognitionUi") {
+      RecognitionAudioGuard.mute(context)
+    }
+
+    Function("restoreRecognitionUi") {
+      RecognitionAudioGuard.restore(context)
+    }
+
+    AsyncFunction("playRecordingStartCue") {
+      RecognitionAudioGuard.playStartCue(context)
       return@AsyncFunction true
     }
 

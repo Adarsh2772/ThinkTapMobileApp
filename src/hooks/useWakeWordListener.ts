@@ -138,6 +138,7 @@ export function useWakeWordListener() {
 
       if (!canListenInApp() || !mountedRef.current) return;
 
+      AndroidWakeWord.silenceRecognitionUi();
       ExpoSpeechRecognitionModule.start({
         lang: 'en-US',
         interimResults: true,
@@ -152,9 +153,8 @@ export function useWakeWordListener() {
         ],
         androidIntentOptions: {
           EXTRA_LANGUAGE_MODEL: 'free_form',
-          // Longer silence = fewer restarts = quieter / cooler phone.
-          EXTRA_SPEECH_INPUT_COMPLETE_SILENCE_LENGTH_MILLIS: 6000,
-          EXTRA_SPEECH_INPUT_POSSIBLY_COMPLETE_SILENCE_LENGTH_MILLIS: 6000,
+          EXTRA_SPEECH_INPUT_COMPLETE_SILENCE_LENGTH_MILLIS: 8000,
+          EXTRA_SPEECH_INPUT_POSSIBLY_COMPLETE_SILENCE_LENGTH_MILLIS: 8000,
           EXTRA_SPEECH_INPUT_MINIMUM_LENGTH_MILLIS: 1200,
         },
       });
@@ -256,6 +256,7 @@ export function useWakeWordListener() {
       if (useNativeFgs) {
         if (!enabled) {
           await AndroidWakeWord.stopService();
+          AndroidWakeWord.restoreRecognitionUi();
           setListening(false);
           return;
         }
@@ -272,6 +273,24 @@ export function useWakeWordListener() {
           console.warn('Notification permission denied — wake service may be limited on Android 13+');
         }
 
+        // While capturing an idea, fully stop the FGS so OS STT can own the mic.
+        // Pause is not enough on many Android devices (SpeechRecognizer is a singleton).
+        if (pausedForRecording) {
+          if (AndroidWakeWord.isRunning()) {
+            await AndroidWakeWord.stopServiceSilent();
+          }
+          AndroidWakeWord.silenceRecognitionUi();
+          setListening(false);
+          return;
+        }
+
+        // Permission prompts above are async, so re-read the live flag: a take
+        // may have started meanwhile and the FGS would steal its microphone.
+        if (useWakeWordStore.getState().pausedForRecording) {
+          setListening(false);
+          return;
+        }
+
         if (!AndroidWakeWord.isRunning()) {
           try {
             await AndroidWakeWord.startService();
@@ -280,17 +299,10 @@ export function useWakeWordListener() {
             setAvailable(false);
             return;
           }
-        }
-
-        // Avoid rapid pause/resume thrash — only call when state actually differs.
-        const currentlyPaused = AndroidWakeWord.isPaused();
-        if (pausedForRecording && !currentlyPaused) {
-          await AndroidWakeWord.pauseService();
-        } else if (!pausedForRecording && currentlyPaused) {
+        } else if (AndroidWakeWord.isPaused()) {
           await AndroidWakeWord.resumeService();
         }
 
-        // Consume pending wake if app was opened from background detection
         const pending = await AndroidWakeWord.consumePendingWake();
         if (pending?.transcript) {
           setLastHeard(pending.transcript);
@@ -304,6 +316,7 @@ export function useWakeWordListener() {
         void startInAppListening();
       } else {
         stopInAppListening('pause');
+        if (!enabled) AndroidWakeWord.restoreRecognitionUi();
       }
     };
 
