@@ -28,7 +28,6 @@ export type RecordingStatus = 'idle' | 'recording' | 'paused' | 'stopping';
  * spoken “stop recording” is never heard.
  */
 export function useIdeaCapture() {
-  const speechLocale = useSettingsStore((s) => s.speechLocale);
   const preferSavedAudio = useSettingsStore((s) => s.saveAudioRecording);
   const audio = useRecording();
   // In audio-file mode the recorder owns the mic, so live speech-to-text is off
@@ -73,12 +72,12 @@ export function useIdeaCapture() {
     error: sttError,
     listening,
     getFullTranscript,
+    getDetectedSpeechLocale,
     getAudioUri,
     waitForIdle,
     stopListening,
     reset,
   } = useLanguageTranscript({
-    speechLocale,
     enabled: active && !audioOnly,
     capturing: active && !paused && !audioOnly,
     onStopPhrase: () => {
@@ -205,7 +204,7 @@ export function useIdeaCapture() {
         uri,
         durationSec,
         transcript,
-        speechLocale,
+        speechLocale: getDetectedSpeechLocale(),
       };
     } finally {
       setStopping(false);
@@ -217,7 +216,7 @@ export function useIdeaCapture() {
     fileRecorder,
     getAudioUri,
     getFullTranscript,
-    speechLocale,
+    getDetectedSpeechLocale,
     stopListening,
     waitForIdle,
   ]);
@@ -280,6 +279,5 @@ export function useIdeaCapture() {
     captureMode: audioOnly ? ('audio-file' as const) : ('device' as const),
     liveTranscript: displayText,
     listening,
-    speechLocale,
   };
 }

@@ -2,11 +2,15 @@ import { ExpoSpeechRecognitionModule } from 'expo-speech-recognition';
 import { Platform } from 'react-native';
 
 import { ensureRecordingsDirectory } from '@/src/services/audioStorage';
+import { allVoiceCommandContextualStrings } from '@/src/features/wakeWord/phrases';
 
 import {
+  autoSpeechLocaleFallbackChain,
   INDIAN_SPEECH_LOCALES,
   matchCatalogLocale,
   pickAvailableSpeechLocale,
+  pickBestInstalledSpeechLocale,
+  listInstalledVoiceLocales,
   speechLocaleFallbackChain,
   type LocaleAvailability,
   type SpeechLocaleCode,
@@ -184,6 +188,8 @@ export async function triggerOfflineModelDownload(locale: SpeechLocaleCode): Pro
 
 export type LiveRecognitionOptions = {
   lang: SpeechLocaleCode | 'en-US';
+  /** Bias toward wake/stop/pause phrases in every supported language. */
+  contextualStrings?: string[];
   requiresOnDeviceRecognition?: boolean;
   outputFileName?: string;
   /** Persist recognized audio. Disable on retries — persist can leave the mic busy. */
@@ -213,6 +219,20 @@ export async function resolveDeviceSpeechLocale(
   const availability = await getCachedIndianLocaleAvailability();
   return pickAvailableSpeechLocale(preferred, availability);
 }
+
+/** Auto locale — ignores Settings; prefers Devanagari packs (hi/mr) over English. */
+export async function resolveAutoSpeechLocale(): Promise<SpeechLocaleCode | 'en-US'> {
+  const availability = await getCachedIndianLocaleAvailability();
+  return pickBestInstalledSpeechLocale(availability);
+}
+
+/** Locales to round-robin for wake/stop commands (multilingual, Settings-independent). */
+export async function listVoiceCommandLocales(): Promise<(SpeechLocaleCode | 'en-US')[]> {
+  const availability = await getCachedIndianLocaleAvailability();
+  return listInstalledVoiceLocales(availability);
+}
+
+export { autoSpeechLocaleFallbackChain, allVoiceCommandContextualStrings };
 
 /**
  * Only Android 13+ writes the recognized audio to a file — below that the
@@ -246,7 +266,7 @@ export async function startLiveRecognition(options: LiveRecognitionOptions): Pro
     addsPunctuation: lang === 'en-IN' || lang === 'en-US',
     requiresOnDeviceRecognition: options.requiresOnDeviceRecognition ?? false,
     iosTaskHint: 'dictation',
-    contextualStrings: contextualStringsForLocale(lang),
+    contextualStrings: options.contextualStrings ?? allVoiceCommandContextualStrings(),
     ...(recordingOptions ? { recordingOptions } : {}),
     // Silence lengths are deliberately not set here: expo-speech-recognition
     // applies its own long continuous-mode values last, and overriding them
@@ -287,6 +307,10 @@ export function stripTrailingStopCommand(transcript: string): string {
     /(நிறுத்து|நிறுத்துங்கள்|ரூகோ|போதும்)\s*$/u,
     /(বন্ধ\s*কর|থামো|থামুন)\s*$/u,
     /(ఆపు|ఆపండి|ఆగు)\s*$/u,
+    /(റെക്കോർഡിംഗ് നിർത്തുക|നിർത്തുക|നിർത്തൂ)\s*$/u,
+    /(ରେକର୍ଡିଂ ବନ୍ଦ କର|ବନ୍ଦ କର)\s*$/u,
+    /(ৰেকৰ্ডিং বন্ধ কৰক|বন্ধ কৰক)\s*$/u,
+    /(ریکارڈنگ بند کریں|بند کرو|روکو)\s*$/u,
     /(ನಿಲ್ಲಿಸಿ|ನಿಲ್ಲು)\s*$/u,
     /(നിർത്തുക|നിർത്തൂ)\s*$/u,
     /(બંધ\s*કરો|રોકો)\s*$/u,

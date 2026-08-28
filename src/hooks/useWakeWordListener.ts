@@ -6,10 +6,9 @@ import {
 import { useEffect, useRef, useState } from 'react';
 import { AppState, PermissionsAndroid, Platform } from 'react-native';
 
-import { matchesWakePhrase, wakeContextualStrings } from '@/src/features/wakeWord/phrases';
-import { speechLocaleFallbackChain, type SpeechLocaleCode } from '@/src/features/languageTranscript/locales';
-import { resolveDeviceSpeechLocale } from '@/src/services/languageTranscriptService';
-import { useSettingsStore } from '@/src/store/settingsStore';
+import { matchesWakePhrase, allVoiceCommandContextualStrings } from '@/src/features/wakeWord/phrases';
+import type { SpeechLocaleCode } from '@/src/features/languageTranscript/locales';
+import { listVoiceCommandLocales } from '@/src/services/languageTranscriptService';
 import { useWakeWordStore } from '@/src/store/wakeWordStore';
 
 /**
@@ -58,7 +57,6 @@ export function useWakeWordListener() {
   const enabled = useWakeWordStore((s) => s.enabled);
   const hydrated = useWakeWordStore((s) => s.hydrated);
   const pausedForRecording = useWakeWordStore((s) => s.pausedForRecording);
-  const speechLocale = useSettingsStore((s) => s.speechLocale);
   const setListening = useWakeWordStore((s) => s.setListening);
   const setAvailable = useWakeWordStore((s) => s.setAvailable);
   const setLastHeard = useWakeWordStore((s) => s.setLastHeard);
@@ -78,14 +76,15 @@ export function useWakeWordListener() {
   const intentionalStopRef = useRef(false);
   const mountedRef = useRef(true);
   const clientFailCount = useRef(0);
-  const wakeLocaleRef = useRef<SpeechLocaleCode | 'en-US'>(speechLocale);
-  const wakeLocaleAttemptRef = useRef(0);
+  const wakeLocaleRef = useRef<SpeechLocaleCode | 'en-US'>('hi-IN');
+  const voiceLocalesRef = useRef<(SpeechLocaleCode | 'en-US')[]>([
+    'hi-IN',
+    'mr-IN',
+    'en-IN',
+    'en-US',
+  ]);
+  const voiceLocaleIndexRef = useRef(0);
   const wakeLocaleExhaustedRef = useRef(false);
-
-  useEffect(() => {
-    wakeLocaleAttemptRef.current = 0;
-    wakeLocaleExhaustedRef.current = false;
-  }, [speechLocale]);
 
   const clearRestart = () => {
     if (restartTimer.current) {
@@ -157,17 +156,22 @@ export function useWakeWordListener() {
 
       if (!canListenInApp() || !mountedRef.current) return;
 
-      if (!fromScheduledRestart || wakeLocaleAttemptRef.current === 0) {
-        wakeLocaleRef.current = await resolveDeviceSpeechLocale(speechLocale);
-        if (!fromScheduledRestart) wakeLocaleAttemptRef.current = 0;
+      const locales = await listVoiceCommandLocales();
+      voiceLocalesRef.current = locales;
+      if (fromScheduledRestart) {
+        voiceLocaleIndexRef.current =
+          (voiceLocaleIndexRef.current + 1) % Math.max(1, locales.length);
+      } else {
+        voiceLocaleIndexRef.current = 0;
       }
+      wakeLocaleRef.current = locales[voiceLocaleIndexRef.current] ?? 'hi-IN';
 
       ExpoSpeechRecognitionModule.start({
         lang: wakeLocaleRef.current,
         interimResults: true,
         continuous: true,
         addsPunctuation: false,
-        contextualStrings: wakeContextualStrings(speechLocale),
+        contextualStrings: allVoiceCommandContextualStrings(),
         androidIntentOptions: {
           EXTRA_LANGUAGE_MODEL: 'free_form',
           EXTRA_SPEECH_INPUT_COMPLETE_SILENCE_LENGTH_MILLIS: 12000,
@@ -224,17 +228,16 @@ export function useWakeWordListener() {
     }
     if (!canListenInApp()) return;
     if (event.error === 'language-not-supported') {
-      const chain = speechLocaleFallbackChain(speechLocale);
-      const next = wakeLocaleAttemptRef.current + 1;
-      if (next < chain.length) {
-        wakeLocaleAttemptRef.current = next;
-        wakeLocaleRef.current = chain[next]!;
-        scheduleRestart(1200);
+      const locales = voiceLocalesRef.current;
+      if (locales.length <= 1) {
+        wakeLocaleExhaustedRef.current = true;
+        setAvailable(false);
         return;
       }
-      wakeLocaleExhaustedRef.current = true;
-      setAvailable(false);
-      console.warn('Wake word: speech language not supported on this device');
+      voiceLocaleIndexRef.current =
+        (voiceLocaleIndexRef.current + 1) % locales.length;
+      wakeLocaleRef.current = locales[voiceLocaleIndexRef.current] ?? 'en-US';
+      scheduleRestart(1200);
       return;
     }
     if (event.error === 'no-speech') {
@@ -330,7 +333,9 @@ export function useWakeWordListener() {
         if (!fgsFailedRef.current) {
           if (!AndroidWakeWord.isRunning()) {
             try {
-              await AndroidWakeWord.startService(speechLocale);
+              const locales = await listVoiceCommandLocales();
+              const locale = locales[voiceLocaleIndexRef.current] ?? locales[0] ?? 'hi-IN';
+              await AndroidWakeWord.startService(locale);
               setFgsRuntimeFailed(false);
               fgsFailedRef.current = false;
             } catch (e) {
@@ -409,5 +414,5 @@ export function useWakeWordListener() {
       }
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [enabled, hydrated, pausedForRecording, speechLocale, useNativeFgs, fgsRuntimeFailed]);
+  }, [enabled, hydrated, pausedForRecording, useNativeFgs, fgsRuntimeFailed]);
 }

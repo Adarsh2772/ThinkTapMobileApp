@@ -1,4 +1,83 @@
-/** Canonical + phonetic variants for "Hey Think Tap" (like OneTap wake phrases). */
+/** Shared “start recording” phrases across Indian languages (wake + resume). */
+const INDIAN_START_PHRASES = [
+  // Marathi
+  'रेकॉर्डिंग सुरू करा',
+  'रेकॉर्डिंग सुरु करा',
+  'रेकॉर्डिंग चालू करा',
+  'सुरू करा',
+  'हे थिंक टॅप',
+  'थिंक टॅप',
+  // Hindi
+  'रिकॉर्डिंग शुरू करो',
+  'रिकॉर्डिंग शुरू करें',
+  'रिकॉर्डिंग शुरू कर',
+  'शुरू करो',
+  'शुरू करें',
+  // Tamil
+  'ரெக்கார்டிங் தொடங்கு',
+  'பதிவு தொடங்கு',
+  'பதிவு செய்',
+  'தொடங்கு',
+  // Telugu
+  'రికార్డింగ్ ప్రారంభించు',
+  'రికార్డింగ్ మొదలు పెట్టు',
+  'ప్రారంభించు',
+  'మొదలు పెట్టు',
+  // Bengali
+  'রেকর্ডিং শুরু করুন',
+  'রেকর্ডিং শুরু করো',
+  'শুরু করুন',
+  'শুরু করো',
+  // Gujarati
+  'રેકોર્ડિંગ શરૂ કરો',
+  'રેકોર્ડિંગ શરુ કરો',
+  'શરૂ કરો',
+  // Kannada
+  'ರೆಕಾರ್ಡಿಂಗ್ ಪ್ರಾರಂಭಿಸಿ',
+  'ರೆಕಾರ್ಡಿಂಗ್ ಶುರು ಮಾಡಿ',
+  'ಪ್ರಾರಂಭಿಸಿ',
+  'ಶುರು ಮಾಡಿ',
+  // Malayalam
+  'റെക്കോർഡിംഗ് ആരംഭിക്കുക',
+  'റെക്കോർഡിംഗ് തുടങ്ങുക',
+  'ആരംഭിക്കുക',
+  'തുടങ്ങുക',
+  // Punjabi (Gurmukhi)
+  'ਰਿਕਾਰਡਿੰਗ ਸ਼ੁਰੂ ਕਰੋ',
+  'ਰਿਕਾਰਡਿੰਗ ਸ਼ੁਰੂ ਕਰੋ',
+  'ਸ਼ੁਰੂ ਕਰੋ',
+  // Odia
+  'ରେକର୍ଡିଂ ଆରମ୍ଭ କରନ୍ତୁ',
+  'ରେକର୍ଡିଂ ଶୁରୁ କର',
+  'ଆରମ୍ଭ କର',
+  // Assamese
+  'ৰেকৰ্ডিং আৰম্ভ কৰক',
+  'ৰেকৰ্ডিং আৰম্ভ কৰা',
+  'আৰম্ভ কৰক',
+  // Urdu
+  'ریکارڈنگ شروع کریں',
+  'ریکارڈنگ شروع کرو',
+  'شروع کریں',
+  'شروع کرو',
+];
+
+/** Romanized fallbacks when the OS recognizer is on English/Hindi. */
+const ROMANIZED_START_PHRASES = [
+  'recording suru kara',
+  'rekording suru kara',
+  'record suru kara',
+  'suru kara',
+  'rekording chalu kara',
+  'record chalu kara',
+  'recording shuru karo',
+  'rekording shuru karo',
+  'shuru karo',
+  'recording thodangu',
+  'recording prarambhinchu',
+  'recording shuru korun',
+];
+
+/** Canonical + phonetic variants for "Hey Think Tap". */
 const WAKE_PHRASES = [
   'hey think tap',
   'hey thinktap',
@@ -18,29 +97,11 @@ const WAKE_PHRASES = [
   'start record',
   'start recoding',
   'hey think tap start',
-  // Marathi — start recording
-  'रेकॉर्डिंग सुरू करा',
-  'रेकॉर्डिंग सुरु करा',
-  'रेकॉर्डिंग चालू करा',
-  'सुरू करा',
-  'हे थिंक टॅप',
-  'थिंक टॅप',
-  // Hindi — start recording
-  'रिकॉर्डिंग शुरू करो',
-  'रिकॉर्डिंग शुरू करें',
-  'रिकॉर्डिंग शुरू कर',
-  'शुरू करो',
-  'शुरू करें',
+  'hey think tap start recording',
+  ...INDIAN_START_PHRASES,
+  ...ROMANIZED_START_PHRASES,
 ];
 
-/**
- * Commands come in two strengths, because the recognizer reports a partial
- * hypothesis for every word you speak while dictating.
- *
- * COMMANDS are unambiguous enough to honour anywhere in a sentence. WORDS are
- * everyday speech ("stop", "hold", "बस") and only count when they are the whole
- * utterance — otherwise "we should stop doing that" ends the take mid-idea.
- */
 const PAUSE_COMMANDS = ['pause recording', 'pause the recording', 'pause record'];
 const PAUSE_WORDS = ['pause', 'please pause', 'hold', 'hold on'];
 
@@ -49,14 +110,33 @@ const RESUME_COMMANDS = [
   'continue recording',
   'start recording',
   'start record',
-  'रेकॉर्डिंग सुरू करा',
-  'रिकॉर्डिंग शुरू करो',
-  'सुरू करा',
-  'शुरू करो',
+  ...INDIAN_START_PHRASES,
+  ...ROMANIZED_START_PHRASES,
 ];
 const RESUME_WORDS = ['resume', 'continue', 'start', 'go on', 'carry on'];
 
-/** Ends an active recording (English + Indian languages). */
+const INDIAN_STOP_PHRASES = [
+  'रिकॉर्डिंग बंद करा',
+  'रिकॉर्डिंग बंद करो',
+  'ரெக்கார்டிங் நிறுத்து',
+  'பதிவு நிறுத்து',
+  'రికార్డింగ్ ఆపు',
+  'రికార్డింగ్ ఆపండి',
+  'রেকর্ডিং বন্ধ করুন',
+  'রেকর্ডিং বন্ধ করো',
+  'રેકોર્ડિંગ બંધ કરો',
+  'ರೆಕಾರ್ಡಿಂಗ್ ನಿಲ್ಲಿಸಿ',
+  'റെക്കോർഡിംഗ് നിർത്തുക',
+  'ਰਿਕਾਰਡਿੰਗ ਬੰਦ ਕਰੋ',
+  'ରେକର୍ଡିଂ ବନ୍ଦ କର',
+  'ৰেকৰ্ডিং বন্ধ কৰক',
+  'ریکارڈنگ بند کریں',
+  'ریکارڈنگ بند کرو',
+  'rekording band kara',
+  'recording band kara',
+  'record band kara',
+];
+
 const STOP_COMMANDS = [
   'stop recording',
   'stop record',
@@ -65,9 +145,9 @@ const STOP_COMMANDS = [
   'think tap stop',
   'end recording',
   'finish recording',
-  'रिकॉर्डिंग बंद करा',
-  'रिकॉर्डिंग बंद करो',
+  ...INDIAN_STOP_PHRASES,
 ];
+
 const STOP_WORDS = [
   'stop',
   'please stop',
@@ -76,7 +156,7 @@ const STOP_WORDS = [
   'im done',
   "i'm done",
   'i am done',
-  // Marathi / Hindi
+  // Marathi / Hindi (Devanagari)
   'थांब',
   'थांबा',
   'थांबवा',
@@ -86,25 +166,55 @@ const STOP_WORDS = [
   'रोका',
   'रुको',
   'बस',
-  // Other Indian languages (common “stop” commands)
+  'thamba',
+  'thambaa',
+  'band kara',
+  'bas',
+  // Tamil
   'நிறுத்து',
-  'বন্ধ কর',
-  'থামো',
+  'நிறுத்துங்கள்',
+  'நிறுத்த',
+  // Telugu
   'ఆపు',
+  'ఆపండి',
+  'ఆగు',
+  // Bengali
+  'বন্ধ কর',
+  'বন্ধ করুন',
+  'থামো',
+  'থামুন',
+  // Kannada
   'ನಿಲ್ಲಿಸಿ',
+  'ನಿಲ್ಲು',
+  // Malayalam
   'നിർത്തുക',
+  'നിർത്തൂ',
+  // Gujarati
   'બંધ કરો',
+  'રોકો',
+  // Punjabi
   'ਬੰਦ ਕਰੋ',
+  'ਰੋਕੋ',
+  // Odia
+  'ବନ୍ଦ କର',
+  'ରୋକ',
+  // Assamese
+  'বন্ধ কৰক',
+  'থামক',
+  // Urdu
+  'بند کرو',
+  'روکو',
+  'رکو',
 ];
+
+/** Scripts kept when normalizing STT text for phrase matching. */
+const PHRASE_CHAR_PATTERN =
+  /[^\w\u0600-\u06FF\u0900-\u097F\u0980-\u09FF\u0A00-\u0A7F\u0A80-\u0AFF\u0B00-\u0B7F\u0B80-\u0BFF\u0C00-\u0C7F\u0C80-\u0CFF\u0D00-\u0D7F\s']/gi;
 
 export function normalizeSpeech(text: string): string {
   return text
     .toLowerCase()
-    // Keep Latin + major Indic scripts and digits.
-    .replace(
-      /[^\w\u0900-\u097F\u0980-\u09FF\u0A00-\u0A7F\u0A80-\u0AFF\u0B00-\u0B7F\u0B80-\u0BFF\u0C00-\u0C7F\u0C80-\u0CFF\u0D00-\u0D7F\s']/gi,
-      ' ',
-    )
+    .replace(PHRASE_CHAR_PATTERN, ' ')
     .replace(/\s+/g, ' ')
     .trim();
 }
@@ -140,35 +250,34 @@ export function hasDevanagari(text: string): boolean {
   return /[\u0900-\u097F]/.test(text);
 }
 
-/** Bias SpeechRecognizer toward wake phrases in the user's speech locale. */
-export function wakeContextualStrings(speechLocale?: string): string[] {
-  const base = [
+/** All voice-command bias strings — every supported language, not tied to Settings. */
+export function allVoiceCommandContextualStrings(): string[] {
+  return [
     'Hey Think Tap',
     'Think Tap',
     'ThinkTap',
     'start recording',
     'stop recording',
+    'pause recording',
+    'resume recording',
     ...WAKE_PHRASES,
+    ...STOP_COMMANDS,
+    ...STOP_WORDS,
+    ...PAUSE_COMMANDS,
+    ...PAUSE_WORDS,
+    ...RESUME_COMMANDS,
+    ...RESUME_WORDS,
   ];
-  switch (speechLocale) {
-    case 'mr-IN':
-      return [
-        'रेकॉर्डिंग सुरू करा',
-        'रेकॉर्डिंग चालू करा',
-        'सुरू करा',
-        'थांबा',
-        'बंद करा',
-        ...base,
-      ];
-    case 'hi-IN':
-      return [
-        'रिकॉर्डिंग शुरू करो',
-        'शुरू करो',
-        'थांबा',
-        'बंद करो',
-        ...base,
-      ];
-    default:
-      return base;
-  }
 }
+
+/** @deprecated Use allVoiceCommandContextualStrings — locale setting is not required. */
+export function wakeContextualStrings(_speechLocale?: string): string[] {
+  return allVoiceCommandContextualStrings();
+}
+
+/** Exported for tests and native parity checks. */
+export const voicePhraseCatalog = {
+  indianStart: INDIAN_START_PHRASES,
+  indianStop: INDIAN_STOP_PHRASES,
+  wake: WAKE_PHRASES,
+} as const;

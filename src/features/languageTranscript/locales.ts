@@ -75,6 +75,71 @@ export function speechLocaleFallbackChain(
   return chain;
 }
 
+/**
+ * Priority order for auto speech recognition — independent of Settings.
+ * Hindi + English are most commonly installed on Indian Android devices.
+ */
+export const AUTO_RECOGNIZER_LOCALE_PRIORITY: (SpeechLocaleCode | 'en-US')[] = [
+  'hi-IN',
+  'mr-IN',
+  'en-IN',
+  'en-US',
+  'bn-IN',
+  'ta-IN',
+  'te-IN',
+  'gu-IN',
+  'kn-IN',
+  'ml-IN',
+  'pa-IN',
+  'or-IN',
+  'as-IN',
+  'ur-IN',
+];
+
+export function autoSpeechLocaleFallbackChain(): (SpeechLocaleCode | 'en-US')[] {
+  return [...AUTO_RECOGNIZER_LOCALE_PRIORITY];
+}
+
+/** Best installed locale for multilingual auto-detect (ignores user Settings). */
+export function pickBestInstalledSpeechLocale(
+  availability: LocaleAvailability[],
+): SpeechLocaleCode | 'en-US' {
+  const installed = new Set(
+    availability
+      .filter((row) => row.installedOnDevice || row.supportedOnDevice)
+      .map((row) => row.code),
+  );
+  for (const code of AUTO_RECOGNIZER_LOCALE_PRIORITY) {
+    if (code !== 'en-US' && installed.has(code)) return code;
+  }
+  for (const code of AUTO_RECOGNIZER_LOCALE_PRIORITY) {
+    if (code === 'en-US') continue;
+    const row = availability.find((r) => r.code === code);
+    if (row?.available) return code;
+  }
+  return 'en-US';
+}
+
+/**
+ * All locales to rotate for voice commands (wake / stop / pause).
+ * Cycling locales lets Marathi work even when English is selected in Settings.
+ */
+export function listInstalledVoiceLocales(
+  availability: LocaleAvailability[],
+): (SpeechLocaleCode | 'en-US')[] {
+  const locales: (SpeechLocaleCode | 'en-US')[] = [];
+  for (const code of AUTO_RECOGNIZER_LOCALE_PRIORITY) {
+    if (code === 'en-US') continue;
+    const row = availability.find((r) => r.code === code);
+    if (row?.installedOnDevice || row?.supportedOnDevice || row?.available) {
+      locales.push(code);
+    }
+  }
+  if (!locales.includes('en-IN')) locales.push('en-IN');
+  if (!locales.includes('en-US')) locales.push('en-US');
+  return locales.length ? locales : ['hi-IN', 'mr-IN', 'en-IN', 'en-US'];
+}
+
 /** Pick the first locale in the fallback chain that the device reports as available. */
 export function pickAvailableSpeechLocale(
   preferred: SpeechLocaleCode,
