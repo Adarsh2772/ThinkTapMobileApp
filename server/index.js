@@ -24,10 +24,13 @@ const PORT = Number(process.env.PORT || 8787);
 const MAX_BYTES = Number(process.env.MAX_UPLOAD_BYTES || 25 * 1024 * 1024);
 
 const AUTO_PROMPT = [
-  'Transcribe exactly what was spoken in the original language and script.',
-  'Marathi must be written in Devanagari (मराठी), not romanized English letters.',
-  'Hindi must be Devanagari. Do NOT translate into English.',
-  'Code-mixing is OK. Preserve names, numbers, and punctuation.',
+  'Automatically detect the language the speaker originally used.',
+  'Transcribe exactly in that same language and correct native script.',
+  'Never translate into English unless the speaker spoke English.',
+  'Never translate into Hindi, Marathi, or any other language unless that is what was spoken.',
+  'Marathi/Hindi → Devanagari. Tamil → Tamil script. Preserve code-mixing naturally.',
+  'Preserve names, numbers, dates, addresses, product names, and technical terms.',
+  'Do not summarize or add information.',
 ].join(' ');
 
 function providerFromEnv() {
@@ -92,13 +95,19 @@ app.post('/api/enrich', upload.single('file'), async (req, res) => {
       return;
     }
     const enrichment = await runEnrich(stt.text, stt.language || 'en');
+    const transcript =
+      enrichment.translated_text || enrichment.transcript || stt.text;
     res.json({
-      transcript: enrichment.transcript || stt.text,
+      transcript,
       title: enrichment.title,
       category: enrichment.category,
       summary: enrichment.summary,
       aiStory: enrichment.aiStory || enrichment.summary,
-      detectedLanguage: (stt.language || 'en').toLowerCase(),
+      detectedLanguage: (
+        enrichment.language_code ||
+        stt.language ||
+        'en'
+      ).toLowerCase(),
     });
   } catch (error) {
     sendError(res, error);
@@ -179,12 +188,26 @@ async function runEnrich(transcript, languageCode) {
         {
           role: 'system',
           content: `You organize voice ideas for Think Tap.
-Detected spoken language code: ${languageCode}.
-The transcript below is already in the correct script — copy it into "transcript" unchanged.
-Write title, summary, and aiStory in the same language/script as the transcript.
+The user originally spoke language code: ${languageCode}.
+Keep "transcript" / "translated_text" in that same spoken language and script — unchanged if already correct.
+Write title, summary, and aiStory in that same language only.
+Do not translate into English unless the spoken language is English.
+Do not translate into Hindi, Marathi, or any other language unless that is what was spoken.
+Preserve names, numbers, dates, addresses, product names, and technical terms.
+Do not summarize beyond the required fields. Do not add information.
 Keep category in English from: Movies, Songs, Books, Business, Scripts, Design, Music.
 Title: max 8 words. Summary: 1-2 sentences from the transcript only.
-Return JSON: { "transcript": string, "title": string, "category": string, "summary": string, "aiStory": string }`,
+Return JSON: {
+  "detected_language": string,
+  "language_code": "${languageCode}",
+  "translated_text": string,
+  "transcript": string,
+  "title": string,
+  "category": string,
+  "summary": string,
+  "aiStory": string
+}
+Use the same string for "transcript" and "translated_text".`,
         },
         { role: 'user', content: `Transcript:\n${transcript}` },
       ],

@@ -11,6 +11,9 @@ import expo.modules.kotlin.modules.ModuleDefinition
 
 class AndroidWakeWordModule : Module() {
   companion object {
+    const val PREFS = "thinktap_wake"
+    const val KEY_SPEECH_LOCALE = "speech_locale"
+
     @Volatile
     private var instance: AndroidWakeWordModule? = null
 
@@ -53,6 +56,14 @@ class AndroidWakeWordModule : Module() {
       return@Function WakeWordForegroundService.isPaused
     }
 
+    Function("setSpeechLocale") { speechLocale: String? ->
+      val locale = speechLocale?.trim()?.takeIf { it.isNotEmpty() } ?: "en-US"
+      context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+        .edit()
+        .putString(KEY_SPEECH_LOCALE, locale)
+        .apply()
+    }
+
     AsyncFunction("startService") {
       if (ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO)
         != PackageManager.PERMISSION_GRANTED
@@ -70,22 +81,22 @@ class AndroidWakeWordModule : Module() {
     AsyncFunction("stopService") {
       val intent = Intent(context, WakeWordForegroundService::class.java).apply {
         action = WakeWordForegroundService.ACTION_STOP
-        putExtra(WakeWordForegroundService.EXTRA_KEEP_SILENT, false)
       }
       context.startService(intent)
       return@AsyncFunction true
     }
 
     AsyncFunction("stopServiceSilent") {
+      // Same as stopService — never leave system volumes muted / Silent-like.
       val intent = Intent(context, WakeWordForegroundService::class.java).apply {
         action = WakeWordForegroundService.ACTION_STOP
-        putExtra(WakeWordForegroundService.EXTRA_KEEP_SILENT, true)
       }
       context.startService(intent)
       return@AsyncFunction true
     }
 
     Function("silenceRecognitionUi") {
+      // No-op for ringer/Silent Mode; only cancels leftover haptic if any.
       RecognitionAudioGuard.mute(context)
     }
 

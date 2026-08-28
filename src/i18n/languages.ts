@@ -18,7 +18,20 @@ export type AppLanguage = {
   nativeName: string;
   flag: string;
   /** Writing system used for transcripts */
-  script: 'latin' | 'devanagari' | 'arabic' | 'cjk' | 'japanese';
+  script:
+    | 'latin'
+    | 'devanagari'
+    | 'arabic'
+    | 'cjk'
+    | 'japanese'
+    | 'bengali'
+    | 'telugu'
+    | 'tamil'
+    | 'gujarati'
+    | 'kannada'
+    | 'malayalam'
+    | 'gurmukhi'
+    | 'odia';
 };
 
 export const APP_LANGUAGES: AppLanguage[] = [
@@ -45,10 +58,42 @@ export type SpokenLanguage = {
   whisperCode: string;
 };
 
-const DEVANAGARI_CODES = new Set(['hi', 'mr', 'ne', 'sa', 'bn']);
+const DEVANAGARI_CODES = new Set(['hi', 'mr', 'ne', 'sa']);
+const BENGALI_CODES = new Set(['bn', 'as']);
 const ARABIC_CODES = new Set(['ar', 'fa', 'ur']);
 const CJK_CODES = new Set(['zh', 'yue', 'zh-cn', 'zh-tw']);
 const JAPANESE_CODES = new Set(['ja']);
+const TAMIL_CODES = new Set(['ta']);
+const TELUGU_CODES = new Set(['te']);
+const GUJARATI_CODES = new Set(['gu']);
+const KANNADA_CODES = new Set(['kn']);
+const MALAYALAM_CODES = new Set(['ml']);
+const GURMUKHI_CODES = new Set(['pa']);
+const ODIA_CODES = new Set(['or', 'od']);
+
+/** Display names for auto-detected spoken languages (incl. beyond UI app languages). */
+const SPOKEN_LANGUAGE_NAMES: Record<string, { name: string; nativeName: string }> = {
+  en: { name: 'English', nativeName: 'English' },
+  hi: { name: 'Hindi', nativeName: 'हिन्दी' },
+  mr: { name: 'Marathi', nativeName: 'मराठी' },
+  bn: { name: 'Bengali', nativeName: 'বাংলা' },
+  te: { name: 'Telugu', nativeName: 'తెలుగు' },
+  ta: { name: 'Tamil', nativeName: 'தமிழ்' },
+  gu: { name: 'Gujarati', nativeName: 'ગુજરાતી' },
+  kn: { name: 'Kannada', nativeName: 'ಕನ್ನಡ' },
+  ml: { name: 'Malayalam', nativeName: 'മലയാളം' },
+  pa: { name: 'Punjabi', nativeName: 'ਪੰਜਾਬੀ' },
+  or: { name: 'Odia', nativeName: 'ଓଡ଼ିଆ' },
+  as: { name: 'Assamese', nativeName: 'অসমীয়া' },
+  ur: { name: 'Urdu', nativeName: 'اردو' },
+  ar: { name: 'Arabic', nativeName: 'العربية' },
+  fr: { name: 'French', nativeName: 'Français' },
+  es: { name: 'Spanish', nativeName: 'Español' },
+  de: { name: 'German', nativeName: 'Deutsch' },
+  pt: { name: 'Portuguese', nativeName: 'Português' },
+  zh: { name: 'Chinese', nativeName: '中文' },
+  ja: { name: 'Japanese', nativeName: '日本語' },
+};
 
 export function getLanguage(code: string | null | undefined): AppLanguage {
   return APP_LANGUAGES.find((l) => l.code === code) ?? APP_LANGUAGES[0];
@@ -88,14 +133,23 @@ export function resolveSpokenLanguage(
   if (iso) {
     let script: AppLanguage['script'] = 'latin';
     if (DEVANAGARI_CODES.has(iso)) script = 'devanagari';
+    else if (BENGALI_CODES.has(iso)) script = 'bengali';
+    else if (TAMIL_CODES.has(iso)) script = 'tamil';
+    else if (TELUGU_CODES.has(iso)) script = 'telugu';
+    else if (GUJARATI_CODES.has(iso)) script = 'gujarati';
+    else if (KANNADA_CODES.has(iso)) script = 'kannada';
+    else if (MALAYALAM_CODES.has(iso)) script = 'malayalam';
+    else if (GURMUKHI_CODES.has(iso)) script = 'gurmukhi';
+    else if (ODIA_CODES.has(iso)) script = 'odia';
     else if (ARABIC_CODES.has(iso)) script = 'arabic';
     else if (CJK_CODES.has(iso) || iso === 'zh') script = 'cjk';
     else if (JAPANESE_CODES.has(iso)) script = 'japanese';
 
+    const named = SPOKEN_LANGUAGE_NAMES[iso];
     return {
       code: iso,
-      name: iso,
-      nativeName: iso,
+      name: named?.name ?? iso,
+      nativeName: named?.nativeName ?? iso,
       script,
       whisperCode: iso,
     };

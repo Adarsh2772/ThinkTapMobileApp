@@ -12,22 +12,26 @@ import android.os.VibratorManager
 import android.util.Log
 
 /**
- * Keeps Android SpeechRecognizer start chimes/haptics silent while listening,
- * and plays a single ring + vibrate when the user actually starts recording.
+ * Recording start cue + brief suppression of SpeechRecognizer UI chimes.
+ *
+ * Never changes [AudioManager.getRingerMode] / Silent Mode / DND.
+ * Volume tweaks (if any) are temporary and always restored — they must not linger
+ * after the app is closed or while a take is recording.
  */
 object RecognitionAudioGuard {
   private const val TAG = "ThinkTapAudioGuard"
   private val lock = Any()
+  private val mainHandler = Handler(Looper.getMainLooper())
   private val savedVolumes = mutableMapOf<Int, Int>()
   @Volatile
   private var muted = false
+  private var restoreRunnable: Runnable? = null
 
-  private fun beepStreams(): IntArray {
+  /** Streams that carry SpeechRecognizer start chimes on many OEMs (not ringer mode). */
+  private fun chimeStreams(): IntArray {
     val list = mutableListOf(
       AudioManager.STREAM_SYSTEM,
       AudioManager.STREAM_NOTIFICATION,
-      AudioManager.STREAM_DTMF,
-      AudioManager.STREAM_ALARM,
     )
     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
       list.add(AudioManager.STREAM_ACCESSIBILITY)
@@ -35,65 +39,100 @@ object RecognitionAudioGuard {
     return list.toIntArray()
   }
 
+  fun cancelVibrator(context: Context) {
+    try {
+      vibrator(context)?.cancel()
+    } catch (_: Exception) {
+      // ignore
+    }
+  }
+
+  /**
+   * API compatibility — does not leave the device muted.
+   * Cancels haptic only.
+   */
   fun mute(context: Context) {
+    cancelVibrator(context)
+  }
+
+  /** Restore any brief chime suppression and cancel leftover haptic. */
+  fun restore(context: Context) {
+    cancelVibrator(context)
+    restoreVolumesNow(context.applicationContext)
+  }
+
+  /**
+   * Briefly suppress recognition UI chimes around [block], then always restore.
+   * Does not set ringer mode / Silent Mode / DND.
+   */
+  fun runWithChimesSuppressed(context: Context, block: () -> Unit) {
+    val app = context.applicationContext
+    suppressChimesBriefly(app)
+    try {
+      block()
+    } finally {
+      // Restore after the OEM chime window; never leave volumes down.
+      mainHandler.postDelayed({ restoreVolumesNow(app) }, 350)
+    }
+  }
+
+  private fun suppressChimesBriefly(app: Context) {
     synchronized(lock) {
       try {
-        val app = context.applicationContext
+        restoreRunnable?.let { mainHandler.removeCallbacks(it) }
+        restoreRunnable = null
         val am = app.getSystemService(Context.AUDIO_SERVICE) as AudioManager
         cancelVibrator(app)
         if (!muted) {
           savedVolumes.clear()
-          for (stream in beepStreams()) {
+          for (stream in chimeStreams()) {
             savedVolumes[stream] = am.getStreamVolume(stream)
           }
           muted = true
         }
-        for (stream in beepStreams()) {
+        for (stream in chimeStreams()) {
           try {
-            am.setStreamVolume(stream, 0, AudioManager.FLAG_REMOVE_SOUND_AND_VIBRATE)
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-              am.adjustStreamVolume(
-                stream,
-                AudioManager.ADJUST_MUTE,
-                AudioManager.FLAG_REMOVE_SOUND_AND_VIBRATE,
-              )
-            }
+            am.setStreamVolume(stream, 0, 0)
           } catch (_: Exception) {
             // Some OEMs block individual streams.
           }
         }
+        // Safety net: always restore even if caller is killed mid-flight.
+        val r = Runnable { restoreVolumesNow(app) }
+        restoreRunnable = r
+        mainHandler.postDelayed(r, 800)
       } catch (e: Exception) {
-        Log.w(TAG, "mute", e)
+        Log.w(TAG, "suppressChimesBriefly", e)
       }
     }
   }
 
-  fun restore(context: Context) {
+  private fun restoreVolumesNow(app: Context) {
     synchronized(lock) {
+      restoreRunnable?.let { mainHandler.removeCallbacks(it) }
+      restoreRunnable = null
       if (!muted) return
       try {
-        val am = context.applicationContext.getSystemService(Context.AUDIO_SERVICE) as AudioManager
+        val am = app.getSystemService(Context.AUDIO_SERVICE) as AudioManager
         for ((stream, volume) in savedVolumes) {
           try {
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-              am.adjustStreamVolume(stream, AudioManager.ADJUST_UNMUTE, 0)
-            }
             am.setStreamVolume(stream, volume, 0)
           } catch (_: Exception) {
             // ignore
           }
         }
       } catch (e: Exception) {
-        Log.w(TAG, "restore", e)
+        Log.w(TAG, "restoreVolumesNow", e)
       }
       savedVolumes.clear()
       muted = false
     }
   }
 
+  /** Short vibrate + optional tone when a take starts — does not change ringer mode. */
   fun playStartCue(context: Context) {
     val app = context.applicationContext
-    restore(app)
+    restoreVolumesNow(app)
     try {
       val vibrator = vibrator(app)
       if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
@@ -109,26 +148,16 @@ object RecognitionAudioGuard {
     try {
       val tone = ToneGenerator(AudioManager.STREAM_MUSIC, 85)
       tone.startTone(ToneGenerator.TONE_PROP_ACK, 220)
-      Handler(Looper.getMainLooper()).postDelayed({
+      mainHandler.postDelayed({
         try {
           tone.stopTone()
           tone.release()
         } catch (_: Exception) {
           // ignore
         }
-        mute(app)
       }, 280)
     } catch (e: Exception) {
       Log.w(TAG, "tone", e)
-      mute(app)
-    }
-  }
-
-  fun cancelVibrator(context: Context) {
-    try {
-      vibrator(context)?.cancel()
-    } catch (_: Exception) {
-      // ignore
     }
   }
 

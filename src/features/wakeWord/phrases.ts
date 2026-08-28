@@ -16,7 +16,21 @@ const WAKE_PHRASES = [
   'think app',
   'start recording',
   'start record',
+  'start recoding',
   'hey think tap start',
+  // Marathi — start recording
+  'रेकॉर्डिंग सुरू करा',
+  'रेकॉर्डिंग सुरु करा',
+  'रेकॉर्डिंग चालू करा',
+  'सुरू करा',
+  'हे थिंक टॅप',
+  'थिंक टॅप',
+  // Hindi — start recording
+  'रिकॉर्डिंग शुरू करो',
+  'रिकॉर्डिंग शुरू करें',
+  'रिकॉर्डिंग शुरू कर',
+  'शुरू करो',
+  'शुरू करें',
 ];
 
 /**
@@ -35,6 +49,10 @@ const RESUME_COMMANDS = [
   'continue recording',
   'start recording',
   'start record',
+  'रेकॉर्डिंग सुरू करा',
+  'रिकॉर्डिंग शुरू करो',
+  'सुरू करा',
+  'शुरू करो',
 ];
 const RESUME_WORDS = ['resume', 'continue', 'start', 'go on', 'carry on'];
 
@@ -120,4 +138,37 @@ export function matchesResumePhrase(text: string): boolean {
 
 export function hasDevanagari(text: string): boolean {
   return /[\u0900-\u097F]/.test(text);
+}
+
+/** Bias SpeechRecognizer toward wake phrases in the user's speech locale. */
+export function wakeContextualStrings(speechLocale?: string): string[] {
+  const base = [
+    'Hey Think Tap',
+    'Think Tap',
+    'ThinkTap',
+    'start recording',
+    'stop recording',
+    ...WAKE_PHRASES,
+  ];
+  switch (speechLocale) {
+    case 'mr-IN':
+      return [
+        'रेकॉर्डिंग सुरू करा',
+        'रेकॉर्डिंग चालू करा',
+        'सुरू करा',
+        'थांबा',
+        'बंद करा',
+        ...base,
+      ];
+    case 'hi-IN':
+      return [
+        'रिकॉर्डिंग शुरू करो',
+        'शुरू करो',
+        'थांबा',
+        'बंद करो',
+        ...base,
+      ];
+    default:
+      return base;
+  }
 }

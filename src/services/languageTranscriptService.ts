@@ -1,12 +1,13 @@
 import { ExpoSpeechRecognitionModule } from 'expo-speech-recognition';
 import { Platform } from 'react-native';
-import { AndroidWakeWord } from 'android-wake-word';
 
 import { ensureRecordingsDirectory } from '@/src/services/audioStorage';
 
 import {
   INDIAN_SPEECH_LOCALES,
   matchCatalogLocale,
+  pickAvailableSpeechLocale,
+  speechLocaleFallbackChain,
   type LocaleAvailability,
   type SpeechLocaleCode,
 } from '@/src/features/languageTranscript/locales';
@@ -53,10 +54,34 @@ function contextualStringsForLocale(lang: string): string[] {
     'start recording',
   ];
   switch (lang) {
-    case 'hi-IN':
-      return ['थांबा', 'थांब', 'बंद करो', 'बंद', 'रुको', 'बस', ...sharedEn];
     case 'mr-IN':
-      return ['थांबा', 'थांब', 'थांबवा', 'बंद करा', 'बंद', 'बस', ...sharedEn];
+      return [
+        'रेकॉर्डिंग सुरू करा',
+        'रेकॉर्डिंग सुरु करा',
+        'रेकॉर्डिंग चालू करा',
+        'सुरू करा',
+        'थांबा',
+        'थांब',
+        'थांबवा',
+        'बंद करा',
+        'बंद',
+        'बस',
+        ...sharedEn,
+      ];
+    case 'hi-IN':
+      return [
+        'रिकॉर्डिंग शुरू करो',
+        'रिकॉर्डिंग शुरू करें',
+        'शुरू करो',
+        'शुरू करें',
+        'थांबा',
+        'थांब',
+        'बंद करो',
+        'बंद',
+        'रुको',
+        'बस',
+        ...sharedEn,
+      ];
     case 'bn-IN':
       return ['বন্ধ কর', 'থামো', 'থামুন', ...sharedEn];
     case 'te-IN':
@@ -165,6 +190,30 @@ export type LiveRecognitionOptions = {
   persist?: boolean;
 };
 
+let localeAvailabilityCache: LocaleAvailability[] | null = null;
+
+/** Cached device locale list — refreshed after a failed start. */
+export async function getCachedIndianLocaleAvailability(
+  refresh = false,
+): Promise<LocaleAvailability[]> {
+  if (refresh || !localeAvailabilityCache) {
+    localeAvailabilityCache = await getIndianLocaleAvailability();
+  }
+  return localeAvailabilityCache;
+}
+
+export function clearSpeechLocaleCache(): void {
+  localeAvailabilityCache = null;
+}
+
+/** Best locale for this device before starting SpeechRecognizer (avoids beep loops). */
+export async function resolveDeviceSpeechLocale(
+  preferred: SpeechLocaleCode,
+): Promise<SpeechLocaleCode | 'en-US'> {
+  const availability = await getCachedIndianLocaleAvailability();
+  return pickAvailableSpeechLocale(preferred, availability);
+}
+
 /**
  * Only Android 13+ writes the recognized audio to a file — below that the
  * recognizer cannot share the mic with a recorder at all. Other platforms
@@ -189,8 +238,6 @@ export async function startLiveRecognition(options: LiveRecognitionOptions): Pro
       };
     }
   }
-
-  AndroidWakeWord.silenceRecognitionUi();
 
   ExpoSpeechRecognitionModule.start({
     lang,

@@ -8,10 +8,13 @@ import {
   matchesStopPhrase,
 } from '@/src/features/wakeWord/phrases';
 import type { SpeechLocaleCode } from '@/src/features/languageTranscript/locales';
+import { speechLocaleFallbackChain } from '@/src/features/languageTranscript/locales';
 import {
   abortLiveRecognition,
+  clearSpeechLocaleCache,
   isSpeechRecognitionAvailable,
   requestSpeechPermissions,
+  resolveDeviceSpeechLocale,
   startLiveRecognition,
   stopLiveRecognition,
   stripTrailingStopCommand,
@@ -73,6 +76,14 @@ export function useLanguageTranscript({
   capturingRef.current = capturing;
   const localeRef = useRef(speechLocale);
   localeRef.current = speechLocale;
+  const activeLocaleRef = useRef<SpeechLocaleCode | 'en-US'>(speechLocale);
+  const localeAttemptRef = useRef(0);
+  const localeExhaustedRef = useRef(false);
+  useEffect(() => {
+    activeLocaleRef.current = speechLocale;
+    localeAttemptRef.current = 0;
+    localeExhaustedRef.current = false;
+  }, [speechLocale]);
   const fileSeq = useRef(0);
   const persistRef = useRef(true);
   const startAttempts = useRef(0);
@@ -186,7 +197,7 @@ export function useLanguageTranscript({
   }, []);
 
   const startListening = useCallback(async (fromRestart = false) => {
-    if (!enabledRef.current || stopFiredRef.current) return;
+    if (!enabledRef.current || stopFiredRef.current || localeExhaustedRef.current) return;
     startingRef.current = true;
     const gen = fromRestart ? genRef.current : ++genRef.current;
 
@@ -201,6 +212,12 @@ export function useLanguageTranscript({
         startingRef.current = false;
         setError('Speech recognition is unavailable on this device.');
         return;
+      }
+
+      if (!fromRestart) {
+        localeAttemptRef.current = 0;
+        localeExhaustedRef.current = false;
+        activeLocaleRef.current = await resolveDeviceSpeechLocale(localeRef.current);
       }
 
       // Android ends a session on every silence gap. Aborting a session that is
@@ -219,7 +236,7 @@ export function useLanguageTranscript({
       nativeGenRef.current = gen;
       nativeActiveRef.current = true;
       await startLiveRecognition({
-        lang: localeRef.current,
+        lang: activeLocaleRef.current,
         outputFileName: `idea-${Date.now()}-${fileSeq.current}.wav`,
         persist: persistRef.current,
       });
@@ -338,6 +355,22 @@ export function useLanguageTranscript({
     if (!enabledRef.current || stopFiredRef.current) return;
     const code = event?.error ?? '';
     if (code === 'aborted') return;
+    if (code === 'language-not-supported') {
+      const chain = speechLocaleFallbackChain(localeRef.current);
+      const next = localeAttemptRef.current + 1;
+      if (next < chain.length) {
+        localeAttemptRef.current = next;
+        activeLocaleRef.current = chain[next]!;
+        clearSpeechLocaleCache();
+        scheduleRestart(800);
+        return;
+      }
+      localeExhaustedRef.current = true;
+      setError(
+        'Speech language not installed on this device. Open Settings and choose English (India) or Hindi.',
+      );
+      return;
+    }
     if (code === 'client' || code === 'busy' || code === 'audio-capture' || code === 'network') {
       persistRef.current = false;
       scheduleRestart(Platform.OS === 'android' ? 800 : 600);
@@ -346,8 +379,7 @@ export function useLanguageTranscript({
     if (code !== 'no-speech' && code !== 'speech-timeout') {
       console.warn('Language transcript error', code);
     }
-    // A silence gap must not leave the mic deaf, or the next sentence is lost.
-    scheduleRestart(150);
+    scheduleRestart(code === 'no-speech' ? 1200 : 800);
   });
 
   useEffect(() => {
@@ -356,6 +388,8 @@ export function useLanguageTranscript({
     resumeFiredRef.current = false;
     persistRef.current = true;
     startAttempts.current = 0;
+    localeExhaustedRef.current = false;
+    localeAttemptRef.current = 0;
 
     if (enabled) {
       const t = setTimeout(() => void startListening(false), 200);
@@ -380,6 +414,8 @@ export function useLanguageTranscript({
     resumeFiredRef.current = false;
     persistRef.current = true;
     startAttempts.current = 0;
+    localeExhaustedRef.current = false;
+    localeAttemptRef.current = 0;
     setTranscript('');
     setInterim('');
     setError(null);

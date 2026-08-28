@@ -3,10 +3,13 @@ import {
   ExpoSpeechRecognitionModule,
   useSpeechRecognitionEvent,
 } from 'expo-speech-recognition';
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { AppState, PermissionsAndroid, Platform } from 'react-native';
 
-import { matchesWakePhrase } from '@/src/features/wakeWord/phrases';
+import { matchesWakePhrase, wakeContextualStrings } from '@/src/features/wakeWord/phrases';
+import { speechLocaleFallbackChain, type SpeechLocaleCode } from '@/src/features/languageTranscript/locales';
+import { resolveDeviceSpeechLocale } from '@/src/services/languageTranscriptService';
+import { useSettingsStore } from '@/src/store/settingsStore';
 import { useWakeWordStore } from '@/src/store/wakeWordStore';
 
 /**
@@ -55,18 +58,34 @@ export function useWakeWordListener() {
   const enabled = useWakeWordStore((s) => s.enabled);
   const hydrated = useWakeWordStore((s) => s.hydrated);
   const pausedForRecording = useWakeWordStore((s) => s.pausedForRecording);
+  const speechLocale = useSettingsStore((s) => s.speechLocale);
   const setListening = useWakeWordStore((s) => s.setListening);
   const setAvailable = useWakeWordStore((s) => s.setAvailable);
   const setLastHeard = useWakeWordStore((s) => s.setLastHeard);
   const fireWakeTrigger = useWakeWordStore((s) => s.fireWakeTrigger);
 
-  const useNativeFgs = Platform.OS === 'android' && AndroidWakeWord.isSupported();
+  const useNativeFgs =
+    Platform.OS === 'android' &&
+    AndroidWakeWord.isSupported() &&
+    AndroidWakeWord.hasUpdatedNativeModule();
+  const [fgsRuntimeFailed, setFgsRuntimeFailed] = useState(false);
+  const fgsFailedRef = useRef(false);
+  const effectiveUseFgs = useNativeFgs && !fgsRuntimeFailed;
+  const syncInFlightRef = useRef(false);
 
   const restartTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const startingRef = useRef(false);
   const intentionalStopRef = useRef(false);
   const mountedRef = useRef(true);
   const clientFailCount = useRef(0);
+  const wakeLocaleRef = useRef<SpeechLocaleCode | 'en-US'>(speechLocale);
+  const wakeLocaleAttemptRef = useRef(0);
+  const wakeLocaleExhaustedRef = useRef(false);
+
+  useEffect(() => {
+    wakeLocaleAttemptRef.current = 0;
+    wakeLocaleExhaustedRef.current = false;
+  }, [speechLocale]);
 
   const clearRestart = () => {
     if (restartTimer.current) {
@@ -80,7 +99,7 @@ export function useWakeWordListener() {
     restartTimer.current = setTimeout(() => {
       restartTimer.current = null;
       if (mountedRef.current && canListenInApp()) {
-        void startInAppListening();
+        void startInAppListening(true);
       }
     }, ms);
   };
@@ -101,12 +120,12 @@ export function useWakeWordListener() {
         // ignore
       }
     }
-    if (!useNativeFgs) setListening(false);
+    if (!effectiveUseFgs) setListening(false);
   };
 
-  const startInAppListening = async () => {
-    if (useNativeFgs) return;
-    if (!canListenInApp() || startingRef.current) return;
+  const startInAppListening = async (fromScheduledRestart = false) => {
+    if (useNativeFgs && !fgsFailedRef.current) return;
+    if (!canListenInApp() || startingRef.current || wakeLocaleExhaustedRef.current) return;
     startingRef.current = true;
     clearRestart();
 
@@ -138,24 +157,22 @@ export function useWakeWordListener() {
 
       if (!canListenInApp() || !mountedRef.current) return;
 
-      AndroidWakeWord.silenceRecognitionUi();
+      if (!fromScheduledRestart || wakeLocaleAttemptRef.current === 0) {
+        wakeLocaleRef.current = await resolveDeviceSpeechLocale(speechLocale);
+        if (!fromScheduledRestart) wakeLocaleAttemptRef.current = 0;
+      }
+
       ExpoSpeechRecognitionModule.start({
-        lang: 'en-US',
+        lang: wakeLocaleRef.current,
         interimResults: true,
-        continuous: false,
+        continuous: true,
         addsPunctuation: false,
-        contextualStrings: [
-          'Hey Think Tap',
-          'Think Tap',
-          'start recording',
-          'stop recording',
-          'ThinkTap',
-        ],
+        contextualStrings: wakeContextualStrings(speechLocale),
         androidIntentOptions: {
           EXTRA_LANGUAGE_MODEL: 'free_form',
-          EXTRA_SPEECH_INPUT_COMPLETE_SILENCE_LENGTH_MILLIS: 8000,
-          EXTRA_SPEECH_INPUT_POSSIBLY_COMPLETE_SILENCE_LENGTH_MILLIS: 8000,
-          EXTRA_SPEECH_INPUT_MINIMUM_LENGTH_MILLIS: 1200,
+          EXTRA_SPEECH_INPUT_COMPLETE_SILENCE_LENGTH_MILLIS: 12000,
+          EXTRA_SPEECH_INPUT_POSSIBLY_COMPLETE_SILENCE_LENGTH_MILLIS: 12000,
+          EXTRA_SPEECH_INPUT_MINIMUM_LENGTH_MILLIS: 1500,
         },
       });
       setListening(true);
@@ -172,7 +189,7 @@ export function useWakeWordListener() {
 
   // ——— In-app recognition events (iOS / non-FGS fallback) ———
   useSpeechRecognitionEvent('result', (event) => {
-    if (useNativeFgs) return;
+    if (effectiveUseFgs) return;
     const results = event.results ?? [];
     for (const item of results) {
       const transcript = item?.transcript?.trim() ?? '';
@@ -187,7 +204,7 @@ export function useWakeWordListener() {
   });
 
   useSpeechRecognitionEvent('end', () => {
-    if (useNativeFgs) return;
+    if (effectiveUseFgs) return;
     setListening(false);
     if (intentionalStopRef.current) {
       intentionalStopRef.current = false;
@@ -195,33 +212,47 @@ export function useWakeWordListener() {
     }
     if (!canListenInApp()) return;
     // Longer gap = less beep spam / battery drain on non-FGS Android fallback.
-    scheduleRestart(3000);
+    scheduleRestart(6000);
   });
 
   useSpeechRecognitionEvent('error', (event) => {
-    if (useNativeFgs) return;
+    if (effectiveUseFgs) return;
     setListening(false);
     if (intentionalStopRef.current || event.error === 'aborted') {
       intentionalStopRef.current = false;
       return;
     }
     if (!canListenInApp()) return;
+    if (event.error === 'language-not-supported') {
+      const chain = speechLocaleFallbackChain(speechLocale);
+      const next = wakeLocaleAttemptRef.current + 1;
+      if (next < chain.length) {
+        wakeLocaleAttemptRef.current = next;
+        wakeLocaleRef.current = chain[next]!;
+        scheduleRestart(1200);
+        return;
+      }
+      wakeLocaleExhaustedRef.current = true;
+      setAvailable(false);
+      console.warn('Wake word: speech language not supported on this device');
+      return;
+    }
     if (event.error === 'no-speech') {
-      scheduleRestart(2800);
+      scheduleRestart(5000);
       return;
     }
     if (event.error === 'client') {
       clientFailCount.current += 1;
-      scheduleRestart(Math.min(12000, 2500 * clientFailCount.current));
+      scheduleRestart(Math.min(15000, 4000 * clientFailCount.current));
       return;
     }
     console.warn('Wake word error', event.error, event.message);
-    scheduleRestart(4000);
+    scheduleRestart(6000);
   });
 
   // ——— Android Foreground Service ———
   useEffect(() => {
-    if (!useNativeFgs || !hydrated) return;
+    if (!effectiveUseFgs || !hydrated) return;
 
     const subs = [
       AndroidWakeWord.addListener('onWakeDetected', (event) => {
@@ -245,7 +276,7 @@ export function useWakeWordListener() {
     return () => {
       subs.forEach((s) => s.remove());
     };
-  }, [useNativeFgs, hydrated, setLastHeard, fireWakeTrigger, setListening, setAvailable]);
+  }, [effectiveUseFgs, hydrated, setLastHeard, fireWakeTrigger, setListening, setAvailable]);
 
   // Sync service lifecycle with enabled / recording pause
   useEffect(() => {
@@ -253,11 +284,16 @@ export function useWakeWordListener() {
     if (!hydrated) return;
 
     const sync = async () => {
+      if (syncInFlightRef.current) return;
+      syncInFlightRef.current = true;
+      try {
       if (useNativeFgs) {
         if (!enabled) {
           await AndroidWakeWord.stopService();
           AndroidWakeWord.restoreRecognitionUi();
           setListening(false);
+          setFgsRuntimeFailed(false);
+          fgsFailedRef.current = false;
           return;
         }
 
@@ -277,9 +313,9 @@ export function useWakeWordListener() {
         // Pause is not enough on many Android devices (SpeechRecognizer is a singleton).
         if (pausedForRecording) {
           if (AndroidWakeWord.isRunning()) {
-            await AndroidWakeWord.stopServiceSilent();
+            await AndroidWakeWord.stopService();
           }
-          AndroidWakeWord.silenceRecognitionUi();
+          AndroidWakeWord.restoreRecognitionUi();
           setListening(false);
           return;
         }
@@ -291,32 +327,41 @@ export function useWakeWordListener() {
           return;
         }
 
-        if (!AndroidWakeWord.isRunning()) {
-          try {
-            await AndroidWakeWord.startService();
-          } catch (e) {
-            console.warn('Failed to start wake FGS', e);
-            setAvailable(false);
-            return;
+        if (!fgsFailedRef.current) {
+          if (!AndroidWakeWord.isRunning()) {
+            try {
+              await AndroidWakeWord.startService(speechLocale);
+              setFgsRuntimeFailed(false);
+              fgsFailedRef.current = false;
+            } catch (e) {
+              console.warn('Failed to start wake FGS; using in-app listener', e);
+              fgsFailedRef.current = true;
+              setFgsRuntimeFailed(true);
+              void startInAppListening();
+              return;
+            }
+          } else if (AndroidWakeWord.isPaused()) {
+            await AndroidWakeWord.resumeService();
           }
-        } else if (AndroidWakeWord.isPaused()) {
-          await AndroidWakeWord.resumeService();
-        }
 
-        const pending = await AndroidWakeWord.consumePendingWake();
-        if (pending?.transcript) {
-          setLastHeard(pending.transcript);
-          fireWakeTrigger();
+          const pending = await AndroidWakeWord.consumePendingWake();
+          if (pending?.transcript) {
+            setLastHeard(pending.transcript);
+            fireWakeTrigger();
+          }
+          return;
         }
-        return;
       }
 
-      // iOS / fallback path
+      // iOS / fallback path (including Android when FGS failed to start)
       if (enabled && !pausedForRecording) {
         void startInAppListening();
       } else {
         stopInAppListening('pause');
         if (!enabled) AndroidWakeWord.restoreRecognitionUi();
+      }
+      } finally {
+        syncInFlightRef.current = false;
       }
     };
 
@@ -325,8 +370,19 @@ export function useWakeWordListener() {
     const sub = AppState.addEventListener('change', (state) => {
       if (!useWakeWordStore.getState().enabled) return;
       if (useNativeFgs) {
-        // FGS keeps listening in background; on resume, pick up pending wake.
-        if (state === 'active') {
+        // Stop the FGS when the app leaves the foreground so SpeechRecognizer
+        // cannot keep restarting (and beeping) after the user closes Think Tap.
+        if (state !== 'active') {
+          void AndroidWakeWord.stopService().then(() => {
+            AndroidWakeWord.restoreRecognitionUi();
+            setListening(false);
+          });
+          return;
+        }
+        if (!useWakeWordStore.getState().pausedForRecording) {
+          void sync();
+        }
+        if (!fgsFailedRef.current) {
           void AndroidWakeWord.consumePendingWake().then((pending) => {
             if (pending?.transcript) {
               setLastHeard(pending.transcript);
@@ -346,11 +402,12 @@ export function useWakeWordListener() {
     return () => {
       mountedRef.current = false;
       sub.remove();
-      if (!useNativeFgs) {
+      if (!effectiveUseFgs) {
         stopInAppListening('unmount');
+      } else if (AndroidWakeWord.isRunning()) {
+        void AndroidWakeWord.stopService().then(() => AndroidWakeWord.restoreRecognitionUi());
       }
-      // Do not stop FGS on unmount of provider remount — only when disabled.
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [enabled, hydrated, pausedForRecording, useNativeFgs]);
+  }, [enabled, hydrated, pausedForRecording, speechLocale, useNativeFgs, fgsRuntimeFailed]);
 }

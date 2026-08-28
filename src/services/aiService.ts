@@ -133,10 +133,12 @@ function summaryFromTranscript(transcript: string): string {
 /**
  * Enrich an idea from an OS (device) transcript — no Whisper / LLM APIs.
  * Uses the same local title / category / summary heuristics as demo mode.
+ * Spoken language is auto-detected from transcript script + speech context
+ * (no manual language selection).
  */
 export function enrichIdeaFromDeviceTranscript(input: {
   transcript: string;
-  /** BCP-47 locale e.g. hi-IN → stored as hi */
+  /** BCP-47 locale e.g. hi-IN → stored as hi (hint only; never required) */
   speechLocale?: string;
   onStage?: (stage: 'transcribing' | 'extracting' | 'summarizing') => void;
 }): EnrichmentResult {
@@ -152,9 +154,11 @@ export function enrichIdeaFromDeviceTranscript(input: {
 
   input.onStage?.('summarizing');
   const summary = summaryFromTranscript(transcript);
-  const localeTag = (input.speechLocale ?? '').trim();
+  const localeHint = (input.speechLocale ?? '').trim().split(/[-_]/)[0]?.toLowerCase();
+  const fromScript = detectLanguageCodeFromText(transcript);
   const detectedLanguage =
-    localeTag.split(/[-_]/)[0]?.toLowerCase() ||
+    fromScript ||
+    localeHint ||
     resolveSpokenLanguage(undefined).whisperCode;
 
   return {
@@ -166,6 +170,45 @@ export function enrichIdeaFromDeviceTranscript(input: {
     detectedLanguage,
     source: 'device',
   };
+}
+
+/** Save audio locally when cloud STT is unavailable (offline / network error). */
+export function enrichIdeaFromSavedAudioFallback(input: {
+  durationSec: number;
+  languageCode?: AppLanguageCode;
+}): EnrichmentResult {
+  const mins = Math.floor(input.durationSec / 60);
+  const secs = input.durationSec % 60;
+  const stamp = `${mins}:${String(secs).padStart(2, '0')}`;
+  const when = new Date().toLocaleString();
+  const summary = `Recording saved on ${when}. Connect to the internet to transcribe this take.`;
+  return {
+    transcript: '',
+    title: `Voice note (${stamp})`,
+    category: 'Other',
+    summary,
+    aiStory: summary,
+    detectedLanguage: input.languageCode ?? 'en',
+    source: 'demo',
+  };
+}
+
+/** Infer ISO language code from writing system in the transcript (auto, no UI). */
+function detectLanguageCodeFromText(text: string): string | null {
+  if (/[\u0B80-\u0BFF]/.test(text)) return 'ta';
+  if (/[\u0C00-\u0C7F]/.test(text)) return 'te';
+  if (/[\u0C80-\u0CFF]/.test(text)) return 'kn';
+  if (/[\u0D00-\u0D7F]/.test(text)) return 'ml';
+  if (/[\u0A80-\u0AFF]/.test(text)) return 'gu';
+  if (/[\u0A00-\u0A7F]/.test(text)) return 'pa';
+  if (/[\u0B00-\u0B7F]/.test(text)) return 'or';
+  if (/[\u0980-\u09FF]/.test(text)) return 'bn';
+  if (/[\u0900-\u097F]/.test(text)) return null; // hi vs mr — need Whisper/locale hint
+  if (/[\u0600-\u06FF]/.test(text)) return 'ur';
+  if (/[\u3040-\u30FF]/.test(text)) return 'ja';
+  if (/[\u4E00-\u9FFF]/.test(text)) return 'zh';
+  if (/[A-Za-z]/.test(text)) return 'en';
+  return null;
 }
 
 function mimeAndName(uri: string): { mime: string; name: string } {
@@ -238,20 +281,24 @@ export async function enrichIdeaFromAudio(input: {
   };
 }
 
-/** Prompt Whisper to keep the spoken language — never force English. */
+/** Prompt Whisper to keep the spoken language — never force English / another language. */
 export function whisperPromptFor(languageName: string | 'auto'): string {
   if (languageName === 'auto') {
     return [
-      'Transcribe exactly what was spoken in the original language and script.',
-      'Marathi must be written in Devanagari (मराठी), not romanized English letters.',
-      'Hindi must be Devanagari. Do NOT translate into English.',
-      'Code-mixing is OK. Preserve names, numbers, and punctuation.',
+      'Automatically detect the language the speaker originally used.',
+      'Transcribe exactly in that same language and correct native script.',
+      'Never translate into English unless the speaker spoke English.',
+      'Never translate into Hindi, Marathi, or any other language unless that is what was spoken.',
+      'Marathi/Hindi → Devanagari. Tamil → Tamil script. Preserve code-mixing naturally.',
+      'Preserve names, numbers, dates, addresses, product names, and technical terms.',
+      'Do not summarize or add information.',
     ].join(' ');
   }
   return [
     `Transcribe in ${languageName} using the correct script.`,
-    `If the language is Marathi or Hindi, use Devanagari only — never romanize.`,
-    'Do NOT translate into English. Preserve names, numbers, and punctuation.',
+    `Stay in ${languageName} only — do not translate to another language.`,
+    'If Marathi or Hindi, use Devanagari only — never romanize.',
+    'Preserve names, numbers, and punctuation. Do not summarize.',
   ].join(' ');
 }
 
@@ -288,8 +335,8 @@ export function mapSttError(error: unknown): Error {
   if (/401|403|invalid.*api.?key|incorrect api key/i.test(msg)) {
     return new Error('Speech-to-text API key is invalid. Update it in Settings.');
   }
-  if (/network|fetch failed|Failed to fetch|ECONNREFUSED|timed out|timeout/i.test(msg)) {
-    return new Error('Network error during speech-to-text. Check your connection and retry.');
+  if (/network|fetch failed|Failed to fetch|ECONNREFUSED|timed out|timeout|unable to resolve host|ENOTFOUND|getaddrinfo/i.test(msg)) {
+    return new Error('No internet connection. Your recording is saved — transcription needs network.');
   }
   if (/25\s*MB|file too large|payload too large|413/i.test(msg)) {
     return new Error(
@@ -467,7 +514,7 @@ async function enrichWithCloudStt(
 }
 
 /**
- * Ensures transcript uses the correct writing system for the detected language.
+ * Ensures transcript stays in the language originally spoken (correct script).
  * Example: "mala ek idea aala" → "मला एक आयडिया आला"
  */
 async function convertToNativeScript(
@@ -480,30 +527,11 @@ async function convertToNativeScript(
     return rawTranscript;
   }
 
-  if (targetLang.script === 'devanagari' && hasDevanagari(rawTranscript)) {
-    return rawTranscript;
-  }
-  if (targetLang.script === 'arabic' && /[\u0600-\u06FF]/.test(rawTranscript)) {
-    return rawTranscript;
-  }
-  if (targetLang.script === 'cjk' && /[\u4e00-\u9fff]/.test(rawTranscript)) {
-    return rawTranscript;
-  }
-  if (
-    targetLang.script === 'japanese' &&
-    /[\u3040-\u30ff\u4e00-\u9fff]/.test(rawTranscript)
-  ) {
+  if (alreadyInTargetScript(rawTranscript, targetLang.script)) {
     return rawTranscript;
   }
 
-  const scriptLabel =
-    targetLang.script === 'devanagari'
-      ? 'Devanagari (देवनागरी)'
-      : targetLang.script === 'arabic'
-        ? 'Arabic script'
-        : targetLang.script === 'cjk'
-          ? 'Chinese characters'
-          : 'Japanese script (Kanji/Hiragana/Katakana)';
+  const scriptLabel = scriptLabelFor(targetLang.script);
 
   try {
     const res = await fetch(`${provider.baseUrl}/chat/completions`, {
@@ -519,15 +547,18 @@ async function convertToNativeScript(
         messages: [
           {
             role: 'system',
-            content: `You convert speech transcripts into proper ${targetLang.name} writing.
-Target language: ${targetLang.name} (${targetLang.nativeName}).
+            content: `You keep speech transcripts in the language the user originally spoke.
+Detected spoken language: ${targetLang.name} (${targetLang.nativeName}, code ${targetLang.code}).
 Target script: ${scriptLabel}.
 Rules:
-- Output ONLY the converted transcript in ${targetLang.name}.
-- If input is romanized (English letters), convert to ${scriptLabel}.
-- Keep meaning the same. Do not summarize. Do not translate to English.
-- Keep English product names as English if spoken that way.
-Return JSON: { "transcript": string }`,
+- Output ONLY text in ${targetLang.name}.
+- If input is romanized, convert to ${scriptLabel}.
+- If input is already in ${targetLang.name}, return it unchanged.
+- Do NOT translate into English unless ${targetLang.code} is en.
+- Do NOT translate into Hindi, Marathi, or any other language unless that is ${targetLang.name}.
+- Preserve meaning, intent, names, numbers, dates, addresses, product names, and technical terms.
+- Preserve natural code-mixing. Do not summarize, explain, or add information.
+Return JSON: { "detected_language": "${targetLang.name}", "language_code": "${targetLang.code}", "translated_text": string }`,
           },
           {
             role: 'user',
@@ -543,11 +574,76 @@ Return JSON: { "transcript": string }`,
     };
     const content = json.choices?.[0]?.message?.content;
     if (!content) return rawTranscript;
-    const parsed = JSON.parse(content) as { transcript?: string };
-    const converted = cleanTranscript(parsed.transcript ?? '');
+    const parsed = JSON.parse(content) as {
+      translated_text?: string;
+      transcript?: string;
+    };
+    const converted = cleanTranscript(parsed.translated_text ?? parsed.transcript ?? '');
     return converted || rawTranscript;
   } catch {
     return rawTranscript;
+  }
+}
+
+function alreadyInTargetScript(text: string, script: SpokenLanguage['script']): boolean {
+  switch (script) {
+    case 'devanagari':
+      return hasDevanagari(text) || /[\u0900-\u097F]/.test(text);
+    case 'bengali':
+      return /[\u0980-\u09FF]/.test(text);
+    case 'gurmukhi':
+      return /[\u0A00-\u0A7F]/.test(text);
+    case 'gujarati':
+      return /[\u0A80-\u0AFF]/.test(text);
+    case 'odia':
+      return /[\u0B00-\u0B7F]/.test(text);
+    case 'tamil':
+      return /[\u0B80-\u0BFF]/.test(text);
+    case 'telugu':
+      return /[\u0C00-\u0C7F]/.test(text);
+    case 'kannada':
+      return /[\u0C80-\u0CFF]/.test(text);
+    case 'malayalam':
+      return /[\u0D00-\u0D7F]/.test(text);
+    case 'arabic':
+      return /[\u0600-\u06FF]/.test(text);
+    case 'cjk':
+      return /[\u4e00-\u9fff]/.test(text);
+    case 'japanese':
+      return /[\u3040-\u30ff\u4e00-\u9fff]/.test(text);
+    default:
+      return true;
+  }
+}
+
+function scriptLabelFor(script: SpokenLanguage['script']): string {
+  switch (script) {
+    case 'devanagari':
+      return 'Devanagari (देवनागरी)';
+    case 'bengali':
+      return 'Bengali script';
+    case 'gurmukhi':
+      return 'Gurmukhi';
+    case 'gujarati':
+      return 'Gujarati script';
+    case 'odia':
+      return 'Odia script';
+    case 'tamil':
+      return 'Tamil script';
+    case 'telugu':
+      return 'Telugu script';
+    case 'kannada':
+      return 'Kannada script';
+    case 'malayalam':
+      return 'Malayalam script';
+    case 'arabic':
+      return 'Arabic script';
+    case 'cjk':
+      return 'Chinese characters';
+    case 'japanese':
+      return 'Japanese script (Kanji/Hiragana/Katakana)';
+    default:
+      return 'Latin';
   }
 }
 
@@ -579,12 +675,26 @@ async function finalizeFromTranscript(
         {
           role: 'system',
           content: `You organize voice ideas for Think Tap.
-Language: ${targetLang.name} (${targetLang.nativeName}).
-The transcript below is already in the correct script — copy it into "transcript" unchanged.
-Write title, summary, and aiStory in ${targetLang.name} using the same script.
+The user originally spoke ${targetLang.name} (${targetLang.nativeName}, code ${targetLang.code}).
+Keep "transcript" in that same spoken language and script — unchanged if already correct.
+Write title, summary, and aiStory in ${targetLang.name} only (same script).
+Do not translate into English unless ${targetLang.code} is en.
+Do not translate into Hindi, Marathi, or any other language unless that is ${targetLang.name}.
+Preserve names, numbers, dates, addresses, product names, and technical terms.
+Do not summarize beyond the required fields. Do not add information.
 Keep category in English from: Movies, Songs, Books, Business, Scripts, Design, Music.
 Title: max 8 words. Summary: 1-2 sentences from the transcript only.
-Return JSON: { "transcript": string, "title": string, "category": string, "summary": string, "aiStory": string }`,
+Return JSON: {
+  "detected_language": "${targetLang.name}",
+  "language_code": "${targetLang.code}",
+  "translated_text": string,
+  "transcript": string,
+  "title": string,
+  "category": string,
+  "summary": string,
+  "aiStory": string
+}
+Use the same string for "transcript" and "translated_text" (both in the spoken language).`,
         },
         {
           role: 'user',
@@ -609,21 +719,36 @@ Return JSON: { "transcript": string, "title": string, "category": string, "summa
     choices?: { message?: { content?: string } }[];
   };
   const content = chatJson.choices?.[0]?.message?.content;
-  let parsed: Partial<AiEnrichment> = {};
+  let parsed: Partial<AiEnrichment> & {
+    translated_text?: string;
+    language_code?: string;
+    detected_language?: string;
+  } = {};
   try {
-    parsed = content ? (JSON.parse(content) as Partial<AiEnrichment>) : {};
+    parsed = content
+      ? (JSON.parse(content) as Partial<AiEnrichment> & {
+          translated_text?: string;
+          language_code?: string;
+          detected_language?: string;
+        })
+      : {};
   } catch {
     parsed = {};
   }
 
-  const llmTranscript = cleanTranscript(parsed.transcript ?? '');
+  const llmTranscript = cleanTranscript(parsed.translated_text ?? parsed.transcript ?? '');
   const finalTranscript =
-    (targetLang.script === 'devanagari'
-      ? (hasDevanagari(llmTranscript) && llmTranscript) ||
-        (hasDevanagari(transcript) && transcript) ||
-        llmTranscript ||
-        transcript
-      : llmTranscript || transcript) || transcript;
+    (targetLang.script !== 'latin' && alreadyInTargetScript(llmTranscript, targetLang.script)
+      ? llmTranscript
+      : null) ||
+    (targetLang.script !== 'latin' && alreadyInTargetScript(transcript, targetLang.script)
+      ? transcript
+      : null) ||
+    llmTranscript ||
+    transcript;
+
+  const languageCode =
+    (parsed.language_code || '').trim().toLowerCase().split(/[-_]/)[0] || targetLang.code;
 
   return {
     transcript: finalTranscript,
@@ -631,7 +756,7 @@ Return JSON: { "transcript": string, "title": string, "category": string, "summa
     category: parsed.category || guessCategory(finalTranscript),
     summary: parsed.summary || summaryFromTranscript(finalTranscript),
     aiStory: parsed.aiStory || parsed.summary || summaryFromTranscript(finalTranscript),
-    detectedLanguage: targetLang.code,
+    detectedLanguage: languageCode,
   };
 }
 

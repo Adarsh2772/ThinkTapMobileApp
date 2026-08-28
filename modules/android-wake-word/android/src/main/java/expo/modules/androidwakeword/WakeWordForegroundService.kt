@@ -42,16 +42,16 @@ class WakeWordForegroundService : Service() {
 
     const val EXTRA_WAKE_TRIGGERED = "wakeWordTriggered"
     const val EXTRA_WAKE_TRANSCRIPT = "wakeTranscript"
-    const val EXTRA_KEEP_SILENT = "keepSilent"
+    const val EXTRA_SPEECH_LOCALE = "speechLocale"
 
     /** Minimum gap between startListening calls — prevents beep spam / CPU thrash. */
-    private const val MIN_START_INTERVAL_MS = 2800L
+    private const val MIN_START_INTERVAL_MS = 4500L
     /** After idle/no-match, wait before listening again. */
-    private const val RESTART_IDLE_MS = 3200L
+    private const val RESTART_IDLE_MS = 5000L
     /** After client/busy errors. */
-    private const val RESTART_ERROR_MS = 4500L
+    private const val RESTART_ERROR_MS = 6000L
     /** After permission / unavailable. */
-    private const val RESTART_HARD_MS = 8000L
+    private const val RESTART_HARD_MS = 10000L
 
     @Volatile
     var isRunning: Boolean = false
@@ -78,12 +78,29 @@ class WakeWordForegroundService : Service() {
       "think app",
       "start recording",
       "start record",
+      "start recoding",
       "hey think tap start",
+      // Marathi
+      "रेकॉर्डिंग सुरू करा",
+      "रेकॉर्डिंग सुरु करा",
+      "रेकॉर्डिंग चालू करा",
+      "सुरू करा",
+      "हे थिंक टॅप",
+      "थिंक टॅप",
+      // Hindi
+      "रिकॉर्डिंग शुरू करो",
+      "रिकॉर्डिंग शुरू करें",
+      "रिकॉर्डिंग शुरू कर",
+      "शुरू करो",
+      "शुरू करें",
     )
 
     fun normalize(text: String): String =
       text.lowercase()
-        .replace(Regex("[^a-z0-9\\s]"), " ")
+        .replace(
+          Regex("[^a-z0-9\\s\\u0900-\\u097F\\u0980-\\u09FF\\u0A00-\\u0A7F\\u0A80-\\u0AFF\\u0B00-\\u0B7F\\u0B80-\\u0BFF\\u0C00-\\u0C7F\\u0C80-\\u0CFF\\u0D00-\\u0D7F]"),
+          " ",
+        )
         .replace(Regex("\\s+"), " ")
         .trim()
 
@@ -103,12 +120,16 @@ class WakeWordForegroundService : Service() {
   private var lastNotificationText: String? = null
   private var listeningActive = false
   private var hasStopped = false
+  private var hasForeground = false
+  private var recognitionLocale: String = "en-US"
 
   override fun onBind(intent: Intent?): IBinder? = null
 
   override fun onCreate() {
     super.onCreate()
     createNotificationChannel()
+    // Android requires startForeground() within ~5s of startForegroundService().
+    promoteForeground("Listening for Hey Think Tap…")
     // Best-effort: remove legacy noisy channel if present.
     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
       try {
@@ -124,46 +145,62 @@ class WakeWordForegroundService : Service() {
   override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
     when (intent?.action) {
       ACTION_STOP -> {
-        val keepSilent = intent.getBooleanExtra(EXTRA_KEEP_SILENT, false)
-        stopInternal(restoreAudio = !keepSilent)
+        if (!hasForeground) {
+          try {
+            promoteForeground("Stopping…")
+          } catch (_: Exception) {
+            // ignore
+          }
+        }
+        // Always leave the user's ringer / notification volumes untouched.
+        stopInternal(restoreAudio = true)
         return START_NOT_STICKY
       }
       ACTION_PAUSE -> {
         isPaused = true
+        promoteForeground("Paused while recording")
         stopRecognitionOnly()
         // Destroy the recognizer so the mic is fully released for idea capture STT.
         destroyRecognizer()
-        // Stay muted so capture STT does not chime/vibrate on start.
-        RecognitionAudioGuard.mute(this)
+        RecognitionAudioGuard.cancelVibrator(this)
         updateNotification("Paused while recording")
         AndroidWakeWordModule.emit(
           "onListeningChange",
           mapOf("listening" to false, "paused" to true),
         )
-        return START_STICKY
+        // Not sticky — if the app is swiped away, do not keep restarting recognition beeps.
+        return START_NOT_STICKY
       }
       ACTION_RESUME -> {
         isPaused = false
-        ensureForeground()
-        RecognitionAudioGuard.mute(this)
+        promoteForeground("Listening for Hey Think Tap…")
+        RecognitionAudioGuard.cancelVibrator(this)
         updateNotification("Listening for Hey Think Tap…")
         scheduleRestart(MIN_START_INTERVAL_MS)
-        return START_STICKY
+        return START_NOT_STICKY
       }
       else -> {
         // START or null (system restart)
+        val fromPrefs = getSharedPreferences("thinktap_wake", MODE_PRIVATE)
+          .getString("speech_locale", "en-US")
+          ?: "en-US"
+        recognitionLocale = intent?.getStringExtra(EXTRA_SPEECH_LOCALE)?.trim()
+          ?.takeIf { it.isNotEmpty() }
+          ?: fromPrefs
         isPaused = false
         isRunning = true
         hasStopped = false
-        ensureForeground()
-        RecognitionAudioGuard.mute(this)
+        promoteForeground("Listening for Hey Think Tap…")
+        RecognitionAudioGuard.cancelVibrator(this)
         updateNotification("Listening for Hey Think Tap…")
         AndroidWakeWordModule.emit(
           "onListeningChange",
           mapOf("listening" to true, "paused" to false),
         )
         scheduleRestart(800)
-        return START_STICKY
+        // START_NOT_STICKY: closing/force-stopping the app must end listening.
+        // START_STICKY was restarting SpeechRecognizer in the background (continuous beeps).
+        return START_NOT_STICKY
       }
     }
   }
@@ -175,8 +212,9 @@ class WakeWordForegroundService : Service() {
     super.onDestroy()
   }
 
-  private fun ensureForeground() {
-    val notification = buildNotification(lastNotificationText ?: "Listening for Hey Think Tap…")
+  private fun promoteForeground(text: String) {
+    lastNotificationText = text
+    val notification = buildNotification(text)
     if (Build.VERSION.SDK_INT >= 34) {
       startForeground(
         NOTIFICATION_ID,
@@ -187,9 +225,14 @@ class WakeWordForegroundService : Service() {
       @Suppress("DEPRECATION")
       startForeground(NOTIFICATION_ID, notification)
     }
+    hasForeground = true
   }
 
-  private fun stopInternal(restoreAudio: Boolean = true) {
+  private fun ensureForeground() {
+    promoteForeground(lastNotificationText ?: "Listening for Hey Think Tap…")
+  }
+
+  private fun stopInternal(@Suppress("UNUSED_PARAMETER") restoreAudio: Boolean = true) {
     if (hasStopped) return
     hasStopped = true
     isRunning = false
@@ -197,12 +240,12 @@ class WakeWordForegroundService : Service() {
     listeningActive = false
     cancelRestart()
     destroyRecognizer()
-    if (restoreAudio) {
-      RecognitionAudioGuard.restore(this)
-    } else {
-      RecognitionAudioGuard.mute(this)
+    // Never leave stream volumes muted; ringer mode stays as the user left it.
+    RecognitionAudioGuard.restore(this)
+    if (hasForeground) {
+      stopForeground(STOP_FOREGROUND_REMOVE)
+      hasForeground = false
     }
-    stopForeground(STOP_FOREGROUND_REMOVE)
     AndroidWakeWordModule.emit(
       "onListeningChange",
       mapOf("listening" to false, "paused" to false),
@@ -264,12 +307,11 @@ class WakeWordForegroundService : Service() {
   }
 
   /**
-   * Mute SpeechRecognizer start chimes for the whole listen session.
-   * Volumes stay down until the service stops (or JS plays the start-recording cue).
+   * Best-effort cancel of leftover haptic from recognition UI.
+   * Does not change system volume or Silent Mode.
    */
   private fun silenceSpeechUi() {
     RecognitionAudioGuard.cancelVibrator(this)
-    RecognitionAudioGuard.mute(this)
   }
 
   private fun startRecognition() {
@@ -309,13 +351,12 @@ class WakeWordForegroundService : Service() {
         // ignore
       }
 
-      silenceSpeechUi()
       lastStartAt = System.currentTimeMillis()
       listeningActive = true
 
       val intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
         putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
-        putExtra(RecognizerIntent.EXTRA_LANGUAGE, "en-US")
+        putExtra(RecognizerIntent.EXTRA_LANGUAGE, recognitionLocale)
         putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, true)
         putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 3)
         putExtra(RecognizerIntent.EXTRA_CALLING_PACKAGE, packageName)
@@ -324,7 +365,10 @@ class WakeWordForegroundService : Service() {
         putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_POSSIBLY_COMPLETE_SILENCE_LENGTH_MILLIS, 8000L)
         putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_MINIMUM_LENGTH_MILLIS, 1500L)
       }
-      recognizer.startListening(intent)
+      // Brief chime suppress only around startListening — volumes always restored after.
+      RecognitionAudioGuard.runWithChimesSuppressed(this) {
+        recognizer.startListening(intent)
+      }
     } catch (e: Exception) {
       listeningActive = false
       Log.e(TAG, "startRecognition failed", e)
@@ -432,7 +476,7 @@ class WakeWordForegroundService : Service() {
     isPaused = true
     listeningActive = false
     stopRecognitionOnly()
-    RecognitionAudioGuard.mute(this)
+    RecognitionAudioGuard.cancelVibrator(this)
     updateNotification("Wake word heard — opening Think Tap…")
 
     getSharedPreferences("thinktap_wake", Context.MODE_PRIVATE)

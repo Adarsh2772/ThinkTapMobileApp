@@ -21,6 +21,7 @@ type AndroidWakeWordNativeModule = {
   isSupported(): boolean;
   isRunning(): boolean;
   isPaused(): boolean;
+  setSpeechLocale?(speechLocale?: string | null): void;
   startService(): Promise<boolean>;
   stopService(): Promise<boolean>;
   stopServiceSilent(): Promise<boolean>;
@@ -52,6 +53,11 @@ function addListener<E extends keyof WakeEventMap>(
 }
 
 export const AndroidWakeWord = {
+  /** True when the installed APK includes the fixed wake FGS (setSpeechLocale). */
+  hasUpdatedNativeModule(): boolean {
+    return !!Native?.setSpeechLocale;
+  },
+
   isSupported(): boolean {
     if (!Native) return false;
     try {
@@ -79,8 +85,18 @@ export const AndroidWakeWord = {
     }
   },
 
-  async startService(): Promise<boolean> {
+  setSpeechLocale(speechLocale?: string): void {
+    if (!Native?.setSpeechLocale) return;
+    try {
+      Native.setSpeechLocale(speechLocale ?? 'en-US');
+    } catch {
+      // Older native builds omit setSpeechLocale — default locale is used.
+    }
+  },
+
+  async startService(speechLocale?: string): Promise<boolean> {
     if (!Native) return false;
+    AndroidWakeWord.setSpeechLocale(speechLocale ?? 'en-US');
     return Native.startService();
   },
 

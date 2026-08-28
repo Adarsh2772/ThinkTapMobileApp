@@ -1,4 +1,9 @@
-import { enrichIdeaFromAudio, enrichIdeaFromDeviceTranscript } from '@/src/services/aiService';
+import {
+  enrichIdeaFromAudio,
+  enrichIdeaFromDeviceTranscript,
+  enrichIdeaFromSavedAudioFallback,
+  mapSttError,
+} from '@/src/services/aiService';
 import { analyzeTranscript } from '@/src/services/transcriptAnalysisService';
 import type { AppLanguageCode } from '@/src/i18n/languages';
 import type { Idea, TranscriptAnalysis } from '@/src/types';
@@ -46,12 +51,23 @@ export async function processPendingRecording({
         speechLocale,
         onStage: reportStage,
       })
-    : await enrichIdeaFromAudio({
-        audioUri,
-        durationSec,
-        languageCode,
-        onStage: reportStage,
-      });
+    : await (async () => {
+        try {
+          return await enrichIdeaFromAudio({
+            audioUri,
+            durationSec,
+            languageCode,
+            onStage: reportStage,
+          });
+        } catch (sttError) {
+          const mapped = mapSttError(sttError);
+          if (audioUri && /internet|network|connection/i.test(mapped.message)) {
+            console.warn('Cloud transcription unavailable; saving audio only', sttError);
+            return enrichIdeaFromSavedAudioFallback({ durationSec, languageCode });
+          }
+          throw mapped;
+        }
+      })();
 
   onStage?.('summarizing');
   let analysis: TranscriptAnalysis | null = null;

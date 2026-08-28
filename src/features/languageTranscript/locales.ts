@@ -63,6 +63,33 @@ export function isSpeechLocaleCode(code: string | null | undefined): code is Spe
   return INDIAN_SPEECH_LOCALES.some((l) => l.code === code);
 }
 
+/** Ordered fallbacks when the device does not support the chosen locale. */
+export function speechLocaleFallbackChain(
+  primary: SpeechLocaleCode,
+): (SpeechLocaleCode | 'en-US')[] {
+  const chain: (SpeechLocaleCode | 'en-US')[] = [primary];
+  const lang = primary.split('-')[0] ?? '';
+  if (lang === 'mr' && !chain.includes('hi-IN')) chain.push('hi-IN');
+  if (!chain.includes('en-IN')) chain.push('en-IN');
+  if (!chain.includes('en-US')) chain.push('en-US');
+  return chain;
+}
+
+/** Pick the first locale in the fallback chain that the device reports as available. */
+export function pickAvailableSpeechLocale(
+  preferred: SpeechLocaleCode,
+  availability: LocaleAvailability[],
+): SpeechLocaleCode | 'en-US' {
+  const available = new Set(
+    availability.filter((row) => row.available).map((row) => row.code),
+  );
+  const chain = speechLocaleFallbackChain(preferred);
+  for (const code of chain) {
+    if (code === 'en-US' || available.has(code)) return code;
+  }
+  return 'en-US';
+}
+
 /** Map UI app language → default Indian speech locale. */
 export function speechLocaleFromAppLanguage(appCode: AppLanguageCode): SpeechLocaleCode {
   switch (appCode) {

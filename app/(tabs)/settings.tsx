@@ -133,8 +133,8 @@ export default function SettingsScreen() {
           </View>
           <Text style={styles.hint}>
             {Platform.OS === 'android'
-              ? 'Uses a quiet background listener for “Hey Think Tap”. This keeps the mic on, so it can use more battery — turn it off when you don’t need it. Notification should stay silent.'
-              : 'When on (app open in the foreground), say “Hey Think Tap” or “start recording” to begin a capture.'}
+              ? 'While Think Tap is open, say “Hey Think Tap”, “start recording”, or Marathi “रेकॉर्डिंग सुरू करा”. Closing the app or turning this off stops listening.'
+              : 'When on (app open in the foreground), say “Hey Think Tap”, “start recording”, or “रेकॉर्डिंग सुरू करा” to begin a capture.'}
             {wakeEnabled
               ? wakeAvailable === false
                 ? ' Speech recognition is unavailable on this device/build.'

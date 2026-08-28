@@ -101,6 +101,7 @@ export default function HomeScreen() {
       const result = await stop();
       if (!result) {
         const reason = getLastError() ?? 'Nothing was captured in this take.';
+        setPausedForRecording(false);
         showToast(reason, 'error');
         Alert.alert('Recording stopped', reason);
         return;
