@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
 import {
+  inferSpeechLocaleFromWakeText,
   matchesResumePhrase,
   matchesStopPhrase,
   matchesWakePhrase,
@@ -24,6 +25,12 @@ describe('wake phrase matching (language-independent)', () => {
     assert.equal(matchesWakePhrase('recording suru kara'), true);
     assert.equal(matchesWakePhrase('rekording suru kara'), true);
     assert.equal(matchesWakePhrase('suru kara'), true);
+  });
+
+  it('infers Marathi speech locale from wake phrase', () => {
+    assert.equal(inferSpeechLocaleFromWakeText('रेकॉर्डिंग सुरू करा'), 'mr-IN');
+    assert.equal(inferSpeechLocaleFromWakeText('recording suru kara'), 'mr-IN');
+    assert.equal(inferSpeechLocaleFromWakeText('start recording'), 'en-IN');
   });
 
   it('matches Tamil start commands', () => {

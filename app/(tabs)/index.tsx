@@ -120,6 +120,7 @@ export default function HomeScreen() {
     } finally {
       stoppingRef.current = false;
       finishLockRef.current = false;
+      setTimeout(() => setPausedForRecording(false), 1200);
     }
   }, [
     stop,

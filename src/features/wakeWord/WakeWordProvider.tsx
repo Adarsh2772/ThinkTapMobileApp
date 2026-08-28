@@ -30,7 +30,7 @@ function usePauseWakeWhileCapturing() {
       setPausedForRecording(true);
       return;
     }
-    const timer = setTimeout(() => setPausedForRecording(false), 4000);
+    const timer = setTimeout(() => setPausedForRecording(false), 1200);
     return () => clearTimeout(timer);
   }, [captureActive, setPausedForRecording]);
 }

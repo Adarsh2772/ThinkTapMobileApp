@@ -1,6 +1,9 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { create } from 'zustand';
 
+import type { SpeechLocaleCode } from '@/src/features/languageTranscript/locales';
+import { inferSpeechLocaleFromWakeText } from '@/src/features/wakeWord/phrases';
+
 const WAKE_KEY = '@thinktap/wake_word_enabled';
 const WAKE_ONBOARDING_KEY = '@thinktap/wake_word_onboarding_done';
 let lastFireAt = 0;
@@ -14,6 +17,8 @@ type WakeWordState = {
   captureActive: boolean;
   available: boolean | null;
   lastHeard: string;
+  /** Locale inferred from the last wake phrase (e.g. Marathi command → mr-IN). */
+  lastWakeLocale: SpeechLocaleCode | 'en-US' | null;
   /** Incremented when wake phrase is detected — Home consumes this to start recording. */
   triggerToken: number;
   /** False until the first-launch Hey Think Tap permission prompt is answered. */
@@ -27,6 +32,7 @@ type WakeWordState = {
   setCaptureActive: (active: boolean) => void;
   setAvailable: (available: boolean) => void;
   setLastHeard: (text: string) => void;
+  clearLastWakeLocale: () => void;
   fireWakeTrigger: () => void;
 };
 
@@ -37,6 +43,7 @@ export const useWakeWordStore = create<WakeWordState>((set, get) => ({
   captureActive: false,
   available: null,
   lastHeard: '',
+  lastWakeLocale: null,
   triggerToken: 0,
   onboardingDone: false,
   hydrated: false,
@@ -72,11 +79,17 @@ export const useWakeWordStore = create<WakeWordState>((set, get) => ({
   setCaptureActive: (captureActive) => set({ captureActive }),
   setAvailable: (available) => set({ available }),
   setLastHeard: (text) => set({ lastHeard: text }),
+  clearLastWakeLocale: () => set({ lastWakeLocale: null }),
 
   fireWakeTrigger: () => {
     const now = Date.now();
     if (now - lastFireAt < 3000) return;
     lastFireAt = now;
-    set({ triggerToken: get().triggerToken + 1, pausedForRecording: true });
+    const lastWakeLocale = inferSpeechLocaleFromWakeText(get().lastHeard);
+    set({
+      triggerToken: get().triggerToken + 1,
+      pausedForRecording: true,
+      lastWakeLocale,
+    });
   },
 }));

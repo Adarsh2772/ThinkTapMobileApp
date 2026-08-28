@@ -11,6 +11,7 @@ import {
   pickAvailableSpeechLocale,
   pickBestInstalledSpeechLocale,
   listInstalledVoiceLocales,
+  SAFE_SPEECH_LOCALE_FALLBACK,
   speechLocaleFallbackChain,
   type LocaleAvailability,
   type SpeechLocaleCode,
@@ -140,6 +141,7 @@ export async function getIndianLocaleAvailability(): Promise<LocaleAvailability[
     installed = result?.installedLocales ?? [];
   } catch (e) {
     console.warn('getSupportedLocales failed', e);
+    clearSpeechLocaleCache();
   }
 
   const installedSet = new Set(
@@ -149,15 +151,28 @@ export async function getIndianLocaleAvailability(): Promise<LocaleAvailability[
     locales.map(matchCatalogLocale).filter(Boolean) as SpeechLocaleCode[],
   );
 
-  const deviceReportedNothing = installedSet.size === 0 && supportedSet.size === 0;
+  const localeQueryFailed = installedSet.size === 0 && supportedSet.size === 0;
+
+  // When Google speech returns error 14 / empty lists, do not assume every Indian
+  // locale is installed — that causes language-not-supported loops on English-only phones.
+  if (localeQueryFailed) {
+    const safe = new Set(SAFE_SPEECH_LOCALE_FALLBACK);
+    return INDIAN_SPEECH_LOCALES.map((locale) => ({
+      code: locale.code,
+      available: safe.has(locale.code),
+      installedOnDevice: false,
+      supportedOnDevice: false,
+      online: true,
+    }));
+  }
 
   return INDIAN_SPEECH_LOCALES.map((locale) => {
     const installedOnDevice = installedSet.has(locale.code);
     const supportedOnDevice = supportedSet.has(locale.code);
-    const online = deviceReportedNothing || supportedOnDevice || !installedOnDevice;
+    const online = supportedOnDevice || !installedOnDevice;
     return {
       code: locale.code,
-      available: installedOnDevice || supportedOnDevice || deviceReportedNothing,
+      available: installedOnDevice || supportedOnDevice,
       installedOnDevice,
       supportedOnDevice: supportedOnDevice && !installedOnDevice,
       online,

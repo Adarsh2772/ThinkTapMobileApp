@@ -17,11 +17,15 @@ import {
   isSpeechRecognitionAvailable,
   requestSpeechPermissions,
   listVoiceCommandLocales,
-  resolveAutoSpeechLocale,
   startLiveRecognition,
   stopLiveRecognition,
   stripTrailingStopCommand,
 } from '@/src/services/languageTranscriptService';
+import { useSettingsStore } from '@/src/store/settingsStore';
+import { useWakeWordStore } from '@/src/store/wakeWordStore';
+import {
+  SAFE_SPEECH_LOCALE_FALLBACK,
+} from '@/src/features/languageTranscript/locales';
 
 type Options = {
   /** Session is open (recording or paused). */
@@ -35,6 +39,21 @@ type Options = {
 
 function normalize(text: string): string {
   return text.replace(/\s+/g, ' ').trim();
+}
+
+function resolvePreferredSpeechLocale(
+  locales: (SpeechLocaleCode | 'en-US')[],
+): SpeechLocaleCode | 'en-US' {
+  const wakeLocale = useWakeWordStore.getState().lastWakeLocale;
+  const settingsLocale = useSettingsStore.getState().speechLocale;
+  const candidates = [wakeLocale, settingsLocale].filter(
+    (code): code is SpeechLocaleCode | 'en-US' => !!code,
+  );
+  for (const preferred of candidates) {
+    if (locales.includes(preferred)) return preferred;
+    return preferred;
+  }
+  return locales[0] ?? SAFE_SPEECH_LOCALE_FALLBACK[0] ?? 'en-IN';
 }
 
 /**
@@ -213,10 +232,15 @@ export function useLanguageTranscript({
 
       if (!fromRestart) {
         localeExhaustedRef.current = false;
-        const locales = await listVoiceCommandLocales();
+        let locales = await listVoiceCommandLocales();
+        const preferred = resolvePreferredSpeechLocale(locales);
+        if (!locales.includes(preferred)) {
+          locales = [preferred, ...locales];
+        }
         voiceLocalesRef.current = locales;
-        voiceLocaleIndexRef.current = 0;
-        activeLocaleRef.current = locales[0] ?? (await resolveAutoSpeechLocale());
+        voiceLocaleIndexRef.current = Math.max(0, locales.indexOf(preferred));
+        activeLocaleRef.current = preferred;
+        useWakeWordStore.getState().clearLastWakeLocale();
       } else {
         const locales = voiceLocalesRef.current;
         voiceLocaleIndexRef.current =

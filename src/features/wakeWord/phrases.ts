@@ -1,3 +1,5 @@
+import type { SpeechLocaleCode } from '@/src/features/languageTranscript/locales';
+
 /** Shared “start recording” phrases across Indian languages (wake + resume). */
 const INDIAN_START_PHRASES = [
   // Marathi
@@ -225,6 +227,70 @@ export function matchesWakePhrase(text: string): boolean {
   return WAKE_PHRASES.some(
     (phrase) => normalized === phrase || normalized.includes(phrase),
   );
+}
+
+const MARATHI_WAKE_MARKERS = [
+  'रेकॉर्डिंग सुरू करा',
+  'रेकॉर्डिंग सुरु करा',
+  'रेकॉर्डिंग चालू करा',
+  'सुरू करा',
+  'हे थिंक टॅप',
+  'थिंक टॅप',
+  'recording suru kara',
+  'rekording suru kara',
+  'record suru kara',
+  'suru kara',
+  'rekording chalu kara',
+  'record chalu kara',
+];
+
+const HINDI_WAKE_MARKERS = [
+  'रिकॉर्डिंग शुरू करो',
+  'रिकॉर्डिंग शुरू करें',
+  'रिकॉर्डिंग शुरू कर',
+  'शुरू करो',
+  'शुरू करें',
+  'recording shuru karo',
+  'rekording shuru karo',
+  'shuru karo',
+];
+
+/** Guess which speech pack to use from the wake phrase the user just spoke. */
+export function inferSpeechLocaleFromWakeText(
+  text: string,
+): SpeechLocaleCode | 'en-US' | null {
+  const raw = text.trim();
+  const normalized = normalizeSpeech(text);
+  if (!raw && !normalized) return null;
+
+  if (/[\u0C00-\u0C7F]/.test(raw)) return 'te-IN';
+  if (/[\u0B80-\u0BFF]/.test(raw)) return 'ta-IN';
+  if (/[\u0C80-\u0CFF]/.test(raw)) return 'kn-IN';
+  if (/[\u0D00-\u0D7F]/.test(raw)) return 'ml-IN';
+  if (/[\u0A80-\u0AFF]/.test(raw)) return 'gu-IN';
+  if (/[\u0A00-\u0A7F]/.test(raw)) return 'pa-IN';
+  if (/[\u0B00-\u0B7F]/.test(raw)) return 'or-IN';
+  if (/[\u0980-\u09FF]/.test(raw)) return 'bn-IN';
+  if (/[\u0600-\u06FF]/.test(raw)) return 'ur-IN';
+
+  for (const phrase of MARATHI_WAKE_MARKERS) {
+    if (raw.includes(phrase) || normalized.includes(normalizeSpeech(phrase))) return 'mr-IN';
+  }
+  for (const phrase of HINDI_WAKE_MARKERS) {
+    if (raw.includes(phrase) || normalized.includes(normalizeSpeech(phrase))) return 'hi-IN';
+  }
+
+  if (/[\u0900-\u097F]/.test(raw)) return 'hi-IN';
+
+  if (
+    normalized.includes('start recording') ||
+    normalized.includes('think tap') ||
+    normalized.includes('thinktap')
+  ) {
+    return 'en-IN';
+  }
+
+  return null;
 }
 
 function matchesCommand(text: string, commands: string[], words: string[]): boolean {

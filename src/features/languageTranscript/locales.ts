@@ -43,6 +43,14 @@ export const INDIAN_SPEECH_LOCALES: SpeechLocale[] = [
 
 export const DEFAULT_SPEECH_LOCALE: SpeechLocaleCode = 'hi-IN';
 
+/** When the OS cannot report installed packs, try these in order (not all 13). */
+export const SAFE_SPEECH_LOCALE_FALLBACK: (SpeechLocaleCode | 'en-US')[] = [
+  'hi-IN',
+  'mr-IN',
+  'en-IN',
+  'en-US',
+];
+
 export type LocaleAvailability = {
   code: SpeechLocaleCode;
   /** Installed for on-device use, or reported as online-capable */

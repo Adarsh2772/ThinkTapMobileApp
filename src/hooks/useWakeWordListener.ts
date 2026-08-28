@@ -71,6 +71,10 @@ export function useWakeWordListener() {
   const effectiveUseFgs = useNativeFgs && !fgsRuntimeFailed;
   const syncInFlightRef = useRef(false);
 
+  /** FGS is the source of truth only while it is actually running. */
+  const isFgsListening = () =>
+    effectiveUseFgs && AndroidWakeWord.isSupported() && AndroidWakeWord.isRunning();
+
   const restartTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const startingRef = useRef(false);
   const intentionalStopRef = useRef(false);
@@ -123,8 +127,11 @@ export function useWakeWordListener() {
   };
 
   const startInAppListening = async (fromScheduledRestart = false) => {
-    if (useNativeFgs && !fgsFailedRef.current) return;
-    if (!canListenInApp() || startingRef.current || wakeLocaleExhaustedRef.current) return;
+    if (isFgsListening()) return;
+    if (!canListenInApp() || startingRef.current) return;
+    if (wakeLocaleExhaustedRef.current) {
+      wakeLocaleExhaustedRef.current = false;
+    }
     startingRef.current = true;
     clearRestart();
 
@@ -193,7 +200,7 @@ export function useWakeWordListener() {
 
   // ——— In-app recognition events (iOS / non-FGS fallback) ———
   useSpeechRecognitionEvent('result', (event) => {
-    if (effectiveUseFgs) return;
+    if (isFgsListening()) return;
     const results = event.results ?? [];
     for (const item of results) {
       const transcript = item?.transcript?.trim() ?? '';
@@ -208,7 +215,7 @@ export function useWakeWordListener() {
   });
 
   useSpeechRecognitionEvent('end', () => {
-    if (effectiveUseFgs) return;
+    if (isFgsListening()) return;
     setListening(false);
     if (intentionalStopRef.current) {
       intentionalStopRef.current = false;
@@ -220,7 +227,7 @@ export function useWakeWordListener() {
   });
 
   useSpeechRecognitionEvent('error', (event) => {
-    if (effectiveUseFgs) return;
+    if (isFgsListening()) return;
     setListening(false);
     if (intentionalStopRef.current || event.error === 'aborted') {
       intentionalStopRef.current = false;
@@ -291,6 +298,9 @@ export function useWakeWordListener() {
       syncInFlightRef.current = true;
       try {
       if (useNativeFgs) {
+        if (enabled) {
+          wakeLocaleExhaustedRef.current = false;
+        }
         if (!enabled) {
           await AndroidWakeWord.stopService();
           AndroidWakeWord.restoreRecognitionUi();
@@ -333,8 +343,16 @@ export function useWakeWordListener() {
         if (!fgsFailedRef.current) {
           if (!AndroidWakeWord.isRunning()) {
             try {
+              const wakeLocale = useWakeWordStore.getState().lastWakeLocale;
               const locales = await listVoiceCommandLocales();
-              const locale = locales[voiceLocaleIndexRef.current] ?? locales[0] ?? 'hi-IN';
+              const preferred =
+                wakeLocale ??
+                locales[voiceLocaleIndexRef.current] ??
+                locales[0] ??
+                'hi-IN';
+              const locale = locales.includes(preferred)
+                ? preferred
+                : wakeLocale ?? preferred;
               await AndroidWakeWord.startService(locale);
               setFgsRuntimeFailed(false);
               fgsFailedRef.current = false;
@@ -349,17 +367,19 @@ export function useWakeWordListener() {
             await AndroidWakeWord.resumeService();
           }
 
-          const pending = await AndroidWakeWord.consumePendingWake();
-          if (pending?.transcript) {
-            setLastHeard(pending.transcript);
-            fireWakeTrigger();
+          if (AndroidWakeWord.isRunning()) {
+            const pending = await AndroidWakeWord.consumePendingWake();
+            if (pending?.transcript) {
+              setLastHeard(pending.transcript);
+              fireWakeTrigger();
+            }
+            return;
           }
-          return;
         }
       }
 
-      // iOS / fallback path (including Android when FGS failed to start)
-      if (enabled && !pausedForRecording) {
+      // iOS / fallback path (including Android when FGS is not actually running)
+      if (enabled && !pausedForRecording && !isFgsListening()) {
         void startInAppListening();
       } else {
         stopInAppListening('pause');
@@ -387,13 +407,20 @@ export function useWakeWordListener() {
         if (!useWakeWordStore.getState().pausedForRecording) {
           void sync();
         }
-        if (!fgsFailedRef.current) {
+        if (!fgsFailedRef.current && AndroidWakeWord.isRunning()) {
           void AndroidWakeWord.consumePendingWake().then((pending) => {
             if (pending?.transcript) {
               setLastHeard(pending.transcript);
               fireWakeTrigger();
             }
           });
+        }
+        if (
+          state === 'active' &&
+          !useWakeWordStore.getState().pausedForRecording &&
+          !AndroidWakeWord.isRunning()
+        ) {
+          void startInAppListening();
         }
         return;
       }
