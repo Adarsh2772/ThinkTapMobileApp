@@ -12,6 +12,8 @@ type WakeWordState = {
   pausedForRecording: boolean;
   /** True while a take is open, wherever the user navigates. */
   captureActive: boolean;
+  /** True from the moment a take is requested until it is open or has failed. */
+  captureStarting: boolean;
   available: boolean | null;
   lastHeard: string;
   /** Incremented when wake phrase is detected — Home consumes this to start recording. */
@@ -25,6 +27,7 @@ type WakeWordState = {
   setListening: (listening: boolean) => void;
   setPausedForRecording: (paused: boolean) => void;
   setCaptureActive: (active: boolean) => void;
+  setCaptureStarting: (starting: boolean) => void;
   setAvailable: (available: boolean) => void;
   setLastHeard: (text: string) => void;
   fireWakeTrigger: () => void;
@@ -35,6 +38,7 @@ export const useWakeWordStore = create<WakeWordState>((set, get) => ({
   listening: false,
   pausedForRecording: false,
   captureActive: false,
+  captureStarting: false,
   available: null,
   lastHeard: '',
   triggerToken: 0,
@@ -70,6 +74,7 @@ export const useWakeWordStore = create<WakeWordState>((set, get) => ({
   setListening: (listening) => set({ listening }),
   setPausedForRecording: (pausedForRecording) => set({ pausedForRecording }),
   setCaptureActive: (captureActive) => set({ captureActive }),
+  setCaptureStarting: (captureStarting) => set({ captureStarting }),
   setAvailable: (available) => set({ available }),
   setLastHeard: (text) => set({ lastHeard: text }),
 

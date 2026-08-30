@@ -26,11 +26,23 @@ type Options = {
   onStopPhrase?: () => void;
   onPausePhrase?: () => void;
   onResumePhrase?: () => void;
+  /** The engine cannot run at all — the take must not stay open pretending to record. */
+  onUnavailable?: (message: string) => void;
 };
 
 function normalize(text: string): string {
   return text.replace(/\s+/g, ' ').trim();
 }
+
+/**
+ * Tried in order when the chosen language has no speech model on the device.
+ * Without this the engine rejects every start and the take records nothing.
+ */
+const FALLBACK_LOCALES: Array<SpeechLocaleCode | 'en-US'> = ['en-IN', 'en-US'];
+
+const LANGUAGE_UNAVAILABLE_MESSAGE =
+  'Speech recognition is not available for this language on your device. ' +
+  'Pick another language in Settings, or turn on “Save audio recording”.';
 
 /**
  * Live OS speech-to-text for idea capture.
@@ -43,6 +55,7 @@ export function useLanguageTranscript({
   onStopPhrase,
   onPausePhrase,
   onResumePhrase,
+  onUnavailable,
 }: Options) {
   const [transcript, setTranscript] = useState('');
   const [interim, setInterim] = useState('');
@@ -55,9 +68,11 @@ export function useLanguageTranscript({
   const onStopRef = useRef(onStopPhrase);
   const onPauseRef = useRef(onPausePhrase);
   const onResumeRef = useRef(onResumePhrase);
+  const onUnavailableRef = useRef(onUnavailable);
   onStopRef.current = onStopPhrase;
   onPauseRef.current = onPausePhrase;
   onResumeRef.current = onResumePhrase;
+  onUnavailableRef.current = onUnavailable;
 
   const genRef = useRef(0);
   const nativeGenRef = useRef(0);
@@ -73,6 +88,11 @@ export function useLanguageTranscript({
   capturingRef.current = capturing;
   const localeRef = useRef(speechLocale);
   localeRef.current = speechLocale;
+  /** Locale actually handed to the engine — may be downgraded to a fallback. */
+  const activeLocaleRef = useRef<SpeechLocaleCode | 'en-US'>(speechLocale);
+  const fallbackIndexRef = useRef(-1);
+  /** Set when no locale works: further restarts would just spin forever. */
+  const fatalRef = useRef(false);
   const fileSeq = useRef(0);
   const persistRef = useRef(true);
   const startAttempts = useRef(0);
@@ -186,7 +206,7 @@ export function useLanguageTranscript({
   }, []);
 
   const startListening = useCallback(async (fromRestart = false) => {
-    if (!enabledRef.current || stopFiredRef.current) return;
+    if (!enabledRef.current || stopFiredRef.current || fatalRef.current) return;
     startingRef.current = true;
     const gen = fromRestart ? genRef.current : ++genRef.current;
 
@@ -219,7 +239,7 @@ export function useLanguageTranscript({
       nativeGenRef.current = gen;
       nativeActiveRef.current = true;
       await startLiveRecognition({
-        lang: localeRef.current,
+        lang: activeLocaleRef.current,
         outputFileName: `idea-${Date.now()}-${fileSeq.current}.wav`,
         persist: persistRef.current,
       });
@@ -248,8 +268,32 @@ export function useLanguageTranscript({
   const scheduleRestart = (ms: number) => {
     clearRestart();
     restartTimer.current = setTimeout(() => {
-      if (enabledRef.current && !stopFiredRef.current) void startListening(true);
+      if (enabledRef.current && !stopFiredRef.current && !fatalRef.current) {
+        void startListening(true);
+      }
     }, ms);
+  };
+
+  /**
+   * The device has no speech model for this language. Step down to English
+   * before giving up — retrying the rejected locale would loop forever while
+   * the UI shows a recording that captures nothing.
+   */
+  const handleLanguageUnavailable = () => {
+    const nextIndex = FALLBACK_LOCALES.findIndex(
+      (loc, i) => i > fallbackIndexRef.current && loc !== activeLocaleRef.current,
+    );
+    if (nextIndex >= 0) {
+      fallbackIndexRef.current = nextIndex;
+      activeLocaleRef.current = FALLBACK_LOCALES[nextIndex];
+      scheduleRestart(400);
+      return;
+    }
+    fatalRef.current = true;
+    clearRestart();
+    setListening(false);
+    setError(LANGUAGE_UNAVAILABLE_MESSAGE);
+    onUnavailableRef.current?.(LANGUAGE_UNAVAILABLE_MESSAGE);
   };
 
   useSpeechRecognitionEvent('result', (event) => {
@@ -338,6 +382,10 @@ export function useLanguageTranscript({
     if (!enabledRef.current || stopFiredRef.current) return;
     const code = event?.error ?? '';
     if (code === 'aborted') return;
+    if (code === 'language-not-supported' || code === 'service-not-allowed') {
+      handleLanguageUnavailable();
+      return;
+    }
     if (code === 'client' || code === 'busy' || code === 'audio-capture' || code === 'network') {
       persistRef.current = false;
       scheduleRestart(Platform.OS === 'android' ? 800 : 600);
@@ -356,6 +404,9 @@ export function useLanguageTranscript({
     resumeFiredRef.current = false;
     persistRef.current = true;
     startAttempts.current = 0;
+    fatalRef.current = false;
+    fallbackIndexRef.current = -1;
+    activeLocaleRef.current = speechLocale;
 
     if (enabled) {
       const t = setTimeout(() => void startListening(false), 200);
@@ -380,6 +431,9 @@ export function useLanguageTranscript({
     resumeFiredRef.current = false;
     persistRef.current = true;
     startAttempts.current = 0;
+    fatalRef.current = false;
+    fallbackIndexRef.current = -1;
+    activeLocaleRef.current = localeRef.current;
     setTranscript('');
     setInterim('');
     setError(null);

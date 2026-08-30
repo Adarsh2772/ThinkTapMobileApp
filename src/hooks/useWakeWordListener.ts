@@ -227,6 +227,10 @@ export function useWakeWordListener() {
       AndroidWakeWord.addListener('onWakeDetected', (event) => {
         setLastHeard(event.transcript);
         fireWakeTrigger();
+        // The service also persists the wake so a cold start can pick it up.
+        // JS handled it live, so drop it — otherwise the next service start
+        // replays it and opens a phantom take the user never asked for.
+        void AndroidWakeWord.consumePendingWake();
       }),
       AndroidWakeWord.addListener('onPartialResult', (event) => {
         if (event.transcript) setLastHeard(event.transcript);

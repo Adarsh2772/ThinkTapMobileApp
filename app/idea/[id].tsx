@@ -151,7 +151,7 @@ export default function IdeaDetailScreen() {
           {spoken ? (
             <Text style={styles.date}>
               {knownLanguage ? `${knownLanguage.flag} ` : ''}
-              {knownLanguage?.name ?? spoken.name}
+              {spoken.name}
             </Text>
           ) : null}
           <Text style={styles.date}>{relativeDate(idea.createdAt)}</Text>

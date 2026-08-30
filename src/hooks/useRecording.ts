@@ -166,8 +166,13 @@ export function useRecording() {
         allowsRecording: false,
       });
 
+      // expo-audio can take a tick to publish the file URI after stop().
+      let tempUri = recorder.uri ?? recorder.getStatus().url ?? null;
+      if (!tempUri) {
+        await new Promise((r) => setTimeout(r, 350));
+        tempUri = recorder.uri ?? recorder.getStatus().url ?? null;
+      }
       const status = recorder.getStatus();
-      const tempUri = recorder.uri ?? status.url ?? null;
       const millis = status.durationMillis || recorderState.durationMillis || 0;
       const seconds = Math.max(1, Math.round(millis / 1000));
 

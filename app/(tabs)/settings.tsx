@@ -30,8 +30,6 @@ export default function SettingsScreen() {
   const user = useAuthStore((s) => s.session?.user);
   const languageCode = useSettingsStore((s) => s.languageCode);
   const speechLocale = useSettingsStore((s) => s.speechLocale);
-  const saveAudio = useSettingsStore((s) => s.saveAudioRecording);
-  const setSaveAudioRecording = useSettingsStore((s) => s.setSaveAudioRecording);
   const tx = useSettingsStore((s) => s.tx);
   const language = getLanguage(languageCode);
   const speechLang = getSpeechLocale(speechLocale);
@@ -111,7 +109,7 @@ export default function SettingsScreen() {
               <Text style={styles.meta}>{speechLang.nativeName}</Text>
             </View>
             <View style={[styles.modePill, styles.modeLive]}>
-              <Text style={styles.modePillText}>OS · Device</Text>
+              <Text style={styles.modePillText}>Optional</Text>
             </View>
             <Text style={styles.change}>›</Text>
           </View>
@@ -150,22 +148,12 @@ export default function SettingsScreen() {
 
         {!supportsAudioWithLiveTranscript() ? (
           <View style={styles.card}>
-            <View style={styles.wakeRow}>
-              <View style={{ flex: 1 }}>
-                <Text style={styles.label}>Save audio recording</Text>
-                <Text style={styles.value}>Keep the voice file for playback</Text>
-              </View>
-              <Switch
-                value={saveAudio}
-                onValueChange={(v) => void setSaveAudioRecording(v)}
-                trackColor={{ false: colors.outlineVariant, true: colors.secondary }}
-                thumbColor={colors.surfaceContainerLowest}
-              />
-            </View>
+            <Text style={styles.label}>Save audio recording</Text>
+            <Text style={styles.value}>Always on for this Android version</Text>
             <Text style={styles.hint}>
-              {saveAudio
-                ? 'Your voice is saved and transcribed after you tap Stop, which gives more accurate transcripts. Live text and spoken “pause”/“stop” are off while recording, because this Android version gives the mic to one app at a time.'
-                : 'Live text appears while you speak and spoken “pause”/“stop” work, but no audio file is kept. This Android version cannot do both at once.'}
+              This phone cannot share the microphone between live captions and a
+              saved voice file. Think Tap records the file so your idea is kept
+              after Stop. Transcripts are added once the network is available.
             </Text>
           </View>
         ) : null}

@@ -27,7 +27,9 @@ export type RecordingStatus = 'idle' | 'recording' | 'paused' | 'stopping';
  * Running expo-audio in parallel steals the mic, so the take is empty and
  * spoken “stop recording” is never heard.
  */
-export function useIdeaCapture() {
+export function useIdeaCapture(options: { onCaptureFailed?: (message: string) => void } = {}) {
+  const onCaptureFailedRef = useRef(options.onCaptureFailed);
+  onCaptureFailedRef.current = options.onCaptureFailed;
   const speechLocale = useSettingsStore((s) => s.speechLocale);
   const preferSavedAudio = useSettingsStore((s) => s.saveAudioRecording);
   const audio = useRecording();
@@ -89,6 +91,19 @@ export function useIdeaCapture() {
     },
     onResumePhrase: () => {
       onVoiceResumeRef.current?.();
+    },
+    onUnavailable: (message) => {
+      // Nothing can be captured, so close the take rather than leaving the
+      // timer running over a recogniser that will never produce a word.
+      if (fileRecorder) void audio.discard();
+      activeRef.current = false;
+      pausedRef.current = false;
+      pausedAccumMsRef.current = 0;
+      setActive(false);
+      setPaused(false);
+      setDurationSec(0);
+      fail(message);
+      onCaptureFailedRef.current?.(message);
     },
   });
 

@@ -1,4 +1,3 @@
-import { useRouter } from 'expo-router';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Alert, Pressable, StyleSheet, Text, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
@@ -9,7 +8,12 @@ import { ScreenHeader } from '@/src/components/ScreenHeader';
 import { useIdeaCapture } from '@/src/hooks/useIdeaCapture';
 import { useDrawerOptional } from '@/src/navigation/DrawerContext';
 import { releaseWakeMicForCapture } from '@/src/services/micHandoff';
-import { processPendingRecording } from '@/src/services/processRecording';
+import { resolveSpokenLanguage } from '@/src/i18n/languages';
+import {
+  buildLocalIdea,
+  enrichPendingRecording,
+} from '@/src/services/processRecording';
+import type { ProcessingStage } from '@/src/types';
 import {
   announceRecordingStarted,
   announceRecordingStopped,
@@ -23,20 +27,23 @@ import { useWakeWordStore } from '@/src/store/wakeWordStore';
 import { colors, fonts, spacing, typography } from '@/src/theme/tokens';
 
 export default function HomeScreen() {
-  const router = useRouter();
   const user = useAuthStore((s) => s.session?.user);
   const setPending = usePendingRecordingStore((s) => s.setPending);
   const clearPending = usePendingRecordingStore((s) => s.clearPending);
   const addIdea = useIdeasStore((s) => s.addIdea);
+  const updateIdea = useIdeasStore((s) => s.updateIdea);
   const languageCode = useSettingsStore((s) => s.languageCode);
   const tx = useSettingsStore((s) => s.tx);
   const drawer = useDrawerOptional();
   const triggerToken = useWakeWordStore((s) => s.triggerToken);
   const setPausedForRecording = useWakeWordStore((s) => s.setPausedForRecording);
+  const setCaptureStarting = useWakeWordStore((s) => s.setCaptureStarting);
   const lastTrigger = useRef(0);
 
   const [saveModalVisible, setSaveModalVisible] = useState(false);
   const [organizing, setOrganizing] = useState(false);
+  const [organizeStage, setOrganizeStage] = useState<ProcessingStage>('uploading');
+  const [detectedLanguageName, setDetectedLanguageName] = useState<string | null>(null);
   const processLockRef = useRef(false);
 
   const {
@@ -56,7 +63,12 @@ export default function HomeScreen() {
     setVoiceResumeHandler,
     supportsVoiceStop,
     liveTranscript,
-  } = useIdeaCapture();
+  } = useIdeaCapture({
+    onCaptureFailed: (message) => {
+      showToast(message, 'error');
+      Alert.alert('Cannot record', message);
+    },
+  });
   const stoppingRef = useRef(false);
   const finishLockRef = useRef(false);
   const pauseBusyRef = useRef(false);
@@ -70,26 +82,44 @@ export default function HomeScreen() {
     }) => {
       if (!user || processLockRef.current) return;
       processLockRef.current = true;
+      setOrganizeStage('uploading');
+      setDetectedLanguageName(null);
       setOrganizing(true);
+
+      const localIdea = buildLocalIdea(user.id, pending, languageCode);
       try {
-        const idea = await processPendingRecording({
-          userId: user.id,
-          pending,
-          languageCode,
-        });
-        await addIdea(idea);
+        await addIdea(localIdea);
         clearPending();
-        showToast('Idea ready in Ideas');
+        showToast('Recording saved');
       } catch (e) {
-        const message = e instanceof Error ? e.message : 'Could not organize this idea';
+        const message = e instanceof Error ? e.message : 'Could not save this recording';
         showToast(message, 'error');
-        clearPending();
+        setOrganizing(false);
+        processLockRef.current = false;
+        return;
+      }
+
+      try {
+        const patch = await enrichPendingRecording(pending, languageCode, (stage) => {
+          setOrganizeStage(stage);
+        });
+        if (patch && (patch.transcript || patch.title)) {
+          if (patch.language) {
+            setDetectedLanguageName(resolveSpokenLanguage(patch.language).name);
+          }
+          setOrganizeStage('done');
+          await updateIdea(localIdea.id, patch);
+          showToast('Idea ready in Ideas');
+        }
+      } catch (e) {
+        console.warn('Transcription failed after save', e);
+        showToast('Saved. Transcript will appear when the network is ready.', 'info');
       } finally {
         setOrganizing(false);
         processLockRef.current = false;
       }
     },
-    [user, languageCode, addIdea, clearPending],
+    [user, languageCode, addIdea, updateIdea, clearPending],
   );
 
   const finishRecording = useCallback(async () => {
@@ -180,27 +210,33 @@ export default function HomeScreen() {
     onResumePress,
   ]);
 
-  // "Hey Think Tap" / "start recording" → Home → start capture after the wake mic is free.
+  // "Hey Think Tap" / "start recording" → start capture once the wake mic is free.
+  // WakeWordProvider already routes to Home for this token.
   useEffect(() => {
     if (!triggerToken || triggerToken === lastTrigger.current) return;
     lastTrigger.current = triggerToken;
     if (isRecording || status === 'stopping' || stoppingRef.current) return;
 
-    router.replace('/(tabs)');
-
+    // Holds the wake listener off for the whole handoff. Releasing the mic
+    // takes a few seconds, and without this the listener's resume timer can
+    // grab the mic back before the recognizer has it.
+    setCaptureStarting(true);
     void (async () => {
-      await releaseWakeMicForCapture();
-      const ok = await start();
-      if (!ok) {
-        setPausedForRecording(false);
-        showToast('Could not start recording', 'error');
-        Alert.alert('Hey Think Tap', 'Heard the wake phrase, but recording could not start.');
-        return;
+      try {
+        await releaseWakeMicForCapture();
+        const ok = await start();
+        if (!ok) {
+          showToast('Could not start recording', 'error');
+          Alert.alert('Hey Think Tap', 'Heard the wake phrase, but recording could not start.');
+          return;
+        }
+        showToast('Recording started');
+        await announceRecordingStarted();
+      } finally {
+        setCaptureStarting(false);
       }
-      showToast('Recording started');
-      await announceRecordingStarted();
     })();
-  }, [triggerToken, isRecording, status, start, setPausedForRecording, router]);
+  }, [triggerToken, isRecording, status, start, setCaptureStarting]);
 
   const onMicPress = async () => {
     if (stoppingRef.current || status === 'stopping') return;
@@ -210,16 +246,20 @@ export default function HomeScreen() {
       return;
     }
 
-    await releaseWakeMicForCapture();
-    const ok = await start();
-    if (!ok) {
-      setPausedForRecording(false);
-      showToast(error ?? 'Microphone permission required', 'error');
-      if (error) Alert.alert('Microphone', error);
-      return;
+    setCaptureStarting(true);
+    try {
+      await releaseWakeMicForCapture();
+      const ok = await start();
+      if (!ok) {
+        showToast(error ?? 'Microphone permission required', 'error');
+        if (error) Alert.alert('Microphone', error);
+        return;
+      }
+      showToast('Recording started');
+      await announceRecordingStarted();
+    } finally {
+      setCaptureStarting(false);
     }
-    showToast('Recording started');
-    await announceRecordingStarted();
   };
 
   const onLongDiscard = () => {
@@ -293,6 +333,8 @@ export default function HomeScreen() {
       <AudioSavedModal
         visible={saveModalVisible}
         organizing={organizing}
+        stage={organizeStage}
+        detectedLanguageName={detectedLanguageName}
         onClose={() => setSaveModalVisible(false)}
       />
     </SafeAreaView>
