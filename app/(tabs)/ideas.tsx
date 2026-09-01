@@ -1,12 +1,12 @@
 import { useRouter } from 'expo-router';
 import { useMemo, useState } from 'react';
 import {
-  FlatList,
-  Pressable,
-  ScrollView,
-  StyleSheet,
-  Text,
-  View,
+    FlatList,
+    Pressable,
+    ScrollView,
+    StyleSheet,
+    Text,
+    View,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
@@ -16,13 +16,13 @@ import { useAuthStore } from '@/src/store/authStore';
 import { useIdeasStore } from '@/src/store/ideasStore';
 import { useSettingsStore } from '@/src/store/settingsStore';
 import {
-  CATEGORIES,
-  categoryColor,
-  colors,
-  fonts,
-  radii,
-  spacing,
-  typography,
+    CATEGORIES,
+    categoryColor,
+    colors,
+    fonts,
+    radii,
+    spacing,
+    typography,
 } from '@/src/theme/tokens';
 
 export default function IdeasScreen() {

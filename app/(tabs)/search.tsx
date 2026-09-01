@@ -4,6 +4,7 @@ import { useMemo, useState } from 'react';
 import {
   FlatList,
   Pressable,
+  ScrollView,
   StyleSheet,
   Text,
   TextInput,
@@ -11,49 +12,43 @@ import {
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
-import { IdeaCard } from '@/src/components/IdeaCard';
 import { ScreenHeader } from '@/src/components/ScreenHeader';
+import { ThoughtSearchCard } from '@/src/components/ThoughtSearchCard';
+import {
+  SEARCH_SORTS,
+  parseFragments,
+  searchThoughts,
+  type SearchSort,
+} from '@/src/features/search/searchThoughts';
 import { useAuthStore } from '@/src/store/authStore';
 import { useIdeasStore } from '@/src/store/ideasStore';
 import { colors, fonts, radii, spacing, typography } from '@/src/theme/tokens';
 
-const SUGGESTIONS = [
-  'Show my horror ideas',
-  'Rap lyrics from last week',
-  'Dialogue about fathers',
-];
+const SUGGESTIONS = ['Bollywood movie', 'rain', 'dialogue about fathers'];
 
 export default function SearchScreen() {
   const router = useRouter();
   const [query, setQuery] = useState('');
+  const [sort, setSort] = useState<SearchSort>('best_match');
   const user = useAuthStore((s) => s.session?.user);
   const allIdeas = useIdeasStore((s) => s.ideas);
+  const fragments = useMemo(() => parseFragments(query), [query]);
 
   const results = useMemo(() => {
-    if (!user || !query.trim()) return [];
-    const q = query.trim().toLowerCase();
-    return allIdeas
-      .filter((idea) => idea.userId === user.id)
-      .filter((idea) => {
-        const analysisText = idea.analysis
-          ? [
-              idea.analysis.thought,
-              idea.analysis.sourceOfInspiration,
-              idea.analysis.potentialValue,
-              idea.analysis.expansionPaths,
-              idea.analysis.connectedThoughts,
-            ].join(' ')
-          : '';
-        const haystack =
-          `${idea.title} ${idea.summary} ${idea.transcript} ${idea.category} ${analysisText}`.toLowerCase();
-        return haystack.includes(q);
-      });
-  }, [user, allIdeas, query]);
+    if (!user || fragments.length === 0) return [];
+    const mine = allIdeas.filter((idea) => idea.userId === user.id);
+    return searchThoughts(mine, query, sort).map((hit) => hit.idea);
+  }, [user, allIdeas, query, sort, fragments.length]);
+
+  const removeFragment = (fragment: string) => {
+    const next = fragments.filter((item) => item !== fragment);
+    setQuery(next.join(' '));
+  };
 
   return (
     <SafeAreaView style={styles.safe} edges={['top']}>
       <View style={styles.pad}>
-        <ScreenHeader title="Think Tap" subtitle="Deep discovery" />
+        <ScreenHeader title="Think Tap" subtitle="Find a thought from the words you spoke" />
       </View>
 
       <View style={styles.searchWrap}>
@@ -61,34 +56,70 @@ export default function SearchScreen() {
         <TextInput
           value={query}
           onChangeText={setQuery}
-          placeholder="Find my movie idea about rain..."
+          placeholder="Type a remembered fragment…"
           placeholderTextColor={colors.outlineVariant}
           style={styles.input}
+          autoCorrect={false}
+          autoCapitalize="none"
         />
       </View>
 
+      {fragments.length > 0 ? (
+        <View style={styles.fragmentRow}>
+          {fragments.map((item) => (
+            <Pressable
+              key={item}
+              onPress={() => removeFragment(item)}
+              style={styles.fragmentChip}
+              accessibilityLabel={`Remove fragment ${item}`}
+            >
+              <Text style={styles.fragmentText}>{item}</Text>
+              <Ionicons name="close" size={14} color={colors.onSecondaryFixedVariant} />
+            </Pressable>
+          ))}
+        </View>
+      ) : null}
+
+      {fragments.length > 0 ? (
+        <ScrollView
+          horizontal
+          showsHorizontalScrollIndicator={false}
+          contentContainerStyle={styles.sortRow}
+        >
+          {SEARCH_SORTS.map((item) => {
+            const active = item.id === sort;
+            return (
+              <Pressable
+                key={item.id}
+                onPress={() => setSort(item.id)}
+                style={[styles.sortChip, active && styles.sortChipActive]}
+              >
+                <Text style={[styles.sortText, active && styles.sortTextActive]}>{item.label}</Text>
+              </Pressable>
+            );
+          })}
+        </ScrollView>
+      ) : null}
+
       {!query.trim() ? (
         <View style={styles.suggestions}>
-          <Text style={styles.suggestLabel}>SUGGESTED FOR YOU</Text>
+          <Text style={styles.suggestLabel}>TRY A FRAGMENT</Text>
           <View style={styles.suggestWrap}>
             {SUGGESTIONS.map((item) => (
-              <Pressable
-                key={item}
-                onPress={() => setQuery(item.replace(/^Show my /i, '').replace(/"/g, ''))}
-                style={styles.suggestChip}
-              >
-                <Text style={styles.suggestText}>"{item}"</Text>
+              <Pressable key={item} onPress={() => setQuery(item)} style={styles.suggestChip}>
+                <Text style={styles.suggestText}>“{item}”</Text>
               </Pressable>
             ))}
           </View>
 
           <View style={styles.emptyState}>
             <View style={styles.emptyIcon}>
-              <Ionicons name="compass-outline" size={36} color={colors.secondary} />
+              <Ionicons name="mic-outline" size={36} color={colors.secondary} />
             </View>
-            <Text style={styles.emptyTitle}>Deep Discovery</Text>
+            <Text style={styles.emptyTitle}>Search what you said</Text>
             <Text style={styles.emptyBody}>
-              Search through your voice notes, text snippets, and generated concepts across all time.
+              Results come from your raw transcript only. Add another word to narrow the list. Word
+              order can differ — “Bollywood movie” still finds “movie in Bollywood.”
             </Text>
           </View>
         </View>
@@ -99,14 +130,16 @@ export default function SearchScreen() {
           contentContainerStyle={styles.list}
           ItemSeparatorComponent={() => <View style={{ height: spacing.stackMd }} />}
           ListEmptyComponent={
-            <Text style={styles.noResults}>No ideas matched “{query.trim()}”.</Text>
+            <Text style={styles.noResults}>
+              {sort === 'recently_visited'
+                ? 'No matching thoughts you have opened yet.'
+                : sort === 'dormant_gems'
+                  ? 'No matching dormant thoughts yet.'
+                  : `No transcripts matched “${query.trim()}”.`}
+            </Text>
           }
           renderItem={({ item }) => (
-            <IdeaCard
-              idea={item}
-              variant="archive"
-              onPress={() => router.push(`/idea/${item.id}`)}
-            />
+            <ThoughtSearchCard idea={item} onPress={() => router.push(`/idea/${item.id}`)} />
           )}
         />
       )}
@@ -135,6 +168,50 @@ const styles = StyleSheet.create({
     fontSize: typography.bodyLg.fontSize,
     color: colors.onSurface,
   },
+  fragmentRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
+    paddingHorizontal: spacing.containerMargin,
+    marginTop: spacing.stackMd,
+  },
+  fragmentChip: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    borderRadius: radii.full,
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    backgroundColor: colors.secondarySoft,
+    borderWidth: 1,
+    borderColor: colors.secondaryFixed,
+  },
+  fragmentText: {
+    fontFamily: fonts.label,
+    fontSize: typography.labelMd.fontSize,
+    color: colors.onSecondaryFixedVariant,
+  },
+  sortRow: {
+    paddingHorizontal: spacing.containerMargin,
+    paddingVertical: spacing.stackMd,
+    gap: 8,
+    alignItems: 'center',
+  },
+  sortChip: {
+    height: 36,
+    paddingHorizontal: 14,
+    borderRadius: radii.full,
+    backgroundColor: colors.chipInactive,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  sortChipActive: { backgroundColor: colors.secondary },
+  sortText: {
+    fontFamily: fonts.label,
+    fontSize: 13,
+    color: colors.onSurfaceVariant,
+  },
+  sortTextActive: { color: colors.onPrimary },
   suggestions: {
     paddingHorizontal: spacing.containerMargin,
     marginTop: spacing.stackLg,

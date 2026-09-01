@@ -1,9 +1,11 @@
 import { Ionicons } from '@expo/vector-icons';
+import { AndroidWakeWord } from 'android-wake-word';
 import { setAudioModeAsync, useAudioPlayer, useAudioPlayerStatus } from 'expo-audio';
 import { createElement, useEffect, useMemo, useState } from 'react';
 import { Platform, Pressable, StyleSheet, Text, View } from 'react-native';
 
 import { normalizeFileUri } from '@/src/services/audioStorage';
+import { useWakeWordStore } from '@/src/store/wakeWordStore';
 import { colors, fonts, radii, spacing, typography } from '@/src/theme/tokens';
 import { formatClock } from '@/src/utils/format';
 
@@ -11,6 +13,35 @@ type Props = {
   uri: string;
   durationSec: number;
 };
+
+function delay(ms: number) {
+  return new Promise<void>((resolve) => setTimeout(resolve, ms));
+}
+
+async function preparePlaybackAudioMode() {
+  await setAudioModeAsync({
+    playsInSilentMode: true,
+    allowsRecording: false,
+    interruptionMode: 'doNotMix',
+  });
+}
+
+async function releaseWakeForPlayback() {
+  useWakeWordStore.getState().setPlaybackActive(true);
+  try {
+    if (AndroidWakeWord.isSupported() && AndroidWakeWord.isRunning()) {
+      await AndroidWakeWord.stopServiceSilent();
+    }
+  } catch {
+    // still restore volumes
+  }
+  AndroidWakeWord.restoreRecognitionUi();
+  await delay(400);
+}
+
+function endPlaybackHold() {
+  useWakeWordStore.getState().setPlaybackActive(false);
+}
 
 export function AudioPlayer({ uri, durationSec }: Props) {
   const sourceUri = useMemo(() => (uri ? normalizeFileUri(uri) : ''), [uri]);
@@ -20,26 +51,20 @@ export function AudioPlayer({ uri, durationSec }: Props) {
   const [playError, setPlayError] = useState<string | null>(null);
 
   useEffect(() => {
-    let cancelled = false;
     setPlayError(null);
 
     (async () => {
       if (!sourceUri || Platform.OS === 'web') return;
       try {
-        await setAudioModeAsync({
-          playsInSilentMode: true,
-          allowsRecording: false,
-        });
-        if (!cancelled) {
-          player.replace(sourceUri);
-        }
+        await preparePlaybackAudioMode();
+        player.replace(sourceUri);
       } catch {
         // play() will surface errors
       }
     })();
 
     return () => {
-      cancelled = true;
+      endPlaybackHold();
       try {
         player.pause();
       } catch {
@@ -48,6 +73,12 @@ export function AudioPlayer({ uri, durationSec }: Props) {
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sourceUri]);
+
+  useEffect(() => {
+    if (status.didJustFinish) {
+      endPlaybackHold();
+    }
+  }, [status.didJustFinish]);
 
   const playing = status.playing;
   const positionSec = Math.floor(status.currentTime || 0);
@@ -63,16 +94,15 @@ export function AudioPlayer({ uri, durationSec }: Props) {
     setBusy(true);
     setPlayError(null);
     try {
-      if (Platform.OS !== 'web') {
-        await setAudioModeAsync({
-          playsInSilentMode: true,
-          allowsRecording: false,
-        });
-      }
-
       if (playing) {
         player.pause();
+        endPlaybackHold();
         return;
+      }
+
+      if (Platform.OS !== 'web') {
+        await releaseWakeForPlayback();
+        await preparePlaybackAudioMode();
       }
 
       const duration = status.duration || 0;
@@ -82,6 +112,7 @@ export function AudioPlayer({ uri, durationSec }: Props) {
 
       player.play();
     } catch (e) {
+      endPlaybackHold();
       setPlayError(
         e instanceof Error ? e.message : 'Could not play this recording. Try recording a new thought.',
       );

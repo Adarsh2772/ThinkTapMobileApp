@@ -28,9 +28,9 @@ export async function releaseWakeMicForCapture(): Promise<void> {
   }
 
   abortLiveRecognition();
-  AndroidWakeWord.silenceRecognitionUi();
+  AndroidWakeWord.restoreRecognitionUi();
   await delay(900);
   abortLiveRecognition();
-  AndroidWakeWord.silenceRecognitionUi();
+  AndroidWakeWord.restoreRecognitionUi();
   await delay(500);
 }

@@ -19,6 +19,7 @@ function canListenInApp(): boolean {
   return (
     s.enabled &&
     !s.pausedForRecording &&
+    !s.playbackActive &&
     AppState.currentState === 'active'
   );
 }
@@ -55,6 +56,7 @@ export function useWakeWordListener() {
   const enabled = useWakeWordStore((s) => s.enabled);
   const hydrated = useWakeWordStore((s) => s.hydrated);
   const pausedForRecording = useWakeWordStore((s) => s.pausedForRecording);
+  const playbackActive = useWakeWordStore((s) => s.playbackActive);
   const setListening = useWakeWordStore((s) => s.setListening);
   const setAvailable = useWakeWordStore((s) => s.setAvailable);
   const setLastHeard = useWakeWordStore((s) => s.setLastHeard);
@@ -138,7 +140,6 @@ export function useWakeWordListener() {
 
       if (!canListenInApp() || !mountedRef.current) return;
 
-      AndroidWakeWord.silenceRecognitionUi();
       ExpoSpeechRecognitionModule.start({
         lang: 'en-US',
         interimResults: true,
@@ -258,6 +259,7 @@ export function useWakeWordListener() {
 
     const sync = async () => {
       if (useNativeFgs) {
+        AndroidWakeWord.restoreRecognitionUi();
         if (!enabled) {
           await AndroidWakeWord.stopService();
           AndroidWakeWord.restoreRecognitionUi();
@@ -277,20 +279,18 @@ export function useWakeWordListener() {
           console.warn('Notification permission denied — wake service may be limited on Android 13+');
         }
 
-        // While capturing an idea, fully stop the FGS so OS STT can own the mic.
-        // Pause is not enough on many Android devices (SpeechRecognizer is a singleton).
-        if (pausedForRecording) {
+        // While capturing or playing a take, fully stop the FGS so it cannot
+        // vibrate, steal audio focus, or cut playback.
+        const holdMic =
+          pausedForRecording ||
+          playbackActive ||
+          useWakeWordStore.getState().pausedForRecording ||
+          useWakeWordStore.getState().playbackActive;
+        if (holdMic) {
           if (AndroidWakeWord.isRunning()) {
             await AndroidWakeWord.stopServiceSilent();
           }
-          AndroidWakeWord.silenceRecognitionUi();
-          setListening(false);
-          return;
-        }
-
-        // Permission prompts above are async, so re-read the live flag: a take
-        // may have started meanwhile and the FGS would steal its microphone.
-        if (useWakeWordStore.getState().pausedForRecording) {
+          AndroidWakeWord.restoreRecognitionUi();
           setListening(false);
           return;
         }
@@ -316,7 +316,7 @@ export function useWakeWordListener() {
       }
 
       // iOS / fallback path
-      if (enabled && !pausedForRecording) {
+      if (enabled && !pausedForRecording && !playbackActive) {
         void startInAppListening();
       } else {
         stopInAppListening('pause');
@@ -340,7 +340,11 @@ export function useWakeWordListener() {
         }
         return;
       }
-      if (state === 'active' && !useWakeWordStore.getState().pausedForRecording) {
+      if (
+        state === 'active' &&
+        !useWakeWordStore.getState().pausedForRecording &&
+        !useWakeWordStore.getState().playbackActive
+      ) {
         void startInAppListening();
       } else {
         stopInAppListening('pause');
@@ -356,5 +360,5 @@ export function useWakeWordListener() {
       // Do not stop FGS on unmount of provider remount — only when disabled.
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [enabled, hydrated, pausedForRecording, useNativeFgs]);
+  }, [enabled, hydrated, pausedForRecording, playbackActive, useNativeFgs]);
 }

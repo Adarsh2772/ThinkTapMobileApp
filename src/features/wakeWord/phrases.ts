@@ -16,7 +16,9 @@ const WAKE_PHRASES = [
   'think app',
   'start recording',
   'start record',
+  'start the recording',
   'hey think tap start',
+  'begin recording',
 ];
 
 /**

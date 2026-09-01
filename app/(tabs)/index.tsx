@@ -2,7 +2,6 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { Alert, Pressable, StyleSheet, Text, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
-import { AudioSavedModal } from '@/src/components/AudioSavedModal';
 import { MicButton } from '@/src/components/MicButton';
 import { ScreenHeader } from '@/src/components/ScreenHeader';
 import { useIdeaCapture } from '@/src/hooks/useIdeaCapture';
@@ -40,7 +39,6 @@ export default function HomeScreen() {
   const setCaptureStarting = useWakeWordStore((s) => s.setCaptureStarting);
   const lastTrigger = useRef(0);
 
-  const [saveModalVisible, setSaveModalVisible] = useState(false);
   const [organizing, setOrganizing] = useState(false);
   const [organizeStage, setOrganizeStage] = useState<ProcessingStage>('uploading');
   const [detectedLanguageName, setDetectedLanguageName] = useState<string | null>(null);
@@ -90,7 +88,6 @@ export default function HomeScreen() {
       try {
         await addIdea(localIdea);
         clearPending();
-        showToast('Recording saved');
       } catch (e) {
         const message = e instanceof Error ? e.message : 'Could not save this recording';
         showToast(message, 'error');
@@ -132,10 +129,9 @@ export default function HomeScreen() {
       if (!result) {
         const reason = getLastError() ?? 'Nothing was captured in this take.';
         showToast(reason, 'error');
-        Alert.alert('Recording stopped', reason);
         return;
       }
-      showToast('Recording stopped');
+      showToast('Your idea has been saved successfully');
       await announceRecordingStopped();
       const pending = {
         audioUri: result.uri,
@@ -144,7 +140,6 @@ export default function HomeScreen() {
         speechLocale: result.speechLocale,
       };
       setPending(pending);
-      setSaveModalVisible(true);
       void runOrganizeInBackground(pending);
     } finally {
       stoppingRef.current = false;
@@ -330,13 +325,6 @@ export default function HomeScreen() {
         </View>
       </View>
 
-      <AudioSavedModal
-        visible={saveModalVisible}
-        organizing={organizing}
-        stage={organizeStage}
-        detectedLanguageName={detectedLanguageName}
-        onClose={() => setSaveModalVisible(false)}
-      />
     </SafeAreaView>
   );
 }

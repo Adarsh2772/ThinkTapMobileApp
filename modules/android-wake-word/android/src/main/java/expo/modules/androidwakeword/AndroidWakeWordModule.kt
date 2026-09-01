@@ -33,9 +33,25 @@ class AndroidWakeWordModule : Module() {
 
     OnCreate {
       instance = this@AndroidWakeWordModule
+      try {
+        val ctx = appContext.reactContext ?: appContext.currentActivity
+        if (ctx != null) {
+          RecognitionAudioGuard.restore(ctx)
+        }
+      } catch (_: Exception) {
+        // React context may not be ready yet; service start also restores.
+      }
     }
 
     OnDestroy {
+      try {
+        val ctx = appContext.reactContext ?: appContext.currentActivity
+        if (ctx != null) {
+          RecognitionAudioGuard.restore(ctx)
+        }
+      } catch (_: Exception) {
+        // ignore
+      }
       if (instance === this@AndroidWakeWordModule) {
         instance = null
       }
@@ -86,7 +102,11 @@ class AndroidWakeWordModule : Module() {
     }
 
     Function("silenceRecognitionUi") {
-      RecognitionAudioGuard.mute(context)
+      RecognitionAudioGuard.swallowRecognizerCue(context)
+    }
+
+    Function("cancelRecognizerHaptic") {
+      RecognitionAudioGuard.cancelRecognizerHaptic(context)
     }
 
     Function("restoreRecognitionUi") {
@@ -95,6 +115,11 @@ class AndroidWakeWordModule : Module() {
 
     AsyncFunction("playRecordingStartCue") {
       RecognitionAudioGuard.playStartCue(context)
+      return@AsyncFunction true
+    }
+
+    AsyncFunction("playRecordingStopCue") {
+      RecognitionAudioGuard.playStopCue(context)
       return@AsyncFunction true
     }
 

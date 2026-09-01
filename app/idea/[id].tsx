@@ -65,6 +65,7 @@ export default function IdeaDetailScreen() {
   const idea = useIdeasStore((s) => (id ? s.ideas.find((item) => item.id === id) : undefined));
   const updateIdea = useIdeasStore((s) => s.updateIdea);
   const deleteIdea = useIdeasStore((s) => s.deleteIdea);
+  const touchIdea = useIdeasStore((s) => s.touchIdea);
   const [confirmDelete, setConfirmDelete] = useState(false);
   const knownLanguage = idea ? findLanguageByWhisperCode(idea.language) : undefined;
   const spoken = idea ? resolveSpokenLanguage(idea.language) : null;
@@ -82,6 +83,11 @@ export default function IdeaDetailScreen() {
     });
     return () => sub.remove();
   }, [router]);
+
+  const thoughtExists = Boolean(idea);
+  useEffect(() => {
+    if (id && thoughtExists) void touchIdea(id);
+  }, [id, thoughtExists, touchIdea]);
 
   if (!idea) {
     return (

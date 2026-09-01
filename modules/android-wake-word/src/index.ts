@@ -29,7 +29,9 @@ type AndroidWakeWordNativeModule = {
   consumePendingWake(): Promise<PendingWake>;
   silenceRecognitionUi(): void;
   restoreRecognitionUi(): void;
+  cancelRecognizerHaptic(): void;
   playRecordingStartCue(): Promise<boolean>;
+  playRecordingStopCue(): Promise<boolean>;
   addListener(
     eventName: string,
     listener: (event: Record<string, unknown>) => void,
@@ -131,10 +133,28 @@ export const AndroidWakeWord = {
     }
   },
 
+  cancelRecognizerHaptic(): void {
+    if (!Native) return;
+    try {
+      Native.cancelRecognizerHaptic();
+    } catch {
+      // ignore
+    }
+  },
+
   async playRecordingStartCue(): Promise<boolean> {
     if (!Native) return false;
     try {
       return Native.playRecordingStartCue();
+    } catch {
+      return false;
+    }
+  },
+
+  async playRecordingStopCue(): Promise<boolean> {
+    if (!Native) return false;
+    try {
+      return Native.playRecordingStopCue();
     } catch {
       return false;
     }

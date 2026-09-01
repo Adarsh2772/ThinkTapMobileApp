@@ -4,6 +4,7 @@ import { Platform } from 'react-native';
 import { resolveCaptureMode } from '@/src/features/capture/captureMode';
 import { useLanguageTranscript } from '@/src/hooks/useLanguageTranscript';
 import { useRecording } from '@/src/hooks/useRecording';
+import { useVoiceStopListener } from '@/src/hooks/useVoiceStopListener';
 import { persistRecording } from '@/src/services/audioStorage';
 import {
   abortLiveRecognition,
@@ -106,6 +107,15 @@ export function useIdeaCapture(options: { onCaptureFailed?: (message: string) =>
       onCaptureFailedRef.current?.(message);
     },
   });
+
+  // iOS audio-file takes still need a spoken Stop — the recorder owns the mic,
+  // so this listens in short bursts for the command only.
+  useVoiceStopListener(
+    audioOnly && Platform.OS !== 'android' && active && !paused && !stopping,
+    () => {
+      onVoiceStopRef.current?.();
+    },
+  );
 
   useEffect(() => {
     if (!active || paused) return;
@@ -290,7 +300,7 @@ export function useIdeaCapture(options: { onCaptureFailed?: (message: string) =>
     setVoiceStopHandler,
     setVoicePauseHandler,
     setVoiceResumeHandler,
-    supportsVoiceStop: !audioOnly,
+    supportsVoiceStop: !audioOnly || Platform.OS !== 'android',
     savesAudioFile: fileRecorder,
     captureMode: audioOnly ? ('audio-file' as const) : ('device' as const),
     liveTranscript: displayText,

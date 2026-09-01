@@ -25,5 +25,11 @@ export function resolveCaptureMode(preferSavedAudio: boolean): CaptureMode {
   if (!supportsAudioWithLiveTranscript()) {
     return 'audio-file';
   }
+  // Android 13+: SpeechRecognizer can persist the take while still hearing
+  // “stop recording”. Forcing expo-audio here owns the mic exclusively, so
+  // spoken start/stop never fire.
+  if (Platform.OS === 'android') {
+    return 'device';
+  }
   return preferSavedAudio ? 'audio-file' : 'device';
 }

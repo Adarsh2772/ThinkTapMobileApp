@@ -12,8 +12,10 @@ type WakeWordState = {
   pausedForRecording: boolean;
   /** True while a take is open, wherever the user navigates. */
   captureActive: boolean;
-  /** True from the moment a take is requested until it is open or has failed. */
+  /** True while a take is requested until it is open or has failed. */
   captureStarting: boolean;
+  /** True while the in-app player is playing a saved take — wake STT must release the speaker. */
+  playbackActive: boolean;
   available: boolean | null;
   lastHeard: string;
   /** Incremented when wake phrase is detected — Home consumes this to start recording. */
@@ -28,6 +30,7 @@ type WakeWordState = {
   setPausedForRecording: (paused: boolean) => void;
   setCaptureActive: (active: boolean) => void;
   setCaptureStarting: (starting: boolean) => void;
+  setPlaybackActive: (active: boolean) => void;
   setAvailable: (available: boolean) => void;
   setLastHeard: (text: string) => void;
   fireWakeTrigger: () => void;
@@ -39,6 +42,7 @@ export const useWakeWordStore = create<WakeWordState>((set, get) => ({
   pausedForRecording: false,
   captureActive: false,
   captureStarting: false,
+  playbackActive: false,
   available: null,
   lastHeard: '',
   triggerToken: 0,
@@ -75,6 +79,7 @@ export const useWakeWordStore = create<WakeWordState>((set, get) => ({
   setPausedForRecording: (pausedForRecording) => set({ pausedForRecording }),
   setCaptureActive: (captureActive) => set({ captureActive }),
   setCaptureStarting: (captureStarting) => set({ captureStarting }),
+  setPlaybackActive: (playbackActive) => set({ playbackActive }),
   setAvailable: (available) => set({ available }),
   setLastHeard: (text) => set({ lastHeard: text }),
 

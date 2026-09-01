@@ -394,7 +394,6 @@ export function useLanguageTranscript({
     if (code !== 'no-speech' && code !== 'speech-timeout') {
       console.warn('Language transcript error', code);
     }
-    // A silence gap must not leave the mic deaf, or the next sentence is lost.
     scheduleRestart(150);
   });
 

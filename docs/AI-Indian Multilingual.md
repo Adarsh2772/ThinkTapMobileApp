@@ -1,5 +1,9 @@
 # Indian Multilingual Speech-to-Text Implementation
 
+**First-version product contract:** this STT output **is** the Human Signal — the raw transcript stored on the thought and the only search index. Do not send it through a chatbot, translation, or rewrite step before save. See `docs/ThinkTap_MVP_V1.md`.
+
+---
+
 I have an existing React Native Expo application.
 
 I want to implement a **multilingual Indian Speech-to-Text feature**.

@@ -22,6 +22,14 @@ export async function announceRecordingStarted(): Promise<void> {
 }
 
 export async function announceRecordingStopped(): Promise<void> {
+  if (Platform.OS === 'android' && AndroidWakeWord.isSupported()) {
+    try {
+      const played = await AndroidWakeWord.playRecordingStopCue();
+      if (played) return;
+    } catch {
+      // fall through to JS haptic
+    }
+  }
   try {
     Vibration.vibrate([0, 40, 60, 40]);
   } catch {

@@ -30,20 +30,21 @@ export function WakeWordProvider({ children }: { children: ReactNode }) {
 function usePauseWakeWhileCapturing() {
   const captureActive = useWakeWordStore((s) => s.captureActive);
   const captureStarting = useWakeWordStore((s) => s.captureStarting);
+  const playbackActive = useWakeWordStore((s) => s.playbackActive);
   const pausedForRecording = useWakeWordStore((s) => s.pausedForRecording);
   const setPausedForRecording = useWakeWordStore((s) => s.setPausedForRecording);
 
-  const captureBusy = captureActive || captureStarting;
+  const holdMic = captureActive || captureStarting || playbackActive;
 
   useEffect(() => {
-    if (captureBusy) {
+    if (holdMic) {
       setPausedForRecording(true);
       return;
     }
     if (!pausedForRecording) return;
     const timer = setTimeout(() => setPausedForRecording(false), 4000);
     return () => clearTimeout(timer);
-  }, [captureBusy, pausedForRecording, setPausedForRecording]);
+  }, [holdMic, pausedForRecording, setPausedForRecording]);
 }
 
 function useNavigateHomeOnWake() {

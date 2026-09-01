@@ -1,6 +1,5 @@
 import { ExpoSpeechRecognitionModule } from 'expo-speech-recognition';
 import { Platform } from 'react-native';
-import { AndroidWakeWord } from 'android-wake-word';
 
 import { ensureRecordingsDirectory } from '@/src/services/audioStorage';
 
@@ -189,8 +188,6 @@ export async function startLiveRecognition(options: LiveRecognitionOptions): Pro
       };
     }
   }
-
-  AndroidWakeWord.silenceRecognitionUi();
 
   ExpoSpeechRecognitionModule.start({
     lang,

@@ -2,6 +2,8 @@
 
 Thin Node/Express proxy so Groq / OpenAI API keys stay off the Expo app binary.
 
+**This first version:** the proxy’s job is **raw speech-to-text** (Human Signal). The mobile app stores that transcript as the source of truth and searches it. Title/summary/enrichment endpoints may exist for later builds — they must never overwrite `transcript`. See `docs/ThinkTap_MVP_V1.md`.
+
 ## Setup
 
 ```bash
