@@ -1,6 +1,6 @@
 import { useSpeechRecognitionEvent } from 'expo-speech-recognition';
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { Platform } from 'react-native';
+import { AppState, Platform } from 'react-native';
 
 import {
   matchesPausePhrase,
@@ -420,6 +420,29 @@ export function useLanguageTranscript({
     notifyEnded();
     return undefined;
   }, [enabled, speechLocale, startListening, stopListening]);
+
+  // While minimized the native service owns the mic. When we return, start
+  // live transcription again so spoken stop and the transcript keep working.
+  useEffect(() => {
+    const sub = AppState.addEventListener('change', (state) => {
+      if (state === 'background') {
+        clearRestart();
+        return;
+      }
+      if (
+        state === 'active' &&
+        enabledRef.current &&
+        capturingRef.current &&
+        !stopFiredRef.current &&
+        !fatalRef.current &&
+        !nativeActiveRef.current &&
+        !startingRef.current
+      ) {
+        scheduleRestart(700);
+      }
+    });
+    return () => sub.remove();
+  }, []);
 
   const reset = useCallback(() => {
     finalsRef.current = [];

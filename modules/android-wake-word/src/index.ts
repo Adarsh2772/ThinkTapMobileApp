@@ -12,6 +12,7 @@ export type PendingWake = { transcript: string; at: number } | null;
 
 type WakeEventMap = {
   onWakeDetected: WakePayload;
+  onStopDetected: WakePayload;
   onPartialResult: PartialPayload;
   onError: ErrorPayload;
   onListeningChange: ListeningPayload;
@@ -26,7 +27,9 @@ type AndroidWakeWordNativeModule = {
   stopServiceSilent(): Promise<boolean>;
   pauseService(): Promise<boolean>;
   resumeService(): Promise<boolean>;
+  listenForStop(): Promise<boolean>;
   consumePendingWake(): Promise<PendingWake>;
+  consumePendingStop(): Promise<PendingWake>;
   silenceRecognitionUi(): void;
   restoreRecognitionUi(): void;
   cancelRecognizerHaptic(): void;
@@ -110,9 +113,29 @@ export const AndroidWakeWord = {
     return Native.resumeService();
   },
 
+  async listenForStop(): Promise<boolean> {
+    if (!Native) return false;
+    // Never start a microphone FGS from the background (Android 14+ throws).
+    if (!Native.isRunning()) return false;
+    try {
+      return Native.listenForStop();
+    } catch {
+      return false;
+    }
+  },
+
   async consumePendingWake(): Promise<PendingWake> {
     if (!Native) return null;
     return Native.consumePendingWake();
+  },
+
+  async consumePendingStop(): Promise<PendingWake> {
+    if (!Native) return null;
+    try {
+      return Native.consumePendingStop();
+    } catch {
+      return null;
+    }
   },
 
   silenceRecognitionUi(): void {

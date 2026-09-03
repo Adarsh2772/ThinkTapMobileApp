@@ -29,7 +29,7 @@ class AndroidWakeWordModule : Module() {
   override fun definition() = ModuleDefinition {
     Name("AndroidWakeWord")
 
-    Events("onWakeDetected", "onPartialResult", "onError", "onListeningChange")
+    Events("onWakeDetected", "onStopDetected", "onPartialResult", "onError", "onListeningChange")
 
     OnCreate {
       instance = this@AndroidWakeWordModule
@@ -141,6 +141,15 @@ class AndroidWakeWordModule : Module() {
       return@AsyncFunction true
     }
 
+    AsyncFunction("listenForStop") {
+      if (!WakeWordForegroundService.isRunning) return@AsyncFunction false
+      val intent = Intent(context, WakeWordForegroundService::class.java).apply {
+        action = WakeWordForegroundService.ACTION_LISTEN_STOP
+      }
+      context.startService(intent)
+      return@AsyncFunction true
+    }
+
     AsyncFunction("consumePendingWake") {
       val prefs = context.getSharedPreferences("thinktap_wake", Context.MODE_PRIVATE)
       val pending = prefs.getBoolean("pending", false)
@@ -149,7 +158,33 @@ class AndroidWakeWordModule : Module() {
       }
       val transcript = prefs.getString("transcript", "") ?: ""
       val at = prefs.getLong("at", 0L)
-      prefs.edit().clear().apply()
+      prefs.edit()
+        .remove("pending")
+        .remove("transcript")
+        .remove("at")
+        .apply()
+      if (System.currentTimeMillis() - at > 30_000) {
+        return@AsyncFunction null
+      }
+      return@AsyncFunction mapOf(
+        "transcript" to transcript,
+        "at" to at,
+      )
+    }
+
+    AsyncFunction("consumePendingStop") {
+      val prefs = context.getSharedPreferences("thinktap_wake", Context.MODE_PRIVATE)
+      val pending = prefs.getBoolean("pendingStop", false)
+      if (!pending) {
+        return@AsyncFunction null
+      }
+      val transcript = prefs.getString("stopTranscript", "") ?: ""
+      val at = prefs.getLong("stopAt", 0L)
+      prefs.edit()
+        .remove("pendingStop")
+        .remove("stopTranscript")
+        .remove("stopAt")
+        .apply()
       if (System.currentTimeMillis() - at > 30_000) {
         return@AsyncFunction null
       }

@@ -4,6 +4,7 @@ import { create } from 'zustand';
 const WAKE_KEY = '@thinktap/wake_word_enabled';
 const WAKE_ONBOARDING_KEY = '@thinktap/wake_word_onboarding_done';
 let lastFireAt = 0;
+let lastStopAt = 0;
 
 type WakeWordState = {
   enabled: boolean;
@@ -20,6 +21,10 @@ type WakeWordState = {
   lastHeard: string;
   /** Incremented when wake phrase is detected — Home consumes this to start recording. */
   triggerToken: number;
+  /** Incremented when a spoken stop is heard while capturing in the background. */
+  stopToken: number;
+  /** Epoch ms of the last wake trigger — Home ignores stale tokens after 30s. */
+  triggerAt: number;
   /** False until the first-launch Hey Think Tap permission prompt is answered. */
   onboardingDone: boolean;
   hydrated: boolean;
@@ -34,6 +39,7 @@ type WakeWordState = {
   setAvailable: (available: boolean) => void;
   setLastHeard: (text: string) => void;
   fireWakeTrigger: () => void;
+  fireStopTrigger: () => void;
 };
 
 export const useWakeWordStore = create<WakeWordState>((set, get) => ({
@@ -46,6 +52,8 @@ export const useWakeWordStore = create<WakeWordState>((set, get) => ({
   available: null,
   lastHeard: '',
   triggerToken: 0,
+  stopToken: 0,
+  triggerAt: 0,
   onboardingDone: false,
   hydrated: false,
 
@@ -87,6 +95,18 @@ export const useWakeWordStore = create<WakeWordState>((set, get) => ({
     const now = Date.now();
     if (now - lastFireAt < 3000) return;
     lastFireAt = now;
-    set({ triggerToken: get().triggerToken + 1, pausedForRecording: true });
+    set({
+      triggerToken: get().triggerToken + 1,
+      pausedForRecording: true,
+      captureStarting: true,
+      triggerAt: now,
+    });
+  },
+
+  fireStopTrigger: () => {
+    const now = Date.now();
+    if (now - lastStopAt < 2000) return;
+    lastStopAt = now;
+    set({ stopToken: get().stopToken + 1 });
   },
 }));

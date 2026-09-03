@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { Platform } from 'react-native';
+import { AppState, Platform } from 'react-native';
 
 import { resolveCaptureMode } from '@/src/features/capture/captureMode';
 import { useLanguageTranscript } from '@/src/hooks/useLanguageTranscript';
@@ -50,6 +50,7 @@ export function useIdeaCapture(options: { onCaptureFailed?: (message: string) =>
 
   const startedAtRef = useRef(0);
   const pausedAccumMsRef = useRef(0);
+  const backgroundHoldRef = useRef(false);
   const activeRef = useRef(false);
   const pausedRef = useRef(false);
   const lastErrorRef = useRef<string | null>(null);
@@ -120,6 +121,10 @@ export function useIdeaCapture(options: { onCaptureFailed?: (message: string) =>
   useEffect(() => {
     if (!active || paused) return;
     const tick = () => {
+      if (backgroundHoldRef.current) {
+        setDurationSec(Math.max(0, Math.floor(pausedAccumMsRef.current / 1000)));
+        return;
+      }
       const live = Date.now() - startedAtRef.current;
       setDurationSec(Math.max(0, Math.floor((pausedAccumMsRef.current + live) / 1000)));
     };
@@ -127,6 +132,24 @@ export function useIdeaCapture(options: { onCaptureFailed?: (message: string) =>
     const id = setInterval(tick, 250);
     return () => clearInterval(id);
   }, [active, paused]);
+
+  // Time spent in another app or on the lock screen is not recorded audio.
+  useEffect(() => {
+    const sub = AppState.addEventListener('change', (state) => {
+      if (!activeRef.current || pausedRef.current) return;
+      if (state !== 'active') {
+        if (backgroundHoldRef.current) return;
+        pausedAccumMsRef.current += Date.now() - startedAtRef.current;
+        backgroundHoldRef.current = true;
+        setDurationSec(Math.max(0, Math.floor(pausedAccumMsRef.current / 1000)));
+        return;
+      }
+      if (!backgroundHoldRef.current) return;
+      startedAtRef.current = Date.now();
+      backgroundHoldRef.current = false;
+    });
+    return () => sub.remove();
+  }, []);
 
   const start = useCallback(async () => {
     if (activeRef.current) return true;
@@ -154,6 +177,7 @@ export function useIdeaCapture(options: { onCaptureFailed?: (message: string) =>
     lastErrorRef.current = null;
     setError(null);
     pausedAccumMsRef.current = 0;
+    backgroundHoldRef.current = false;
     startedAtRef.current = Date.now();
     setDurationSec(0);
     pausedRef.current = false;
@@ -165,7 +189,10 @@ export function useIdeaCapture(options: { onCaptureFailed?: (message: string) =>
 
   const pause = useCallback(async () => {
     if (!activeRef.current || pausedRef.current) return false;
-    pausedAccumMsRef.current += Date.now() - startedAtRef.current;
+    if (!backgroundHoldRef.current) {
+      pausedAccumMsRef.current += Date.now() - startedAtRef.current;
+    }
+    backgroundHoldRef.current = false;
     pausedRef.current = true;
     setPaused(true);
     if (fileRecorder) void audio.pause();
@@ -185,7 +212,7 @@ export function useIdeaCapture(options: { onCaptureFailed?: (message: string) =>
     if (!activeRef.current) return null;
     setStopping(true);
     try {
-      if (!pausedRef.current) {
+      if (!pausedRef.current && !backgroundHoldRef.current) {
         pausedAccumMsRef.current += Date.now() - startedAtRef.current;
       }
       const seconds = Math.max(1, Math.round(pausedAccumMsRef.current / 1000));
@@ -211,6 +238,7 @@ export function useIdeaCapture(options: { onCaptureFailed?: (message: string) =>
       activeRef.current = false;
       pausedRef.current = false;
       pausedAccumMsRef.current = 0;
+      backgroundHoldRef.current = false;
       setActive(false);
       setPaused(false);
       setDurationSec(0);
@@ -254,6 +282,7 @@ export function useIdeaCapture(options: { onCaptureFailed?: (message: string) =>
     activeRef.current = false;
     pausedRef.current = false;
     pausedAccumMsRef.current = 0;
+    backgroundHoldRef.current = false;
     setActive(false);
     setPaused(false);
     setDurationSec(0);

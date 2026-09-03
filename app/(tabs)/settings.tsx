@@ -131,7 +131,7 @@ export default function SettingsScreen() {
           </View>
           <Text style={styles.hint}>
             {Platform.OS === 'android'
-              ? 'Say “Hey Think Tap” or “start recording” to begin, and “stop recording” to finish. Listening stays quiet — the phone only vibrates when a take starts or stops. Turn this off when you don’t need it to save battery.'
+              ? 'Say “Hey Think Tap” or “start recording” to begin, and “stop recording” to finish — including when the app is minimized. Listening stays quiet — the phone only vibrates when a take starts or stops. Turn this off when you don’t need it to save battery.'
               : 'When on (app open in the foreground), say “Hey Think Tap” or “start recording” to begin a capture.'}
             {wakeEnabled
               ? wakeAvailable === false

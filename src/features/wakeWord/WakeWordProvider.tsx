@@ -33,6 +33,7 @@ function usePauseWakeWhileCapturing() {
   const playbackActive = useWakeWordStore((s) => s.playbackActive);
   const pausedForRecording = useWakeWordStore((s) => s.pausedForRecording);
   const setPausedForRecording = useWakeWordStore((s) => s.setPausedForRecording);
+  const setCaptureStarting = useWakeWordStore((s) => s.setCaptureStarting);
 
   const holdMic = captureActive || captureStarting || playbackActive;
 
@@ -45,6 +46,14 @@ function usePauseWakeWhileCapturing() {
     const timer = setTimeout(() => setPausedForRecording(false), 4000);
     return () => clearTimeout(timer);
   }, [holdMic, pausedForRecording, setPausedForRecording]);
+
+  // A wake heard while minimized sets captureStarting. If the user never
+  // returns, drop it so listening can resume instead of staying paused forever.
+  useEffect(() => {
+    if (!captureStarting || captureActive) return;
+    const timer = setTimeout(() => setCaptureStarting(false), 30_000);
+    return () => clearTimeout(timer);
+  }, [captureStarting, captureActive, setCaptureStarting]);
 }
 
 function useNavigateHomeOnWake() {

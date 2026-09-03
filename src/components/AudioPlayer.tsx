@@ -29,8 +29,8 @@ async function preparePlaybackAudioMode() {
 async function releaseWakeForPlayback() {
   useWakeWordStore.getState().setPlaybackActive(true);
   try {
-    if (AndroidWakeWord.isSupported() && AndroidWakeWord.isRunning()) {
-      await AndroidWakeWord.stopServiceSilent();
+    if (AndroidWakeWord.isSupported() && AndroidWakeWord.isRunning() && !AndroidWakeWord.isPaused()) {
+      await AndroidWakeWord.pauseService();
     }
   } catch {
     // still restore volumes

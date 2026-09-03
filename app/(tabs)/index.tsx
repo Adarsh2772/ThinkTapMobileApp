@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { Alert, Pressable, StyleSheet, Text, View } from 'react-native';
+import { Alert, AppState, Pressable, StyleSheet, Text, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { MicButton } from '@/src/components/MicButton';
@@ -35,9 +35,18 @@ export default function HomeScreen() {
   const tx = useSettingsStore((s) => s.tx);
   const drawer = useDrawerOptional();
   const triggerToken = useWakeWordStore((s) => s.triggerToken);
+  const triggerAt = useWakeWordStore((s) => s.triggerAt);
+  const stopToken = useWakeWordStore((s) => s.stopToken);
   const setPausedForRecording = useWakeWordStore((s) => s.setPausedForRecording);
   const setCaptureStarting = useWakeWordStore((s) => s.setCaptureStarting);
   const lastTrigger = useRef(0);
+  const lastStop = useRef(0);
+  const [appState, setAppState] = useState(AppState.currentState);
+
+  useEffect(() => {
+    const sub = AppState.addEventListener('change', setAppState);
+    return () => sub.remove();
+  }, []);
 
   const [organizing, setOrganizing] = useState(false);
   const [organizeStage, setOrganizeStage] = useState<ProcessingStage>('uploading');
@@ -101,7 +110,7 @@ export default function HomeScreen() {
           setOrganizeStage(stage);
         });
         if (patch && (patch.transcript || patch.title)) {
-          if (patch.language) {
+          if (patch.language && patch.transcript) {
             setDetectedLanguageName(resolveSpokenLanguage(patch.language).name);
           }
           setOrganizeStage('done');
@@ -205,11 +214,17 @@ export default function HomeScreen() {
     onResumePress,
   ]);
 
-  // "Hey Think Tap" / "start recording" → start capture once the wake mic is free.
+  // "Hey Think Tap" / "start recording" → start capture once the wake mic is free
+  // and the app is in the foreground (SpeechRecognizer cannot start from background).
   // WakeWordProvider already routes to Home for this token.
   useEffect(() => {
     if (!triggerToken || triggerToken === lastTrigger.current) return;
+    if (appState !== 'active') return;
     lastTrigger.current = triggerToken;
+    if (Date.now() - triggerAt > 30_000) {
+      setCaptureStarting(false);
+      return;
+    }
     if (isRecording || status === 'stopping' || stoppingRef.current) return;
 
     // Holds the wake listener off for the whole handoff. Releasing the mic
@@ -231,7 +246,18 @@ export default function HomeScreen() {
         setCaptureStarting(false);
       }
     })();
-  }, [triggerToken, isRecording, status, start, setCaptureStarting]);
+  }, [triggerToken, triggerAt, appState, isRecording, status, start, setCaptureStarting]);
+
+  // Spoken "stop recording" from the native service (app minimized) or a
+  // pending stop consumed when the activity became visible again.
+  useEffect(() => {
+    if (!stopToken || stopToken === lastStop.current) return;
+    lastStop.current = stopToken;
+    if (!isRecording && status !== 'stopping') return;
+    if (stoppingRef.current) return;
+    showToast('Heard “Stop” — finishing recording');
+    void finishRecording();
+  }, [stopToken, isRecording, status, finishRecording]);
 
   const onMicPress = async () => {
     if (stoppingRef.current || status === 'stopping') return;

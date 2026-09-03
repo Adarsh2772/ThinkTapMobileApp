@@ -7,11 +7,13 @@ import { useEffect, useRef } from 'react';
 import { AppState, PermissionsAndroid, Platform } from 'react-native';
 
 import { matchesWakePhrase } from '@/src/features/wakeWord/phrases';
+import { abortLiveRecognition } from '@/src/services/languageTranscriptService';
 import { useWakeWordStore } from '@/src/store/wakeWordStore';
 
 /**
  * Wake-word orchestration:
- * - Android: Foreground Service (works minimized → opens app → record)
+ * - Android: Foreground Service (works minimized — start opens the app, stop
+ *   is heard by the native service even when the activity is not visible)
  * - iOS / fallback: in-app expo-speech-recognition (foreground only)
  */
 function canListenInApp(): boolean {
@@ -61,6 +63,7 @@ export function useWakeWordListener() {
   const setAvailable = useWakeWordStore((s) => s.setAvailable);
   const setLastHeard = useWakeWordStore((s) => s.setLastHeard);
   const fireWakeTrigger = useWakeWordStore((s) => s.fireWakeTrigger);
+  const fireStopTrigger = useWakeWordStore((s) => s.fireStopTrigger);
 
   const useNativeFgs = Platform.OS === 'android' && AndroidWakeWord.isSupported();
 
@@ -233,6 +236,11 @@ export function useWakeWordListener() {
         // replays it and opens a phantom take the user never asked for.
         void AndroidWakeWord.consumePendingWake();
       }),
+      AndroidWakeWord.addListener('onStopDetected', (event) => {
+        setLastHeard(event.transcript);
+        fireStopTrigger();
+        void AndroidWakeWord.consumePendingStop();
+      }),
       AndroidWakeWord.addListener('onPartialResult', (event) => {
         if (event.transcript) setLastHeard(event.transcript);
       }),
@@ -250,7 +258,7 @@ export function useWakeWordListener() {
     return () => {
       subs.forEach((s) => s.remove());
     };
-  }, [useNativeFgs, hydrated, setLastHeard, fireWakeTrigger, setListening, setAvailable]);
+  }, [useNativeFgs, hydrated, setLastHeard, fireWakeTrigger, fireStopTrigger, setListening, setAvailable]);
 
   // Sync service lifecycle with enabled / recording pause
   useEffect(() => {
@@ -279,16 +287,17 @@ export function useWakeWordListener() {
           console.warn('Notification permission denied — wake service may be limited on Android 13+');
         }
 
-        // While capturing or playing a take, fully stop the FGS so it cannot
-        // vibrate, steal audio focus, or cut playback.
+        // While capturing or playing a take, pause the FGS (do not stop it).
+        // Stopping kills the process when the app is minimized, so spoken
+        // stop cannot run. Pause keeps the notification and frees the mic.
         const holdMic =
           pausedForRecording ||
           playbackActive ||
           useWakeWordStore.getState().pausedForRecording ||
           useWakeWordStore.getState().playbackActive;
         if (holdMic) {
-          if (AndroidWakeWord.isRunning()) {
-            await AndroidWakeWord.stopServiceSilent();
+          if (AndroidWakeWord.isRunning() && !AndroidWakeWord.isPaused()) {
+            await AndroidWakeWord.pauseService();
           }
           AndroidWakeWord.restoreRecognitionUi();
           setListening(false);
@@ -329,8 +338,24 @@ export function useWakeWordListener() {
     const sub = AppState.addEventListener('change', (state) => {
       if (!useWakeWordStore.getState().enabled) return;
       if (useNativeFgs) {
-        // FGS keeps listening in background; on resume, pick up pending wake.
+        const capturing = useWakeWordStore.getState().captureActive;
+        if (state === 'background' && capturing) {
+          // Activity-bound JS STT dies when minimized. Native FGS hears stop.
+          abortLiveRecognition();
+          void AndroidWakeWord.listenForStop();
+          return;
+        }
         if (state === 'active') {
+          if (capturing) {
+            // Give the mic back to live transcription.
+            void AndroidWakeWord.pauseService();
+          }
+          void AndroidWakeWord.consumePendingStop().then((pending) => {
+            if (pending?.transcript) {
+              setLastHeard(pending.transcript);
+              fireStopTrigger();
+            }
+          });
           void AndroidWakeWord.consumePendingWake().then((pending) => {
             if (pending?.transcript) {
               setLastHeard(pending.transcript);

@@ -20,6 +20,7 @@ import {
     categoryColor,
     colors,
     fonts,
+    normalizeCategory,
     radii,
     spacing,
     typography,
@@ -41,7 +42,7 @@ export default function IdeasScreen() {
       .filter((idea) => idea.userId === user.id)
       .sort((a, b) => b.createdAt.localeCompare(a.createdAt));
     if (category === 'All') return all;
-    return all.filter((idea) => idea.category === category);
+    return all.filter((idea) => normalizeCategory(idea.category) === category);
   }, [user, allIdeas, category]);
 
   return (

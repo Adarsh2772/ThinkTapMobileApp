@@ -12,6 +12,7 @@ import {
   type SpokenLanguage,
 } from '@/src/i18n/languages';
 import { useAiConfigStore } from '@/src/store/aiConfigStore';
+import { normalizeCategory } from '@/src/theme/tokens';
 import type { AiEnrichment } from '@/src/types';
 
 export type EnrichmentResult = AiEnrichment & {
@@ -22,13 +23,74 @@ export type EnrichmentResult = AiEnrichment & {
 export const MAX_STT_UPLOAD_BYTES = 25 * 1024 * 1024;
 
 const CATEGORY_HINTS: { category: string; keywords: string[] }[] = [
-  { category: 'Movies', keywords: ['movie', 'film', 'scene', 'director', 'script', 'cinema'] },
-  { category: 'Music', keywords: ['music', 'song', 'beat', 'melody', 'drum', 'bass', 'rain'] },
-  { category: 'Business', keywords: ['business', 'startup', 'app', 'market', 'customer', 'product'] },
-  { category: 'Design', keywords: ['design', 'poster', 'ui', 'brand', 'visual', 'layout'] },
-  { category: 'Books', keywords: ['book', 'novel', 'chapter', 'story', 'character'] },
-  { category: 'Scripts', keywords: ['dialogue', 'screenplay', 'act', 'monologue'] },
-  { category: 'Songs', keywords: ['lyrics', 'verse', 'chorus', 'rap'] },
+  {
+    category: 'Movies',
+    keywords: [
+      'movie',
+      'movies',
+      'film',
+      'films',
+      'cinema',
+      'hollywood',
+      'bollywood',
+      'actor',
+      'actress',
+      'director',
+      'trailer',
+      'netflix',
+      'sequel',
+      'plot',
+      'watching',
+      'फिल्म',
+      'मूवी',
+      'चित्रपट',
+    ],
+  },
+  {
+    category: 'Songs',
+    keywords: [
+      'song',
+      'songs',
+      'lyrics',
+      'verse',
+      'chorus',
+      'rap',
+      'singer',
+      'karaoke',
+      'गाना',
+      'गीत',
+    ],
+  },
+  {
+    category: 'Music',
+    keywords: ['music', 'beat', 'melody', 'drum', 'bass', 'album', 'instrument', 'संगीत'],
+  },
+  {
+    category: 'Books',
+    keywords: ['book', 'books', 'novel', 'chapter', 'author', 'reading', 'किताब', 'पुस्तक'],
+  },
+  {
+    category: 'Scripts',
+    keywords: ['dialogue', 'screenplay', 'monologue', 'script', 'screen play'],
+  },
+  {
+    category: 'Design',
+    keywords: ['design', 'poster', 'ui', 'brand', 'visual', 'layout', 'figma'],
+  },
+  {
+    category: 'Business',
+    keywords: [
+      'business',
+      'startup',
+      'customer',
+      'revenue',
+      'meeting',
+      'office',
+      'client',
+      'sales',
+      'investor',
+    ],
+  },
 ];
 
 const MOCK_BY_LANGUAGE: Record<
@@ -113,10 +175,64 @@ const MOCK_BY_LANGUAGE: Record<
 
 function guessCategory(text: string): string {
   const lower = text.toLowerCase();
+  let best = 'Business';
+  let bestScore = 0;
   for (const hint of CATEGORY_HINTS) {
-    if (hint.keywords.some((k) => lower.includes(k))) return hint.category;
+    const score = hint.keywords.reduce((n, k) => n + (lower.includes(k) ? 1 : 0), 0);
+    if (score > bestScore) {
+      bestScore = score;
+      best = hint.category;
+    }
   }
-  return 'Business';
+  return normalizeCategory(bestScore > 0 ? best : 'Business');
+}
+
+/**
+ * Whisper often invents Korean / “thanks for watching” on silence or noise.
+ * Those must not become the saved transcript or detected language.
+ */
+export function looksLikeWhisperHallucination(
+  text: string,
+  language?: string | null,
+): boolean {
+  const t = text.replace(/\s+/g, ' ').trim();
+  if (!t) return true;
+
+  const letters = t.replace(/[\s\d.,!?'"“”‘’\-—]/g, '');
+  if (!letters) return true;
+
+  const hangul = (t.match(/[\uAC00-\uD7A3]/g) ?? []).length;
+  if (hangul / Math.max(letters.length, 1) >= 0.35) return true;
+
+  const lang = (language ?? '').toLowerCase();
+  if (lang === 'ko' || lang === 'korean' || lang === 'nn' || lang === 'no') return true;
+
+  const lower = t.toLowerCase();
+  const canned = [
+    'thank you for watching',
+    'thanks for watching',
+    'thanks for listening',
+    'please subscribe',
+    'subscribe to',
+    'mbc news',
+    '시청해 주셔서',
+    '구독',
+  ];
+  if (canned.some((p) => lower.includes(p))) return true;
+
+  return false;
+}
+
+export function emptySpeechEnrichment(): EnrichmentResult {
+  return {
+    transcript: '',
+    title: 'Voice note',
+    category: 'Business',
+    summary: 'Your recording was saved. No speech was detected in this take.',
+    aiStory: null,
+    detectedLanguage: '',
+    source: 'demo',
+  };
 }
 
 function titleFromTranscript(transcript: string): string {
@@ -395,11 +511,21 @@ async function whisperTranscribe(
   }
 
   try {
-    const json = JSON.parse(uploadResult.body) as { text?: string; language?: string };
-    return {
-      text: cleanTranscript(json.text ?? ''),
-      language: json.language,
+    const json = JSON.parse(uploadResult.body) as {
+      text?: string;
+      language?: string;
+      segments?: Array<{ no_speech_prob?: number; text?: string }>;
     };
+    const text = cleanTranscript(json.text ?? '');
+    const language = json.language;
+    const segments = json.segments ?? [];
+    const noSpeech =
+      segments.length > 0 &&
+      segments.every((s) => (s.no_speech_prob ?? 0) >= 0.7 && !cleanTranscript(s.text ?? ''));
+    if (noSpeech || looksLikeWhisperHallucination(text, language)) {
+      return { text: '', language: undefined };
+    }
+    return { text, language };
   } catch {
     throw new Error(`${provider.name} returned an invalid transcription response`);
   }
@@ -446,14 +572,14 @@ async function enrichViaBackend(
     throw new Error(json.error);
   }
   const transcript = cleanTranscript(json.transcript ?? '');
-  if (!transcript) {
+  if (!transcript || looksLikeWhisperHallucination(transcript, json.detectedLanguage)) {
     throw new Error('No speech detected in this recording. Try speaking more clearly.');
   }
 
   return {
     transcript,
     title: preferSameScript(transcript, json.title) || titleFromTranscript(transcript),
-    category: json.category || guessCategory(transcript),
+    category: normalizeCategory(json.category || guessCategory(transcript)),
     summary: preferSameScript(transcript, json.summary) || summaryFromTranscript(transcript),
     aiStory:
       preferSameScript(transcript, json.aiStory) ||
@@ -653,6 +779,7 @@ Copy the transcript into "transcript" EXACTLY. Do not translate. Do not translit
 Write title, summary, and aiStory in the SAME language and script as the transcript.
 If the transcript mixes Hindi/Marathi with English, keep that mix.
 Keep category in English from: Movies, Songs, Books, Business, Scripts, Design, Music.
+Use Movies for films, cinema, actors, trailers, or watching a movie. Use Songs for lyrics or singing. Use Business only when the thought is clearly about work, a company, sales, or a startup. Do not default to Business when another category fits.
 Title: max 8 words. Summary: 1-2 sentences from the transcript only.
 Return JSON: { "transcript": string, "title": string, "category": string, "summary": string, "aiStory": string }`,
         },
@@ -692,7 +819,7 @@ Return JSON: { "transcript": string, "title": string, "category": string, "summa
   return {
     transcript,
     title,
-    category: parsed.category || guessCategory(transcript),
+    category: normalizeCategory(parsed.category || guessCategory(transcript)),
     summary,
     aiStory: preferSameScript(transcript, parsed.aiStory) || summary,
     detectedLanguage: targetLang.code,

@@ -20,11 +20,12 @@ import android.util.Log
 import androidx.core.app.NotificationCompat
 
 /**
- * Foreground microphone service that listens for "Hey Think Tap" (and variants)
- * while the app is minimized. On match: brings Think Tap to the foreground.
+ * Foreground microphone service that listens for start/stop phrases while the
+ * app is minimized. Start phrases bring Think Tap forward so JS can record.
+ * Stop phrases are honoured even when the activity is not visible.
  *
  * Designed to avoid:
- * - Constant recognition-start beeps (mute system ding + longer sessions)
+ * - Constant recognition-start beeps (longer sessions, fewer restarts)
  * - Battery / hang from tight restart loops
  * - Notification sounds on each restart
  */
@@ -33,23 +34,29 @@ class WakeWordForegroundService : Service() {
     const val TAG = "ThinkTapWakeWord"
     /** New silent channel — old channel may have been created with sound on some OEMs. */
     const val CHANNEL_ID = "thinktap_wake_word_v3_silent"
+    const val ALERT_CHANNEL_ID = "thinktap_wake_alert_v1"
     const val NOTIFICATION_ID = 7101
+    const val ALERT_NOTIFICATION_ID = 7102
 
     const val ACTION_START = "expo.modules.androidwakeword.START"
     const val ACTION_STOP = "expo.modules.androidwakeword.STOP"
     const val ACTION_PAUSE = "expo.modules.androidwakeword.PAUSE"
     const val ACTION_RESUME = "expo.modules.androidwakeword.RESUME"
+    const val ACTION_LISTEN_STOP = "expo.modules.androidwakeword.LISTEN_STOP"
 
     const val EXTRA_WAKE_TRIGGERED = "wakeWordTriggered"
     const val EXTRA_WAKE_TRANSCRIPT = "wakeTranscript"
     const val EXTRA_KEEP_SILENT = "keepSilent"
 
+    const val MODE_WAKE = "wake"
+    const val MODE_STOP = "stop"
+
     /** Minimum gap between startListening calls. */
-    private const val MIN_START_INTERVAL_MS = 2200L
+    private const val MIN_START_INTERVAL_MS = 1000L
     /** After idle/no-match, wait before listening again. */
-    private const val RESTART_IDLE_MS = 4000L
+    private const val RESTART_IDLE_MS = 700L
     /** After client/busy errors. */
-    private const val RESTART_ERROR_MS = 3500L
+    private const val RESTART_ERROR_MS = 1800L
     /** After permission / unavailable. */
     private const val RESTART_HARD_MS = 8000L
 
@@ -59,6 +66,10 @@ class WakeWordForegroundService : Service() {
 
     @Volatile
     var isPaused: Boolean = false
+      private set
+
+    @Volatile
+    var listenMode: String = MODE_WAKE
       private set
 
     private val WAKE_PHRASES = listOf(
@@ -83,6 +94,26 @@ class WakeWordForegroundService : Service() {
       "begin recording",
     )
 
+    private val STOP_COMMANDS = listOf(
+      "stop recording",
+      "stop record",
+      "stop the recording",
+      "hey think tap stop",
+      "think tap stop",
+      "end recording",
+      "finish recording",
+    )
+
+    private val STOP_WORDS = listOf(
+      "stop",
+      "please stop",
+      "that is all",
+      "thats all",
+      "im done",
+      "i m done",
+      "i am done",
+    )
+
     fun normalize(text: String): String =
       text.lowercase()
         .replace(Regex("[^a-z0-9\\s]"), " ")
@@ -93,6 +124,13 @@ class WakeWordForegroundService : Service() {
       val n = normalize(text)
       if (n.isEmpty()) return false
       return WAKE_PHRASES.any { phrase -> n == phrase || n.contains(phrase) }
+    }
+
+    fun matchesStopPhrase(text: String): Boolean {
+      val n = normalize(text)
+      if (n.isEmpty()) return false
+      if (STOP_COMMANDS.any { phrase -> n.contains(phrase) }) return true
+      return STOP_WORDS.any { phrase -> n == phrase }
     }
   }
 
@@ -111,7 +149,6 @@ class WakeWordForegroundService : Service() {
   override fun onCreate() {
     super.onCreate()
     createNotificationChannel()
-    // Best-effort: remove legacy noisy channel if present.
     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
       try {
         val mgr = getSystemService(NotificationManager::class.java)
@@ -131,6 +168,7 @@ class WakeWordForegroundService : Service() {
       }
       ACTION_PAUSE -> {
         isPaused = true
+        listenMode = MODE_WAKE
         stopRecognitionOnly()
         // Destroy the recognizer so the mic is fully released for idea capture STT.
         destroyRecognizer()
@@ -142,8 +180,24 @@ class WakeWordForegroundService : Service() {
         )
         return START_STICKY
       }
+      ACTION_LISTEN_STOP -> {
+        isPaused = false
+        isRunning = true
+        hasStopped = false
+        listenMode = MODE_STOP
+        ensureForeground()
+        RecognitionAudioGuard.restore(this)
+        updateNotification("Recording — say stop recording")
+        AndroidWakeWordModule.emit(
+          "onListeningChange",
+          mapOf("listening" to true, "paused" to false),
+        )
+        scheduleRestart(500)
+        return START_STICKY
+      }
       ACTION_RESUME -> {
         isPaused = false
+        listenMode = MODE_WAKE
         ensureForeground()
         RecognitionAudioGuard.restore(this)
         updateNotification("Listening for Hey Think Tap…")
@@ -155,6 +209,7 @@ class WakeWordForegroundService : Service() {
         isPaused = false
         isRunning = true
         hasStopped = false
+        listenMode = MODE_WAKE
         ensureForeground()
         RecognitionAudioGuard.restore(this)
         updateNotification("Listening for Hey Think Tap…")
@@ -162,7 +217,7 @@ class WakeWordForegroundService : Service() {
           "onListeningChange",
           mapOf("listening" to true, "paused" to false),
         )
-        scheduleRestart(800)
+        scheduleRestart(500)
         return START_STICKY
       }
     }
@@ -194,10 +249,10 @@ class WakeWordForegroundService : Service() {
     hasStopped = true
     isRunning = false
     isPaused = false
+    listenMode = MODE_WAKE
     listeningActive = false
     cancelRestart()
     destroyRecognizer()
-    // Always restore — a persistent mute is what silenced the whole phone.
     RecognitionAudioGuard.restore(this)
     stopForeground(STOP_FOREGROUND_REMOVE)
     AndroidWakeWordModule.emit(
@@ -232,7 +287,7 @@ class WakeWordForegroundService : Service() {
     if (!isRunning || isPaused) return
     val r = Runnable { startRecognition() }
     restartRunnable = r
-    mainHandler.postDelayed(r, delayMs.coerceAtLeast(400L))
+    mainHandler.postDelayed(r, delayMs.coerceAtLeast(250L))
   }
 
   private fun destroyRecognizer() {
@@ -250,17 +305,9 @@ class WakeWordForegroundService : Service() {
     if (!SpeechRecognizer.isRecognitionAvailable(this)) return null
     speechRecognizer?.let { return it }
     return try {
-      val recognizer =
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-          try {
-            // On-device engine has no Google start ding/haptic on most OEMs.
-            SpeechRecognizer.createOnDeviceSpeechRecognizer(this)
-          } catch (_: Exception) {
-            SpeechRecognizer.createSpeechRecognizer(this)
-          }
-        } else {
-          SpeechRecognizer.createSpeechRecognizer(this)
-        }
+      // System default (usually Google) hears “Hey Think Tap” / “stop recording”
+      // far more reliably than the on-device engine.
+      val recognizer = SpeechRecognizer.createSpeechRecognizer(this)
       recognizer.setRecognitionListener(listener)
       speechRecognizer = recognizer
       recognizer
@@ -308,13 +355,12 @@ class WakeWordForegroundService : Service() {
         putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
         putExtra(RecognizerIntent.EXTRA_LANGUAGE, "en-US")
         putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, true)
-        putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 3)
+        putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 5)
         putExtra(RecognizerIntent.EXTRA_CALLING_PACKAGE, packageName)
         putExtra("android.speech.extra.DICTATION_MODE", true)
-        putExtra(RecognizerIntent.EXTRA_PREFER_OFFLINE, true)
-        putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_COMPLETE_SILENCE_LENGTH_MILLIS, 30000L)
-        putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_POSSIBLY_COMPLETE_SILENCE_LENGTH_MILLIS, 30000L)
-        putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_MINIMUM_LENGTH_MILLIS, 1500L)
+        putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_COMPLETE_SILENCE_LENGTH_MILLIS, 8000L)
+        putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_POSSIBLY_COMPLETE_SILENCE_LENGTH_MILLIS, 8000L)
+        putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_MINIMUM_LENGTH_MILLIS, 800L)
       }
       recognizer.startListening(intent)
     } catch (e: Exception) {
@@ -326,7 +372,7 @@ class WakeWordForegroundService : Service() {
         mapOf("code" to "start-failed", "message" to (e.message ?: "start failed")),
       )
       consecutiveErrors += 1
-      val backoff = (RESTART_ERROR_MS * (1 + consecutiveErrors.coerceAtMost(4))).coerceAtMost(20000L)
+      val backoff = (RESTART_ERROR_MS * (1 + consecutiveErrors.coerceAtMost(4))).coerceAtMost(12000L)
       scheduleRestart(backoff)
     }
   }
@@ -361,7 +407,7 @@ class WakeWordForegroundService : Service() {
         -> RESTART_IDLE_MS
         SpeechRecognizer.ERROR_CLIENT,
         SpeechRecognizer.ERROR_RECOGNIZER_BUSY,
-        -> RESTART_ERROR_MS + consecutiveErrors * 500L
+        -> RESTART_ERROR_MS + consecutiveErrors * 400L
         SpeechRecognizer.ERROR_INSUFFICIENT_PERMISSIONS -> {
           AndroidWakeWordModule.emit(
             "onError",
@@ -371,7 +417,7 @@ class WakeWordForegroundService : Service() {
         }
         else -> RESTART_ERROR_MS
       }
-      scheduleRestart(delay.coerceAtMost(20000L))
+      scheduleRestart(delay.coerceAtMost(12000L))
     }
 
     override fun onResults(results: Bundle?) {
@@ -398,7 +444,12 @@ class WakeWordForegroundService : Service() {
         "onPartialResult",
         mapOf("transcript" to raw, "isFinal" to isFinal),
       )
-      if (matchesWakePhrase(raw)) {
+      if (listenMode == MODE_STOP) {
+        if (matchesStopPhrase(raw)) {
+          onStopDetected(raw)
+          return
+        }
+      } else if (matchesWakePhrase(raw)) {
         onWakeDetected(raw)
         return
       }
@@ -410,7 +461,7 @@ class WakeWordForegroundService : Service() {
 
   private fun onWakeDetected(transcript: String) {
     val now = System.currentTimeMillis()
-    if (now - lastTriggerAt < 3500) {
+    if (now - lastTriggerAt < 2500) {
       scheduleRestart(RESTART_IDLE_MS)
       return
     }
@@ -418,6 +469,7 @@ class WakeWordForegroundService : Service() {
 
     Log.i(TAG, "Wake phrase detected: $transcript")
     isPaused = true
+    listenMode = MODE_WAKE
     listeningActive = false
     stopRecognitionOnly()
     RecognitionAudioGuard.restore(this)
@@ -435,10 +487,42 @@ class WakeWordForegroundService : Service() {
       mapOf("transcript" to transcript),
     )
 
-    bringAppToForeground(transcript)
+    bringAppToForeground(transcript, "Starting recording…")
   }
 
-  private fun bringAppToForeground(transcript: String) {
+  private fun onStopDetected(transcript: String) {
+    val now = System.currentTimeMillis()
+    if (now - lastTriggerAt < 2500) {
+      scheduleRestart(RESTART_IDLE_MS)
+      return
+    }
+    lastTriggerAt = now
+
+    Log.i(TAG, "Stop phrase detected: $transcript")
+    isPaused = true
+    listenMode = MODE_WAKE
+    listeningActive = false
+    stopRecognitionOnly()
+    destroyRecognizer()
+    RecognitionAudioGuard.restore(this)
+    updateNotification("Stop heard — saving…")
+
+    getSharedPreferences("thinktap_wake", Context.MODE_PRIVATE)
+      .edit()
+      .putBoolean("pendingStop", true)
+      .putString("stopTranscript", transcript)
+      .putLong("stopAt", now)
+      .apply()
+
+    AndroidWakeWordModule.emit(
+      "onStopDetected",
+      mapOf("transcript" to transcript),
+    )
+
+    bringAppToForeground(transcript, "Stopping recording…")
+  }
+
+  private fun bringAppToForeground(transcript: String, alertText: String) {
     val launch = packageManager.getLaunchIntentForPackage(packageName)?.apply {
       addFlags(
         Intent.FLAG_ACTIVITY_NEW_TASK or
@@ -450,14 +534,48 @@ class WakeWordForegroundService : Service() {
       putExtra(EXTRA_WAKE_TRANSCRIPT, transcript)
     }
     if (launch != null) {
-      startActivity(launch)
+      try {
+        startActivity(launch)
+      } catch (e: Exception) {
+        Log.w(TAG, "startActivity blocked from background", e)
+      }
+      postWakeAlert(launch, alertText)
+    }
+  }
+
+  /** Heads-up / full-screen notification — Android 10+ blocks startActivity from a service. */
+  private fun postWakeAlert(launch: Intent, text: String) {
+    val pending = PendingIntent.getActivity(
+      this,
+      1,
+      launch,
+      PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+    )
+    val notification = NotificationCompat.Builder(this, ALERT_CHANNEL_ID)
+      .setContentTitle("Think Tap")
+      .setContentText(text)
+      .setSmallIcon(android.R.drawable.ic_btn_speak_now)
+      .setContentIntent(pending)
+      .setFullScreenIntent(pending, true)
+      .setAutoCancel(true)
+      .setOnlyAlertOnce(true)
+      .setCategory(NotificationCompat.CATEGORY_CALL)
+      .setPriority(NotificationCompat.PRIORITY_HIGH)
+      .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
+      .setTimeoutAfter(12_000)
+      .build()
+    try {
+      val mgr = getSystemService(NotificationManager::class.java)
+      mgr?.notify(ALERT_NOTIFICATION_ID, notification)
+    } catch (e: Exception) {
+      Log.w(TAG, "wake alert", e)
     }
   }
 
   private fun createNotificationChannel() {
     if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return
     val mgr = getSystemService(NotificationManager::class.java) ?: return
-    val channel = NotificationChannel(
+    val silent = NotificationChannel(
       CHANNEL_ID,
       "Hey Think Tap (silent)",
       NotificationManager.IMPORTANCE_MIN,
@@ -468,7 +586,21 @@ class WakeWordForegroundService : Service() {
       setSound(null, null)
       lockscreenVisibility = Notification.VISIBILITY_SECRET
     }
-    mgr.createNotificationChannel(channel)
+    mgr.createNotificationChannel(silent)
+
+    val alert = NotificationChannel(
+      ALERT_CHANNEL_ID,
+      "Hey Think Tap alerts",
+      NotificationManager.IMPORTANCE_HIGH,
+    ).apply {
+      description = "Opens Think Tap when a start or stop phrase is heard"
+      setShowBadge(false)
+      enableVibration(true)
+      vibrationPattern = longArrayOf(0, 80)
+      setSound(null, null)
+      lockscreenVisibility = Notification.VISIBILITY_PUBLIC
+    }
+    mgr.createNotificationChannel(alert)
   }
 
   private fun buildNotification(content: String): Notification {

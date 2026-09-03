@@ -1,11 +1,14 @@
 import {
+  emptySpeechEnrichment,
   enrichIdeaFromAudio,
   enrichIdeaFromDeviceTranscript,
   isCloudSttAvailable,
+  looksLikeWhisperHallucination,
   type EnrichmentResult,
 } from '@/src/services/aiService';
 import { analyzeTranscript } from '@/src/services/transcriptAnalysisService';
 import { hasIndicScript, type AppLanguageCode } from '@/src/i18n/languages';
+import { normalizeCategory } from '@/src/theme/tokens';
 import type { Idea, TranscriptAnalysis } from '@/src/types';
 import { createId } from '@/src/utils/format';
 
@@ -25,24 +28,16 @@ type ProcessArgs = {
 
 function localEnrichment(
   pending: PendingCapture,
-  languageCode: AppLanguageCode,
+  _languageCode: AppLanguageCode,
 ): EnrichmentResult {
   const deviceTranscript = (pending.transcript ?? '').trim();
-  if (deviceTranscript) {
+  if (deviceTranscript && !looksLikeWhisperHallucination(deviceTranscript)) {
     return enrichIdeaFromDeviceTranscript({
       transcript: deviceTranscript,
       speechLocale: pending.speechLocale,
     });
   }
-  return {
-    transcript: '',
-    title: 'Voice note',
-    category: 'Business',
-    summary: 'Your recording was saved. The transcript will appear once transcription is available.',
-    aiStory: null,
-    detectedLanguage: languageCode,
-    source: 'demo',
-  };
+  return emptySpeechEnrichment();
 }
 
 function ideaFromEnrichment(
@@ -56,7 +51,7 @@ function ideaFromEnrichment(
     id: createId(),
     userId,
     title: enrichment.title,
-    category: enrichment.category,
+    category: normalizeCategory(enrichment.category),
     summary: analysis?.thought || enrichment.summary,
     transcript: enrichment.transcript,
     aiStory: enrichment.aiStory,
@@ -94,25 +89,49 @@ export async function enrichPendingRecording(
 
   onStage?.('uploading');
   const canUseCloud = Boolean(pending.audioUri) && isCloudSttAvailable();
-  const enrichment = canUseCloud
-    ? await enrichIdeaFromAudio({
+  let enrichment: EnrichmentResult;
+  try {
+    if (canUseCloud) {
+      enrichment = await enrichIdeaFromAudio({
         audioUri: pending.audioUri,
         durationSec: pending.durationSec,
         languageCode,
         onStage: reportStage,
-      })
-    : deviceTranscript
+      });
+    } else if (deviceTranscript) {
+      enrichment = enrichIdeaFromDeviceTranscript({
+        transcript: deviceTranscript,
+        speechLocale: pending.speechLocale,
+        onStage: reportStage,
+      });
+    } else {
+      enrichment = await enrichIdeaFromAudio({
+        audioUri: pending.audioUri,
+        durationSec: pending.durationSec,
+        languageCode,
+        onStage: reportStage,
+      });
+    }
+  } catch (error) {
+    console.warn('Enrichment failed; using device or empty speech', error);
+    enrichment = deviceTranscript
       ? enrichIdeaFromDeviceTranscript({
           transcript: deviceTranscript,
           speechLocale: pending.speechLocale,
           onStage: reportStage,
         })
-      : await enrichIdeaFromAudio({
-          audioUri: pending.audioUri,
-          durationSec: pending.durationSec,
-          languageCode,
-          onStage: reportStage,
-        });
+      : emptySpeechEnrichment();
+  }
+
+  if (looksLikeWhisperHallucination(enrichment.transcript, enrichment.detectedLanguage)) {
+    enrichment =
+      deviceTranscript && !looksLikeWhisperHallucination(deviceTranscript)
+        ? enrichIdeaFromDeviceTranscript({
+            transcript: deviceTranscript,
+            speechLocale: pending.speechLocale,
+          })
+        : emptySpeechEnrichment();
+  }
 
   onStage?.('summarizing');
   let analysis: TranscriptAnalysis | null = null;
@@ -131,7 +150,7 @@ export async function enrichPendingRecording(
 
   return {
     title: enrichment.title,
-    category: enrichment.category,
+    category: normalizeCategory(enrichment.category),
     summary: keepAnalysisSummary ? analysisThought : enrichment.summary,
     transcript: enrichment.transcript,
     aiStory: enrichment.aiStory,
