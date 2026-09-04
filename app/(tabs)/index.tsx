@@ -2,8 +2,9 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { Alert, AppState, Pressable, StyleSheet, Text, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
-import { MicButton } from '@/src/components/MicButton';
 import { ScreenHeader } from '@/src/components/ScreenHeader';
+import { VoiceAssistantStage } from '@/src/features/voiceAssistant/VoiceAssistantStage';
+import { getSpeechLocale } from '@/src/features/languageTranscript/locales';
 import { useIdeaCapture } from '@/src/hooks/useIdeaCapture';
 import { useDrawerOptional } from '@/src/navigation/DrawerContext';
 import { releaseWakeMicForCapture } from '@/src/services/micHandoff';
@@ -23,7 +24,7 @@ import { usePendingRecordingStore } from '@/src/store/pendingRecordingStore';
 import { useSettingsStore } from '@/src/store/settingsStore';
 import { showToast } from '@/src/store/toastStore';
 import { useWakeWordStore } from '@/src/store/wakeWordStore';
-import { colors, fonts, spacing, typography } from '@/src/theme/tokens';
+import { colors, fonts } from '@/src/theme/tokens';
 
 export default function HomeScreen() {
   const user = useAuthStore((s) => s.session?.user);
@@ -37,6 +38,8 @@ export default function HomeScreen() {
   const triggerToken = useWakeWordStore((s) => s.triggerToken);
   const triggerAt = useWakeWordStore((s) => s.triggerAt);
   const stopToken = useWakeWordStore((s) => s.stopToken);
+  const wakeEnabled = useWakeWordStore((s) => s.enabled);
+  const captureStarting = useWakeWordStore((s) => s.captureStarting);
   const setPausedForRecording = useWakeWordStore((s) => s.setPausedForRecording);
   const setCaptureStarting = useWakeWordStore((s) => s.setCaptureStarting);
   const lastTrigger = useRef(0);
@@ -70,10 +73,14 @@ export default function HomeScreen() {
     setVoiceResumeHandler,
     supportsVoiceStop,
     liveTranscript,
+    speechLocale,
   } = useIdeaCapture({
     onCaptureFailed: (message) => {
       showToast(message, 'error');
       Alert.alert('Cannot record', message);
+    },
+    onInterrupted: () => {
+      showToast('Recording paused — call in progress', 'info');
     },
   });
   const stoppingRef = useRef(false);
@@ -319,10 +326,15 @@ export default function HomeScreen() {
         />
 
         <View style={styles.content}>
-          <MicButton
+          <VoiceAssistantStage
             isRecording={isRecording || status === 'stopping'}
             isPaused={isPaused}
+            isStarting={captureStarting && !isRecording && status !== 'stopping'}
             durationSec={durationSec}
+            liveTranscript={liveTranscript}
+            wakeEnabled={wakeEnabled}
+            supportsVoiceStop={supportsVoiceStop}
+            speechLocaleName={isRecording ? getSpeechLocale(speechLocale).name : undefined}
             onPress={() => void onMicPress()}
             onPause={() => void onPausePress()}
             onResume={() => void onResumePress()}
@@ -330,24 +342,7 @@ export default function HomeScreen() {
             labelIdle={tx('tapToRecord')}
             labelRecording={status === 'stopping' ? 'Stopping…' : tx('recording')}
             labelPaused="Paused — tap Resume to continue"
-            helperIdle=""
           />
-          {isRecording && !isPaused && !supportsVoiceStop ? (
-            <Text style={styles.modeHint}>
-              Saving audio — spoken commands are off. Tap Stop to finish.
-            </Text>
-          ) : null}
-          {isRecording && !isPaused && supportsVoiceStop && !liveTranscript ? (
-            <Text style={styles.modeHint}>Say “stop recording” or tap Stop</Text>
-          ) : null}
-          {isRecording && !isPaused && liveTranscript ? (
-            <Text style={styles.liveTranscript} numberOfLines={4}>
-              {liveTranscript}
-            </Text>
-          ) : null}
-          {isPaused && supportsVoiceStop ? (
-            <Text style={styles.liveTranscript}>Paused — say “Resume” or “Stop”</Text>
-          ) : null}
         </View>
       </View>
 
@@ -359,7 +354,7 @@ const styles = StyleSheet.create({
   safe: { flex: 1, backgroundColor: colors.background },
   page: {
     flex: 1,
-    paddingHorizontal: spacing.containerMargin,
+    paddingHorizontal: 20,
   },
   content: {
     flex: 1,
@@ -377,23 +372,5 @@ const styles = StyleSheet.create({
   avatarText: {
     fontFamily: fonts.bodySemi,
     color: colors.onPrimary,
-  },
-  modeHint: {
-    marginTop: spacing.stackMd,
-    textAlign: 'center',
-    color: colors.textSecondary,
-    fontFamily: fonts.body,
-    fontSize: typography.labelMd.fontSize,
-    lineHeight: typography.labelMd.lineHeight,
-    paddingHorizontal: 24,
-  },
-  liveTranscript: {
-    marginTop: spacing.stackMd,
-    textAlign: 'center',
-    color: colors.primary,
-    fontFamily: fonts.body,
-    fontSize: typography.bodyMd.fontSize,
-    lineHeight: 22,
-    paddingHorizontal: 12,
   },
 });

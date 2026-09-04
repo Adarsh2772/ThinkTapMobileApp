@@ -12,40 +12,62 @@ import android.os.VibratorManager
 import android.util.Log
 
 /**
- * Listening must never vibrate or mute the phone.
+ * Listening must never ring, beep, or vibrate.
  *
- * Vivo (and similar OEMs) haptic on stream-volume changes, so we do **not**
- * mute SYSTEM/MUSIC around SpeechRecognizer restarts. The only app-owned
- * haptic is [playStartCue] / [playStopCue] when the user starts or stops a take.
+ * OEM SpeechRecognizer plays a start chime on each startListening(). Mute
+ * SYSTEM/NOTIFICATION/RING with FLAG_REMOVE_SOUND_AND_VIBRATE for that
+ * moment only — do not setStreamVolume (that haptic-spammed Vivo).
+ *
+ * [playStartCue] / [playStopCue] are the only app-owned cues, and only when
+ * the user actually starts or stops a take.
  */
 object RecognitionAudioGuard {
   private const val TAG = "ThinkTapAudioGuard"
-  private const val PREFS = "thinktap_audio_guard"
-  private const val PREFS_RECOVERED = "legacy_mute_recovered"
   private val lock = Any()
   private val mainHandler = Handler(Looper.getMainLooper())
   @Volatile
-  private var recoveredLegacyMute = false
+  private var cueMuted = false
 
-  /** No-op. Muting streams on listen-restart caused continuous haptic on Vivo. */
+  fun muteRecognizerCue(context: Context) {
+    val app = context.applicationContext
+    val run = {
+      synchronized(lock) {
+        if (cueMuted) return@synchronized
+        val am = app.getSystemService(Context.AUDIO_SERVICE) as? AudioManager ?: return@synchronized
+        muteStreams(am)
+        cueMuted = true
+      }
+    }
+    if (Looper.myLooper() == Looper.getMainLooper()) run() else mainHandler.post(run)
+  }
+
+  fun unmuteRecognizerCue(context: Context) {
+    val app = context.applicationContext
+    val run = {
+      synchronized(lock) {
+        if (!cueMuted) return@synchronized
+        val am = app.getSystemService(Context.AUDIO_SERVICE) as? AudioManager ?: return@synchronized
+        unmuteStreams(am)
+        cueMuted = false
+      }
+    }
+    if (Looper.myLooper() == Looper.getMainLooper()) run() else mainHandler.post(run)
+  }
+
+  fun restore(context: Context) {
+    unmuteRecognizerCue(context)
+  }
+
+  /** No-op kept for the JS module. Muting is handled by muteRecognizerCue. */
   fun swallowRecognizerCue(@Suppress("UNUSED_PARAMETER") context: Context) {}
 
   fun cancelRecognizerHaptic(@Suppress("UNUSED_PARAMETER") context: Context) {}
-
-  fun restore(context: Context) {
-    val app = context.applicationContext
-    if (Looper.myLooper() == Looper.getMainLooper()) {
-      recoverLegacyMuteOnce(app)
-    } else {
-      mainHandler.post { recoverLegacyMuteOnce(app) }
-    }
-  }
 
   /** User said Start recording. */
   fun playStartCue(context: Context) {
     val app = context.applicationContext
     mainHandler.post {
-      recoverLegacyMuteOnce(app)
+      unmuteRecognizerCue(app)
       vibrate(app, longArrayOf(0, 90, 60, 90))
       playTone(220)
     }
@@ -55,57 +77,41 @@ object RecognitionAudioGuard {
   fun playStopCue(context: Context) {
     val app = context.applicationContext
     mainHandler.post {
-      recoverLegacyMuteOnce(app)
+      unmuteRecognizerCue(app)
       vibrate(app, longArrayOf(0, 40, 50, 40))
     }
   }
 
-  /**
-   * Older builds left SYSTEM/NOTIFICATION at 0. Restore once, then never
-   * touch stream volumes again.
-   */
-  private fun recoverLegacyMuteOnce(app: Context) {
-    synchronized(lock) {
-      if (recoveredLegacyMute) return
-      recoveredLegacyMute = true
+  private fun muteStreams(am: AudioManager) {
+    if (Build.VERSION.SDK_INT < Build.VERSION_CODES.M) return
+    val flags = AudioManager.FLAG_REMOVE_SOUND_AND_VIBRATE
+    for (stream in cueStreams()) {
       try {
-        val prefs = app.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
-        if (prefs.getBoolean(PREFS_RECOVERED, false)) {
-          prefs.edit().clear().apply()
-          return
-        }
-        val am = app.getSystemService(Context.AUDIO_SERVICE) as AudioManager
-        val recover = mutableListOf(
-          AudioManager.STREAM_SYSTEM,
-          AudioManager.STREAM_NOTIFICATION,
-          AudioManager.STREAM_DTMF,
-          AudioManager.STREAM_ALARM,
-        )
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-          recover.add(AudioManager.STREAM_ACCESSIBILITY)
-        }
-        val systemVol = am.getStreamVolume(AudioManager.STREAM_SYSTEM)
-        val notifVol = am.getStreamVolume(AudioManager.STREAM_NOTIFICATION)
-        if (systemVol == 0 && notifVol == 0) {
-          for (stream in recover) {
-            try {
-              if (am.getStreamVolume(stream) == 0 && am.getStreamMaxVolume(stream) > 0) {
-                am.setStreamVolume(
-                  stream,
-                  (am.getStreamMaxVolume(stream) * 2 / 3).coerceAtLeast(1),
-                  0,
-                )
-              }
-            } catch (_: Exception) {
-              // ignore
-            }
-          }
-        }
-        prefs.edit().clear().putBoolean(PREFS_RECOVERED, true).apply()
-      } catch (e: Exception) {
-        Log.w(TAG, "recoverLegacyMute", e)
+        am.adjustStreamVolume(stream, AudioManager.ADJUST_MUTE, flags)
+      } catch (_: Exception) {
+        // ignore
       }
     }
+  }
+
+  private fun unmuteStreams(am: AudioManager) {
+    if (Build.VERSION.SDK_INT < Build.VERSION_CODES.M) return
+    val flags = AudioManager.FLAG_REMOVE_SOUND_AND_VIBRATE
+    for (stream in cueStreams()) {
+      try {
+        am.adjustStreamVolume(stream, AudioManager.ADJUST_UNMUTE, flags)
+      } catch (_: Exception) {
+        // ignore
+      }
+    }
+  }
+
+  private fun cueStreams(): IntArray {
+    return intArrayOf(
+      AudioManager.STREAM_SYSTEM,
+      AudioManager.STREAM_NOTIFICATION,
+      AudioManager.STREAM_RING,
+    )
   }
 
   private fun vibrate(app: Context, timings: LongArray) {

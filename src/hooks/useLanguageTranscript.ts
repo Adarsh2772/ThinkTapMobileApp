@@ -28,6 +28,8 @@ type Options = {
   onResumePhrase?: () => void;
   /** The engine cannot run at all — the take must not stay open pretending to record. */
   onUnavailable?: (message: string) => void;
+  /** Mic stolen (phone call / audio focus) — pause the take, do not restart STT. */
+  onInterrupted?: () => void;
 };
 
 function normalize(text: string): string {
@@ -56,6 +58,7 @@ export function useLanguageTranscript({
   onPausePhrase,
   onResumePhrase,
   onUnavailable,
+  onInterrupted,
 }: Options) {
   const [transcript, setTranscript] = useState('');
   const [interim, setInterim] = useState('');
@@ -69,10 +72,12 @@ export function useLanguageTranscript({
   const onPauseRef = useRef(onPausePhrase);
   const onResumeRef = useRef(onResumePhrase);
   const onUnavailableRef = useRef(onUnavailable);
+  const onInterruptedRef = useRef(onInterrupted);
   onStopRef.current = onStopPhrase;
   onPauseRef.current = onPausePhrase;
   onResumeRef.current = onResumePhrase;
   onUnavailableRef.current = onUnavailable;
+  onInterruptedRef.current = onInterrupted;
 
   const genRef = useRef(0);
   const nativeGenRef = useRef(0);
@@ -386,7 +391,19 @@ export function useLanguageTranscript({
       handleLanguageUnavailable();
       return;
     }
-    if (code === 'client' || code === 'busy' || code === 'audio-capture' || code === 'network') {
+    if (code === 'audio-capture') {
+      persistRef.current = false;
+      // Phone calls steal the mic and usually background the app. The same
+      // error also fires on every SpeechRecognizer restart — do not pause
+      // the take while we are still in the foreground.
+      if (AppState.currentState !== 'active') {
+        onInterruptedRef.current?.();
+        return;
+      }
+      scheduleRestart(Platform.OS === 'android' ? 800 : 600);
+      return;
+    }
+    if (code === 'client' || code === 'busy' || code === 'network') {
       persistRef.current = false;
       scheduleRestart(Platform.OS === 'android' ? 800 : 600);
       return;
@@ -420,6 +437,23 @@ export function useLanguageTranscript({
     notifyEnded();
     return undefined;
   }, [enabled, speechLocale, startListening, stopListening]);
+
+  const wasCapturingRef = useRef(capturing);
+  useEffect(() => {
+    const was = wasCapturingRef.current;
+    wasCapturingRef.current = capturing;
+    if (
+      !was &&
+      capturing &&
+      enabled &&
+      !nativeActiveRef.current &&
+      !startingRef.current &&
+      !stopFiredRef.current &&
+      !fatalRef.current
+    ) {
+      scheduleRestart(300);
+    }
+  }, [capturing, enabled]);
 
   // While minimized the native service owns the mic. When we return, start
   // live transcription again so spoken stop and the transcript keep working.

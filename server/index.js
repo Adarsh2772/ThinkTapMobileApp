@@ -90,7 +90,7 @@ app.post('/api/transcribe', uploadAudio, async (req, res) => {
 app.post('/api/enrich', uploadAudio, async (req, res) => {
   try {
     const stt = await transcribeAudio(pickAudioFile(req), transcribeOptions(req));
-    const languageCode = stt.language?.code || 'en';
+    const languageCode = stt.language?.code || '';
     const enrichment = await runEnrich(stt.transcription, languageCode);
     res.json({
       transcript: enrichment.transcript || stt.transcription,
@@ -98,7 +98,7 @@ app.post('/api/enrich', uploadAudio, async (req, res) => {
       category: enrichment.category,
       summary: enrichment.summary,
       aiStory: enrichment.aiStory || enrichment.summary,
-      detectedLanguage: languageCode.toLowerCase(),
+      detectedLanguage: (languageCode || '').toLowerCase(),
     });
   } catch (error) {
     sendError(res, error);

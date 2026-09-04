@@ -127,8 +127,18 @@ function guessIndicCodeFromText(text: string): string | undefined {
   if (/[\u0D00-\u0D7F]/.test(text)) return 'ml';
   if (/[\u0A00-\u0A7F]/.test(text)) return 'pa';
   if (/[\u0B00-\u0B7F]/.test(text)) return 'or';
+  // Urdu only when Arabic / Nastaliq script is actually present.
   if (/[\u0600-\u06FF]/.test(text)) return 'ur';
   return undefined;
+}
+
+function preferScriptOverWhisperUrdu(
+  whisperIso: string | undefined,
+  inferred: string | undefined,
+): string | undefined {
+  if (whisperIso !== 'ur') return whisperIso || inferred;
+  if (inferred && inferred !== 'ur') return inferred;
+  return whisperIso;
 }
 
 /** Derive hi-en style labels when transcript mixes Indic script and English words. */
@@ -137,7 +147,7 @@ export function applyCodeMixIfNeeded(code: string | null | undefined, transcript
   const inferred = guessIndicCodeFromText(text);
   const raw = (code ?? '').trim().toLowerCase();
   const isoFromWhisper = raw && raw !== 'en' && !/[-+]en$/.test(raw) ? raw.split(/[-_+]/)[0] : undefined;
-  const iso = isoFromWhisper || inferred;
+  const iso = preferScriptOverWhisperUrdu(isoFromWhisper, inferred);
   if (!iso) return raw || undefined;
   if (iso !== 'en' && findIndicSpoken(iso) && (INDIC_SCRIPT.test(text) || looksRomanizedIndic(text)) && LATIN_WORD.test(text)) {
     return `${iso}-en`;

@@ -1,3 +1,4 @@
+import { transcriptFromWhisperSegments } from './hallucination.js';
 import { buildLanguage } from './languages.js';
 
 /** Native-script seed. English instructions bias Whisper to English. */
@@ -91,15 +92,17 @@ export async function transcribeWithWhisper(file, options = {}) {
     throw httpError(`${provider.name} returned an invalid transcription response`, 502);
   }
 
-  const transcription = String(json.text || '').trim();
+  const gated = transcriptFromWhisperSegments(
+    json.text || '',
+    json.language ? String(json.language).toLowerCase() : undefined,
+    Array.isArray(json.segments) ? json.segments : [],
+  );
+  const transcription = gated.text;
   if (!transcription) {
     throw httpError('No speech detected in this recording. Try speaking more clearly.', 422);
   }
 
-  const language = buildLanguage(
-    json.language ? String(json.language).toLowerCase() : undefined,
-    transcription,
-  );
+  const language = buildLanguage(gated.language, transcription);
   const duration =
     typeof json.duration === 'number' && Number.isFinite(json.duration)
       ? json.duration

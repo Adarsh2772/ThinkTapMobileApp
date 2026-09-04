@@ -81,10 +81,14 @@ export function WakeWordPermissionGate() {
         showToast(result.message ?? 'Permission denied', 'error');
         return;
       }
-      await setEnabled(true);
       await setOnboardingDone(true);
       setVisible(false);
       showToast('Hey Think Tap is on — say it anytime to record');
+      // Let the permission dialog finish tearing down before SpeechRecognizer
+      // starts, otherwise OEM cue sounds ("tik-tik-tik") fire immediately.
+      setTimeout(() => {
+        void setEnabled(true);
+      }, 1500);
     } finally {
       setBusy(false);
     }

@@ -28,19 +28,18 @@ export type RecordingStatus = 'idle' | 'recording' | 'paused' | 'stopping';
  * Running expo-audio in parallel steals the mic, so the take is empty and
  * spoken “stop recording” is never heard.
  */
-export function useIdeaCapture(options: { onCaptureFailed?: (message: string) => void } = {}) {
+export function useIdeaCapture(
+  options: {
+    onCaptureFailed?: (message: string) => void;
+    onInterrupted?: () => void;
+  } = {},
+) {
   const onCaptureFailedRef = useRef(options.onCaptureFailed);
   onCaptureFailedRef.current = options.onCaptureFailed;
+  const onInterruptedRef = useRef(options.onInterrupted);
+  onInterruptedRef.current = options.onInterrupted;
   const speechLocale = useSettingsStore((s) => s.speechLocale);
   const preferSavedAudio = useSettingsStore((s) => s.saveAudioRecording);
-  const audio = useRecording();
-  // In audio-file mode the recorder owns the mic, so live speech-to-text is off
-  // and the transcript comes from the saved file after the take.
-  const audioOnly = resolveCaptureMode(preferSavedAudio) === 'audio-file';
-  const fileRecorder = Platform.OS !== 'android' || audioOnly;
-  const onVoiceStopRef = useRef<(() => void) | null>(null);
-  const onVoicePauseRef = useRef<(() => void) | null>(null);
-  const onVoiceResumeRef = useRef<(() => void) | null>(null);
 
   const [active, setActive] = useState(false);
   const [paused, setPaused] = useState(false);
@@ -51,9 +50,42 @@ export function useIdeaCapture(options: { onCaptureFailed?: (message: string) =>
   const startedAtRef = useRef(0);
   const pausedAccumMsRef = useRef(0);
   const backgroundHoldRef = useRef(false);
+  const lifecyclePausedRef = useRef(false);
+  const interruptionPausedRef = useRef(false);
   const activeRef = useRef(false);
   const pausedRef = useRef(false);
   const lastErrorRef = useRef<string | null>(null);
+  const pauseRef = useRef<(reason?: 'user' | 'lifecycle' | 'interruption') => Promise<boolean>>(
+    async () => false,
+  );
+  const resumeRef = useRef<() => Promise<boolean>>(async () => false);
+  const lastInterruptAtRef = useRef(0);
+  const stoppingNowRef = useRef(false);
+  const onVoiceStopRef = useRef<(() => void) | null>(null);
+  const onVoicePauseRef = useRef<(() => void) | null>(null);
+  const onVoiceResumeRef = useRef<(() => void) | null>(null);
+
+  const notifyInterrupted = () => {
+    if (stoppingNowRef.current) return;
+    const now = Date.now();
+    if (now - lastInterruptAtRef.current < 1500) return;
+    lastInterruptAtRef.current = now;
+    onInterruptedRef.current?.();
+  };
+
+  const audio = useRecording({
+    onInterrupted: () => {
+      if (stoppingNowRef.current) return;
+      interruptionPausedRef.current = true;
+      lifecyclePausedRef.current = false;
+      void pauseRef.current('interruption');
+      notifyInterrupted();
+    },
+  });
+  // In audio-file mode the recorder owns the mic, so live speech-to-text is off
+  // and the transcript comes from the saved file after the take.
+  const audioOnly = resolveCaptureMode(preferSavedAudio) === 'audio-file';
+  const fileRecorder = Platform.OS !== 'android' || audioOnly;
 
   const fail = useCallback((message: string) => {
     lastErrorRef.current = message;
@@ -107,6 +139,13 @@ export function useIdeaCapture(options: { onCaptureFailed?: (message: string) =>
       fail(message);
       onCaptureFailedRef.current?.(message);
     },
+    onInterrupted: () => {
+      if (stoppingNowRef.current) return;
+      interruptionPausedRef.current = true;
+      lifecyclePausedRef.current = false;
+      void pauseRef.current('interruption');
+      notifyInterrupted();
+    },
   });
 
   // iOS audio-file takes still need a spoken Stop — the recorder owns the mic,
@@ -134,19 +173,24 @@ export function useIdeaCapture(options: { onCaptureFailed?: (message: string) =>
   }, [active, paused]);
 
   // Time spent in another app or on the lock screen is not recorded audio.
+  // Android `inactive` is a brief focus blip (Stop tap, speech overlay) — do
+  // not pause/resume on it or Stop will lose the race and the take continues.
   useEffect(() => {
     const sub = AppState.addEventListener('change', (state) => {
-      if (!activeRef.current || pausedRef.current) return;
-      if (state !== 'active') {
-        if (backgroundHoldRef.current) return;
-        pausedAccumMsRef.current += Date.now() - startedAtRef.current;
-        backgroundHoldRef.current = true;
-        setDurationSec(Math.max(0, Math.floor(pausedAccumMsRef.current / 1000)));
+      if (!activeRef.current || stoppingNowRef.current) return;
+      const leftForeground =
+        state === 'background' || (Platform.OS === 'ios' && state === 'inactive');
+      if (leftForeground) {
+        if (pausedRef.current || interruptionPausedRef.current) return;
+        lifecyclePausedRef.current = true;
+        void pauseRef.current('lifecycle');
         return;
       }
-      if (!backgroundHoldRef.current) return;
-      startedAtRef.current = Date.now();
-      backgroundHoldRef.current = false;
+      if (state !== 'active') return;
+      if (lifecyclePausedRef.current && !interruptionPausedRef.current && pausedRef.current) {
+        lifecyclePausedRef.current = false;
+        void resumeRef.current();
+      }
     });
     return () => sub.remove();
   }, []);
@@ -178,6 +222,8 @@ export function useIdeaCapture(options: { onCaptureFailed?: (message: string) =>
     setError(null);
     pausedAccumMsRef.current = 0;
     backgroundHoldRef.current = false;
+    lifecyclePausedRef.current = false;
+    interruptionPausedRef.current = false;
     startedAtRef.current = Date.now();
     setDurationSec(0);
     pausedRef.current = false;
@@ -187,7 +233,7 @@ export function useIdeaCapture(options: { onCaptureFailed?: (message: string) =>
     return true;
   }, [reset, audio, audioOnly, fail, fileRecorder]);
 
-  const pause = useCallback(async () => {
+  const pause = useCallback(async (_reason?: 'user' | 'lifecycle' | 'interruption') => {
     if (!activeRef.current || pausedRef.current) return false;
     if (!backgroundHoldRef.current) {
       pausedAccumMsRef.current += Date.now() - startedAtRef.current;
@@ -195,50 +241,58 @@ export function useIdeaCapture(options: { onCaptureFailed?: (message: string) =>
     backgroundHoldRef.current = false;
     pausedRef.current = true;
     setPaused(true);
+    setDurationSec(Math.max(0, Math.floor(pausedAccumMsRef.current / 1000)));
     if (fileRecorder) void audio.pause();
     return true;
   }, [audio, fileRecorder]);
+  pauseRef.current = pause;
 
   const resume = useCallback(async () => {
     if (!activeRef.current || !pausedRef.current) return false;
+    interruptionPausedRef.current = false;
+    lifecyclePausedRef.current = false;
     startedAtRef.current = Date.now();
     pausedRef.current = false;
     setPaused(false);
     if (fileRecorder) void audio.resume();
     return true;
   }, [audio, fileRecorder]);
+  resumeRef.current = resume;
 
   const stop = useCallback(async (): Promise<CaptureResult | null> => {
-    if (!activeRef.current) return null;
+    if (!activeRef.current || stoppingNowRef.current) return null;
+    stoppingNowRef.current = true;
     setStopping(true);
     try {
       if (!pausedRef.current && !backgroundHoldRef.current) {
         pausedAccumMsRef.current += Date.now() - startedAtRef.current;
       }
       const seconds = Math.max(1, Math.round(pausedAccumMsRef.current / 1000));
+      if (!audioOnly) {
+        // Abort immediately so Stop cannot lose a race with STT restarts.
+        stopListening(true);
+      }
       const audioResult = fileRecorder ? await audio.stop() : null;
       if (!audioOnly) {
-        // Let the engine flush its last words before reading the transcript.
-        stopListening(false);
-        await waitForIdle(2200);
-        await new Promise((r) => setTimeout(r, 350));
+        await waitForIdle(400);
       }
 
       const transcript = audioOnly ? '' : getFullTranscript();
       const speechUri = getAudioUri();
       const uri =
         audioResult?.uri || (speechUri ? await persistRecording(speechUri) : '');
-      const durationSec = audioResult?.durationSec || seconds;
+      const durationSec = audioResult?.durationSec ?? seconds;
 
       if (!audioOnly) {
         abortLiveRecognition();
-        await new Promise((r) => setTimeout(r, 450));
       }
 
       activeRef.current = false;
       pausedRef.current = false;
       pausedAccumMsRef.current = 0;
       backgroundHoldRef.current = false;
+      lifecyclePausedRef.current = false;
+      interruptionPausedRef.current = false;
       setActive(false);
       setPaused(false);
       setDurationSec(0);
@@ -261,6 +315,7 @@ export function useIdeaCapture(options: { onCaptureFailed?: (message: string) =>
         speechLocale,
       };
     } finally {
+      stoppingNowRef.current = false;
       setStopping(false);
     }
   }, [
@@ -276,6 +331,7 @@ export function useIdeaCapture(options: { onCaptureFailed?: (message: string) =>
   ]);
 
   const discard = useCallback(async () => {
+    stoppingNowRef.current = true;
     stopListening(true);
     reset();
     if (fileRecorder) void audio.discard();
@@ -283,11 +339,14 @@ export function useIdeaCapture(options: { onCaptureFailed?: (message: string) =>
     pausedRef.current = false;
     pausedAccumMsRef.current = 0;
     backgroundHoldRef.current = false;
+    lifecyclePausedRef.current = false;
+    interruptionPausedRef.current = false;
     setActive(false);
     setPaused(false);
     setDurationSec(0);
     lastErrorRef.current = null;
     setError(null);
+    stoppingNowRef.current = false;
   }, [reset, stopListening, audio, fileRecorder]);
 
   // Published globally so the wake listener stays paused for the whole take,

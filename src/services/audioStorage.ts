@@ -1,3 +1,4 @@
+import { createAudioPlayer } from 'expo-audio';
 import {
   copyAsync,
   documentDirectory,
@@ -67,6 +68,33 @@ export async function recordingExists(uri: string): Promise<boolean> {
   } catch {
     return false;
   }
+}
+
+/** Read duration from a saved file. Used so Ideas/playback match captured audio. */
+export async function probeAudioDurationSec(uri: string): Promise<number | null> {
+  const source = normalizeFileUri(uri);
+  if (!source) return null;
+  let player: ReturnType<typeof createAudioPlayer> | null = null;
+  try {
+    player = createAudioPlayer(source, { updateInterval: 80, keepAudioSessionActive: false });
+    const deadline = Date.now() + 2500;
+    while (Date.now() < deadline) {
+      const seconds = player.duration;
+      if (typeof seconds === 'number' && Number.isFinite(seconds) && seconds > 0) {
+        return Math.max(1, Math.round(seconds));
+      }
+      await new Promise((r) => setTimeout(r, 80));
+    }
+  } catch {
+    // fall through — caller keeps the timer duration
+  } finally {
+    try {
+      player?.remove();
+    } catch {
+      // ignore
+    }
+  }
+  return null;
 }
 
 export { normalizeFileUri };

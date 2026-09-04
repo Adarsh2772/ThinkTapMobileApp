@@ -187,9 +187,40 @@ function guessCategory(text: string): string {
   return normalizeCategory(bestScore > 0 ? best : 'Business');
 }
 
+export type WhisperSegment = { no_speech_prob?: number; text?: string };
+
+const HALLUCINATION_LANGS = new Set([
+  'ko',
+  'korean',
+  'nn',
+  'no',
+  'nb',
+  'nynorsk',
+  'norwegian',
+  'norwegian nynorsk',
+]);
+
+const CANNED_HALLUCINATIONS = [
+  'thank you for watching',
+  'thanks for watching',
+  'thanks for listening',
+  'please subscribe',
+  'subscribe to',
+  'mbc news',
+  '시청해 주셔서',
+  '구독',
+  'subtitles by',
+  'amara.org',
+  '[music]',
+  '(music)',
+  '[applause]',
+  '(applause)',
+];
+
 /**
- * Whisper often invents Korean / “thanks for watching” on silence or noise.
- * Those must not become the saved transcript or detected language.
+ * Whisper often invents Korean / Punjabi / Norwegian / “thanks for watching”
+ * on silence, noise, or overlapping speech. Those must not become the saved
+ * transcript or detected language.
  */
 export function looksLikeWhisperHallucination(
   text: string,
@@ -198,29 +229,55 @@ export function looksLikeWhisperHallucination(
   const t = text.replace(/\s+/g, ' ').trim();
   if (!t) return true;
 
-  const letters = t.replace(/[\s\d.,!?'"“”‘’\-—]/g, '');
+  const letters = t.replace(/[\s\d.,!?'"“”‘’\-—[\]()]/g, '');
   if (!letters) return true;
+  if (t.length >= 8 && letters.length / t.length < 0.15) return true;
 
   const hangul = (t.match(/[\uAC00-\uD7A3]/g) ?? []).length;
   if (hangul / Math.max(letters.length, 1) >= 0.35) return true;
 
-  const lang = (language ?? '').toLowerCase();
-  if (lang === 'ko' || lang === 'korean' || lang === 'nn' || lang === 'no') return true;
+  const lang = (language ?? '').trim().toLowerCase();
+  const langIso = lang.split(/[-_]/)[0] ?? lang;
+  if (HALLUCINATION_LANGS.has(lang) || HALLUCINATION_LANGS.has(langIso)) return true;
+
+  const gurmukhi = (t.match(/[\u0A00-\u0A7F]/g) ?? []).length;
+  if ((langIso === 'pa' || lang === 'panjabi' || lang === 'punjabi') && gurmukhi === 0) {
+    return true;
+  }
 
   const lower = t.toLowerCase();
-  const canned = [
-    'thank you for watching',
-    'thanks for watching',
-    'thanks for listening',
-    'please subscribe',
-    'subscribe to',
-    'mbc news',
-    '시청해 주셔서',
-    '구독',
-  ];
-  if (canned.some((p) => lower.includes(p))) return true;
+  if (CANNED_HALLUCINATIONS.some((p) => lower.includes(p))) return true;
 
   return false;
+}
+
+/**
+ * Drop non-speech Whisper segments, then reject leftover hallucination.
+ * Overlapping speakers must not invent words that were never said.
+ */
+export function transcriptFromWhisperSegments(
+  fullText: string,
+  language: string | undefined,
+  segments: WhisperSegment[] = [],
+): { text: string; language?: string } {
+  let text = cleanTranscript(fullText);
+  if (segments.length > 0) {
+    const kept = segments
+      .filter((s) => (s.no_speech_prob ?? 0) < 0.7)
+      .map((s) => cleanTranscript(s.text ?? ''))
+      .filter(Boolean);
+    const allNoise = segments.every(
+      (s) => (s.no_speech_prob ?? 0) >= 0.7 || !cleanTranscript(s.text ?? ''),
+    );
+    if (allNoise || kept.length === 0) {
+      return { text: '', language: undefined };
+    }
+    text = cleanTranscript(kept.join(' '));
+  }
+  if (!text || looksLikeWhisperHallucination(text, language)) {
+    return { text: '', language: undefined };
+  }
+  return { text, language };
 }
 
 export function emptySpeechEnrichment(): EnrichmentResult {
@@ -516,16 +573,11 @@ async function whisperTranscribe(
       language?: string;
       segments?: Array<{ no_speech_prob?: number; text?: string }>;
     };
-    const text = cleanTranscript(json.text ?? '');
-    const language = json.language;
-    const segments = json.segments ?? [];
-    const noSpeech =
-      segments.length > 0 &&
-      segments.every((s) => (s.no_speech_prob ?? 0) >= 0.7 && !cleanTranscript(s.text ?? ''));
-    if (noSpeech || looksLikeWhisperHallucination(text, language)) {
-      return { text: '', language: undefined };
-    }
-    return { text, language };
+    return transcriptFromWhisperSegments(
+      json.text ?? '',
+      json.language,
+      json.segments ?? [],
+    );
   } catch {
     throw new Error(`${provider.name} returned an invalid transcription response`);
   }
@@ -586,8 +638,8 @@ async function enrichViaBackend(
       preferSameScript(transcript, json.summary) ||
       summaryFromTranscript(transcript),
     detectedLanguage:
-      applyCodeMixIfNeeded(json.detectedLanguage || 'en', transcript) ||
-      (json.detectedLanguage || 'en').toLowerCase(),
+      applyCodeMixIfNeeded(json.detectedLanguage, transcript) ||
+      (json.detectedLanguage ?? '').toLowerCase(),
   };
 }
 

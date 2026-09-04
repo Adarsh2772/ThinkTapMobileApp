@@ -133,6 +133,10 @@ export async function enrichPendingRecording(
         : emptySpeechEnrichment();
   }
 
+  if (!enrichment.transcript.trim()) {
+    enrichment = emptySpeechEnrichment();
+  }
+
   onStage?.('summarizing');
   let analysis: TranscriptAnalysis | null = null;
   try {

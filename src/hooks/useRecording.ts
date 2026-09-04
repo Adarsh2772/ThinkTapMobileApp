@@ -41,16 +41,28 @@ const VOICE_RECORDING: RecordingOptions = {
 
 export type RecordingStatus = 'idle' | 'recording' | 'paused' | 'stopping';
 
-export function useRecording() {
-  const recorder = useAudioRecorder(VOICE_RECORDING);
-  const recorderState = useAudioRecorderState(recorder, 200);
+export function useRecording(options?: { onInterrupted?: () => void }) {
+  const onInterruptedRef = useRef(options?.onInterrupted);
+  onInterruptedRef.current = options?.onInterrupted;
   const [error, setError] = useState<string | null>(null);
   const [stopping, setStopping] = useState(false);
   /** Session is open (recording or paused) — expo-audio state can lag. */
   const activeRef = useRef(false);
+  const pausedRef = useRef(false);
+  const userStoppingRef = useRef(false);
   const [active, setActive] = useState(false);
   const [paused, setPaused] = useState(false);
   const busyRef = useRef(false);
+
+  const recorder = useAudioRecorder(VOICE_RECORDING, (status) => {
+    if (!activeRef.current || pausedRef.current || userStoppingRef.current) return;
+    if (status.hasError || status.mediaServicesDidReset) {
+      pausedRef.current = true;
+      setPaused(true);
+      onInterruptedRef.current?.();
+    }
+  });
+  const recorderState = useAudioRecorderState(recorder, 200);
 
   const start = useCallback(async () => {
     if (busyRef.current) return null;
@@ -70,16 +82,19 @@ export function useRecording() {
       await setAudioModeAsync({
         playsInSilentMode: true,
         allowsRecording: true,
+        interruptionMode: 'doNotMix',
       });
 
       await recorder.prepareToRecordAsync();
       recorder.record();
       activeRef.current = true;
+      pausedRef.current = false;
       setActive(true);
       setPaused(false);
       return true;
     } catch (e) {
       activeRef.current = false;
+      pausedRef.current = false;
       setActive(false);
       setPaused(false);
       setError(e instanceof Error ? e.message : 'Could not start recording');
@@ -91,12 +106,13 @@ export function useRecording() {
 
   const pause = useCallback(async () => {
     if (busyRef.current) return false;
-    if (!activeRef.current || paused) return false;
+    if (!activeRef.current || pausedRef.current) return false;
 
     busyRef.current = true;
     setError(null);
     try {
       recorder.pause();
+      pausedRef.current = true;
       setPaused(true);
       return true;
     } catch (e) {
@@ -105,11 +121,11 @@ export function useRecording() {
     } finally {
       busyRef.current = false;
     }
-  }, [recorder, paused]);
+  }, [recorder]);
 
   const resume = useCallback(async () => {
     if (busyRef.current) return false;
-    if (!activeRef.current || !paused) return false;
+    if (!activeRef.current || !pausedRef.current) return false;
 
     busyRef.current = true;
     setError(null);
@@ -117,9 +133,11 @@ export function useRecording() {
       await setAudioModeAsync({
         playsInSilentMode: true,
         allowsRecording: true,
+        interruptionMode: 'doNotMix',
       });
       // Resume the same prepared recording session (do not re-prepare).
       recorder.record();
+      pausedRef.current = false;
       setPaused(false);
       return true;
     } catch (e) {
@@ -128,22 +146,23 @@ export function useRecording() {
     } finally {
       busyRef.current = false;
     }
-  }, [recorder, paused]);
+  }, [recorder]);
 
   const stop = useCallback(async () => {
     if (busyRef.current) return null;
 
     const shouldStop =
-      activeRef.current || recorder.isRecording || recorderState.isRecording || paused;
+      activeRef.current || recorder.isRecording || recorderState.isRecording || pausedRef.current;
     if (!shouldStop) {
       return null;
     }
 
     busyRef.current = true;
+    userStoppingRef.current = true;
     setStopping(true);
     try {
       // If paused, resume briefly so stop can finalize the file on some platforms.
-      if (paused) {
+      if (pausedRef.current) {
         try {
           recorder.record();
         } catch {
@@ -158,6 +177,7 @@ export function useRecording() {
       }
 
       activeRef.current = false;
+      pausedRef.current = false;
       setActive(false);
       setPaused(false);
 
@@ -185,6 +205,7 @@ export function useRecording() {
       return { uri, durationSec: seconds };
     } catch (e) {
       activeRef.current = false;
+      pausedRef.current = false;
       setActive(false);
       setPaused(false);
       setError(e instanceof Error ? e.message : 'Could not stop recording');
@@ -192,15 +213,17 @@ export function useRecording() {
     } finally {
       setStopping(false);
       busyRef.current = false;
+      userStoppingRef.current = false;
     }
-  }, [recorder, recorderState.durationMillis, recorderState.isRecording, paused]);
+  }, [recorder, recorderState.durationMillis, recorderState.isRecording]);
 
   const discard = useCallback(async () => {
     busyRef.current = true;
+    userStoppingRef.current = true;
     try {
-      if (activeRef.current || recorder.isRecording || recorderState.isRecording || paused) {
+      if (activeRef.current || recorder.isRecording || recorderState.isRecording || pausedRef.current) {
         try {
-          if (paused) {
+          if (pausedRef.current) {
             try {
               recorder.record();
             } catch {
@@ -213,6 +236,7 @@ export function useRecording() {
         }
       }
       activeRef.current = false;
+      pausedRef.current = false;
       setActive(false);
       setPaused(false);
       await setAudioModeAsync({
@@ -222,8 +246,9 @@ export function useRecording() {
       setError(null);
     } finally {
       busyRef.current = false;
+      userStoppingRef.current = false;
     }
-  }, [recorder, recorderState.isRecording, paused]);
+  }, [recorder, recorderState.isRecording]);
 
   const nativeRecording = recorderState.isRecording || recorder.isRecording;
   /** Any open take (actively recording or paused). */

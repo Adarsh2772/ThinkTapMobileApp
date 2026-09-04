@@ -17,6 +17,8 @@ type Props = {
   labelRecording?: string;
   labelPaused?: string;
   helperIdle?: string;
+  /** Parent owns glow/waveform (Assistant stage). Keep tap/pause/stop only. */
+  hideAmbientRings?: boolean;
 };
 
 export function MicButton({
@@ -31,11 +33,12 @@ export function MicButton({
   labelRecording = 'Recording…',
   labelPaused = 'Paused',
   helperIdle = 'On-device speech-to-text — set your transcription language in Settings',
+  hideAmbientRings = false,
 }: Props) {
   const pulse = useRef(new Animated.Value(0)).current;
 
   useEffect(() => {
-    if (!isRecording || isPaused) {
+    if (hideAmbientRings || !isRecording || isPaused) {
       pulse.setValue(0);
       return;
     }
@@ -47,7 +50,7 @@ export function MicButton({
     );
     loop.start();
     return () => loop.stop();
-  }, [pulse, isRecording, isPaused]);
+  }, [pulse, isRecording, isPaused, hideAmbientRings]);
 
   const scale = pulse.interpolate({ inputRange: [0, 1], outputRange: [0.95, 1.1] });
   const opacity = pulse.interpolate({ inputRange: [0, 1], outputRange: [0.1, 0.22] });
@@ -57,9 +60,9 @@ export function MicButton({
   const mainA11y = !isRecording ? 'Start recording' : 'Stop recording';
 
   return (
-    <View style={styles.wrap}>
-      <View style={styles.relative}>
-        {!isPaused ? (
+    <View style={[styles.wrap, hideAmbientRings && styles.wrapBare]}>
+      <View style={[styles.relative, hideAmbientRings && styles.relativeBare]}>
+        {!hideAmbientRings && !isPaused ? (
           <>
             <Animated.View
               style={[styles.ring, styles.ringLg, { transform: [{ scale }], opacity }]}
@@ -78,9 +81,9 @@ export function MicButton({
               ]}
             />
           </>
-        ) : (
+        ) : !hideAmbientRings ? (
           <View style={[styles.ring, styles.ringLg, styles.pausedRing]} />
-        )}
+        ) : null}
         <Pressable
           onPress={onPress}
           onLongPress={onLongPress}
@@ -98,8 +101,8 @@ export function MicButton({
         </Pressable>
       </View>
 
-      <Text style={styles.label}>{label}</Text>
-      {isRecording || helperIdle ? (
+      {!hideAmbientRings && label ? <Text style={styles.label}>{label}</Text> : null}
+      {!hideAmbientRings && (isRecording || helperIdle) ? (
         <Text style={styles.helper}>
           {isRecording ? formatClock(durationSec) : helperIdle}
         </Text>
@@ -145,7 +148,9 @@ export function MicButton({
 
 const styles = StyleSheet.create({
   wrap: { alignItems: 'center', paddingTop: spacing.stackLg },
+  wrapBare: { paddingTop: 0 },
   relative: { width: 160, height: 160, alignItems: 'center', justifyContent: 'center' },
+  relativeBare: { width: 112, height: 112 },
   ring: {
     position: 'absolute',
     borderRadius: 999,

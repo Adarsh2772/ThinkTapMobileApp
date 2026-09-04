@@ -305,6 +305,20 @@ export function useWakeWordListener() {
         }
 
         if (!AndroidWakeWord.isRunning()) {
+          // Avoid starting SpeechRecognizer in the same tick as a permission
+          // grant — OEM recognizer beeps sound like tik-tik-tik.
+          await delay(600);
+          if (!mountedRef.current) return;
+          const latest = useWakeWordStore.getState();
+          if (
+            !latest.enabled ||
+            latest.pausedForRecording ||
+            latest.playbackActive ||
+            latest.captureActive ||
+            latest.captureStarting
+          ) {
+            return;
+          }
           try {
             await AndroidWakeWord.startService();
           } catch (e) {
