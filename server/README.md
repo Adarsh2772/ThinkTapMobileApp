@@ -2,6 +2,8 @@
 
 Thin Node/Express proxy so Groq / OpenAI API keys stay off the Expo app binary.
 
+**This first version:** the proxy’s job is **raw speech-to-text** (Human Signal). The mobile app stores that transcript as the source of truth and searches it. Title/summary/enrichment endpoints may exist for later builds — they must never overwrite `transcript`. See `docs/ThinkTap_MVP_V1.md`.
+
 ## Setup
 
 ```bash
@@ -20,7 +22,7 @@ In the Expo project `.env`:
 EXPO_PUBLIC_API_URL=http://YOUR_LAN_IP:8787
 ```
 
-When `EXPO_PUBLIC_API_URL` is set, the app calls `POST /api/enrich` instead of calling Groq/OpenAI directly.
+When `EXPO_PUBLIC_API_URL` is set, the app calls `POST /api/enrich` and `POST /api/speech-to-text` instead of calling Groq/OpenAI directly.
 
 Use your machine’s LAN IP (not `localhost`) when testing on a physical device.
 
@@ -28,11 +30,14 @@ Use your machine’s LAN IP (not `localhost`) when testing on a physical device.
 
 | Method | Path | Body | Response |
 |--------|------|------|----------|
-| GET | `/health` | — | `{ ok, provider, sttModel }` |
-| POST | `/api/transcribe` | multipart `file` | `{ text, language }` |
-| POST | `/api/enrich` | multipart `file` | enrichment + `detectedLanguage` |
+| GET | `/health` | — | `{ ok, provider, speechProvider, sttModel }` |
+| POST | `/api/speech-to-text` | multipart `audio` or `file` | `{ success, transcription, language, audio? }` |
+| POST | `/api/transcribe` | multipart `audio` or `file` | `{ text, language }` |
+| POST | `/api/enrich` | multipart `audio` or `file` | enrichment + `detectedLanguage` |
 
-Language is **never** sent to Whisper — the model auto-detects the spoken language.
+Optional form fields: `preferredLanguage`, `conversationId`. Language is **never** sent to Whisper — the model auto-detects.
+
+Set `SPEECH_PROVIDER=whisper` (default) or `bharatgen`. BharatGen returns 503 until an official API is configured.
 
 ## Production notes
 

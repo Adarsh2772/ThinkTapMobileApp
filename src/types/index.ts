@@ -26,6 +26,8 @@ export type Idea = {
   favorite: boolean;
   createdAt: string;
   updatedAt: string;
+  /** Last time the thought view was opened. Null until first open. Used by search sorts only. */
+  lastAccessedAt?: string | null;
 };
 
 export type User = {

@@ -99,6 +99,43 @@ export const CATEGORIES = [
 
 export type Category = (typeof CATEGORIES)[number];
 
+const CATEGORY_ALIASES: Record<string, Exclude<Category, 'All'>> = {
+  movie: 'Movies',
+  movies: 'Movies',
+  film: 'Movies',
+  films: 'Movies',
+  cinema: 'Movies',
+  song: 'Songs',
+  songs: 'Songs',
+  lyrics: 'Songs',
+  lyric: 'Songs',
+  book: 'Books',
+  books: 'Books',
+  novel: 'Books',
+  novels: 'Books',
+  business: 'Business',
+  work: 'Business',
+  startup: 'Business',
+  script: 'Scripts',
+  scripts: 'Scripts',
+  screenplay: 'Scripts',
+  design: 'Design',
+  music: 'Music',
+};
+
+/** Map LLM / free-text labels onto the Ideas filter chips. */
+export function normalizeCategory(raw: string | undefined | null): Exclude<Category, 'All'> {
+  const trimmed = (raw ?? '').trim();
+  if (!trimmed) return 'Business';
+  if (trimmed !== 'All' && (CATEGORIES as readonly string[]).includes(trimmed)) {
+    return trimmed as Exclude<Category, 'All'>;
+  }
+  const aliased = CATEGORY_ALIASES[trimmed.toLowerCase()];
+  if (aliased) return aliased;
+  const found = CATEGORIES.find((c) => c !== 'All' && c.toLowerCase() === trimmed.toLowerCase());
+  return (found as Exclude<Category, 'All'> | undefined) ?? 'Business';
+}
+
 /** Soft tint + ink per category — blue-led family for clearer contrast */
 export const CATEGORY_COLORS: Record<string, { bg: string; fg: string; soft: string }> = {
   All: { bg: '#2563EB', fg: '#FFFFFF', soft: '#DBEAFE' },

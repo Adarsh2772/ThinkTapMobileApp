@@ -12,123 +12,136 @@ import android.os.VibratorManager
 import android.util.Log
 
 /**
- * Keeps Android SpeechRecognizer start chimes/haptics silent while listening,
- * and plays a single ring + vibrate when the user actually starts recording.
+ * Listening must never ring, beep, or vibrate.
+ *
+ * OEM SpeechRecognizer plays a start chime on each startListening(). Mute
+ * SYSTEM/NOTIFICATION/RING with FLAG_REMOVE_SOUND_AND_VIBRATE for that
+ * moment only — do not setStreamVolume (that haptic-spammed Vivo).
+ *
+ * [playStartCue] / [playStopCue] are the only app-owned cues, and only when
+ * the user actually starts or stops a take.
  */
 object RecognitionAudioGuard {
   private const val TAG = "ThinkTapAudioGuard"
   private val lock = Any()
-  private val savedVolumes = mutableMapOf<Int, Int>()
+  private val mainHandler = Handler(Looper.getMainLooper())
   @Volatile
-  private var muted = false
+  private var cueMuted = false
 
-  private fun beepStreams(): IntArray {
-    val list = mutableListOf(
-      AudioManager.STREAM_SYSTEM,
-      AudioManager.STREAM_NOTIFICATION,
-      AudioManager.STREAM_DTMF,
-      AudioManager.STREAM_ALARM,
-    )
-    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-      list.add(AudioManager.STREAM_ACCESSIBILITY)
-    }
-    return list.toIntArray()
-  }
-
-  fun mute(context: Context) {
-    synchronized(lock) {
-      try {
-        val app = context.applicationContext
-        val am = app.getSystemService(Context.AUDIO_SERVICE) as AudioManager
-        cancelVibrator(app)
-        if (!muted) {
-          savedVolumes.clear()
-          for (stream in beepStreams()) {
-            savedVolumes[stream] = am.getStreamVolume(stream)
-          }
-          muted = true
-        }
-        for (stream in beepStreams()) {
-          try {
-            am.setStreamVolume(stream, 0, AudioManager.FLAG_REMOVE_SOUND_AND_VIBRATE)
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-              am.adjustStreamVolume(
-                stream,
-                AudioManager.ADJUST_MUTE,
-                AudioManager.FLAG_REMOVE_SOUND_AND_VIBRATE,
-              )
-            }
-          } catch (_: Exception) {
-            // Some OEMs block individual streams.
-          }
-        }
-      } catch (e: Exception) {
-        Log.w(TAG, "mute", e)
+  fun muteRecognizerCue(context: Context) {
+    val app = context.applicationContext
+    val run = {
+      synchronized(lock) {
+        if (cueMuted) return@synchronized
+        val am = app.getSystemService(Context.AUDIO_SERVICE) as? AudioManager ?: return@synchronized
+        muteStreams(am)
+        cueMuted = true
       }
     }
+    if (Looper.myLooper() == Looper.getMainLooper()) run() else mainHandler.post(run)
+  }
+
+  fun unmuteRecognizerCue(context: Context) {
+    val app = context.applicationContext
+    val run = {
+      synchronized(lock) {
+        if (!cueMuted) return@synchronized
+        val am = app.getSystemService(Context.AUDIO_SERVICE) as? AudioManager ?: return@synchronized
+        unmuteStreams(am)
+        cueMuted = false
+      }
+    }
+    if (Looper.myLooper() == Looper.getMainLooper()) run() else mainHandler.post(run)
   }
 
   fun restore(context: Context) {
-    synchronized(lock) {
-      if (!muted) return
-      try {
-        val am = context.applicationContext.getSystemService(Context.AUDIO_SERVICE) as AudioManager
-        for ((stream, volume) in savedVolumes) {
-          try {
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-              am.adjustStreamVolume(stream, AudioManager.ADJUST_UNMUTE, 0)
-            }
-            am.setStreamVolume(stream, volume, 0)
-          } catch (_: Exception) {
-            // ignore
-          }
-        }
-      } catch (e: Exception) {
-        Log.w(TAG, "restore", e)
-      }
-      savedVolumes.clear()
-      muted = false
+    unmuteRecognizerCue(context)
+  }
+
+  /** No-op kept for the JS module. Muting is handled by muteRecognizerCue. */
+  fun swallowRecognizerCue(@Suppress("UNUSED_PARAMETER") context: Context) {}
+
+  fun cancelRecognizerHaptic(@Suppress("UNUSED_PARAMETER") context: Context) {}
+
+  /** User said Start recording. */
+  fun playStartCue(context: Context) {
+    val app = context.applicationContext
+    mainHandler.post {
+      unmuteRecognizerCue(app)
+      vibrate(app, longArrayOf(0, 90, 60, 90))
+      playTone(220)
     }
   }
 
-  fun playStartCue(context: Context) {
+  /** User said Stop recording. */
+  fun playStopCue(context: Context) {
     val app = context.applicationContext
-    restore(app)
+    mainHandler.post {
+      unmuteRecognizerCue(app)
+      vibrate(app, longArrayOf(0, 40, 50, 40))
+    }
+  }
+
+  private fun muteStreams(am: AudioManager) {
+    if (Build.VERSION.SDK_INT < Build.VERSION_CODES.M) return
+    val flags = AudioManager.FLAG_REMOVE_SOUND_AND_VIBRATE
+    for (stream in cueStreams()) {
+      try {
+        am.adjustStreamVolume(stream, AudioManager.ADJUST_MUTE, flags)
+      } catch (_: Exception) {
+        // ignore
+      }
+    }
+  }
+
+  private fun unmuteStreams(am: AudioManager) {
+    if (Build.VERSION.SDK_INT < Build.VERSION_CODES.M) return
+    val flags = AudioManager.FLAG_REMOVE_SOUND_AND_VIBRATE
+    for (stream in cueStreams()) {
+      try {
+        am.adjustStreamVolume(stream, AudioManager.ADJUST_UNMUTE, flags)
+      } catch (_: Exception) {
+        // ignore
+      }
+    }
+  }
+
+  private fun cueStreams(): IntArray {
+    return intArrayOf(
+      AudioManager.STREAM_SYSTEM,
+      AudioManager.STREAM_NOTIFICATION,
+      AudioManager.STREAM_RING,
+    )
+  }
+
+  private fun vibrate(app: Context, timings: LongArray) {
     try {
-      val vibrator = vibrator(app)
+      val v = vibrator(app) ?: return
       if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-        vibrator?.vibrate(VibrationEffect.createWaveform(longArrayOf(0, 90, 60, 90), -1))
+        v.vibrate(VibrationEffect.createWaveform(timings, -1))
       } else {
         @Suppress("DEPRECATION")
-        vibrator?.vibrate(longArrayOf(0, 90, 60, 90), -1)
+        v.vibrate(timings, -1)
       }
     } catch (e: Exception) {
       Log.w(TAG, "vibrate", e)
     }
+  }
 
+  private fun playTone(durationMs: Int) {
     try {
       val tone = ToneGenerator(AudioManager.STREAM_MUSIC, 85)
-      tone.startTone(ToneGenerator.TONE_PROP_ACK, 220)
-      Handler(Looper.getMainLooper()).postDelayed({
+      tone.startTone(ToneGenerator.TONE_PROP_ACK, durationMs)
+      mainHandler.postDelayed({
         try {
           tone.stopTone()
           tone.release()
         } catch (_: Exception) {
           // ignore
         }
-        mute(app)
-      }, 280)
+      }, (durationMs + 60).toLong())
     } catch (e: Exception) {
       Log.w(TAG, "tone", e)
-      mute(app)
-    }
-  }
-
-  fun cancelVibrator(context: Context) {
-    try {
-      vibrator(context)?.cancel()
-    } catch (_: Exception) {
-      // ignore
     }
   }
 

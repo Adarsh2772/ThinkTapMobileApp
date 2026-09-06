@@ -65,6 +65,7 @@ export default function IdeaDetailScreen() {
   const idea = useIdeasStore((s) => (id ? s.ideas.find((item) => item.id === id) : undefined));
   const updateIdea = useIdeasStore((s) => s.updateIdea);
   const deleteIdea = useIdeasStore((s) => s.deleteIdea);
+  const touchIdea = useIdeasStore((s) => s.touchIdea);
   const [confirmDelete, setConfirmDelete] = useState(false);
   const knownLanguage = idea ? findLanguageByWhisperCode(idea.language) : undefined;
   const spoken = idea ? resolveSpokenLanguage(idea.language) : null;
@@ -82,6 +83,11 @@ export default function IdeaDetailScreen() {
     });
     return () => sub.remove();
   }, [router]);
+
+  const thoughtExists = Boolean(idea);
+  useEffect(() => {
+    if (id && thoughtExists) void touchIdea(id);
+  }, [id, thoughtExists, touchIdea]);
 
   if (!idea) {
     return (
@@ -148,10 +154,10 @@ export default function IdeaDetailScreen() {
           <View style={[styles.category, { backgroundColor: tint.bg }]}>
             <Text style={styles.categoryText}>{idea.category}</Text>
           </View>
-          {spoken ? (
+          {idea.language?.trim() && spoken ? (
             <Text style={styles.date}>
               {knownLanguage ? `${knownLanguage.flag} ` : ''}
-              {knownLanguage?.name ?? spoken.name}
+              {spoken.name}
             </Text>
           ) : null}
           <Text style={styles.date}>{relativeDate(idea.createdAt)}</Text>
@@ -184,7 +190,7 @@ export default function IdeaDetailScreen() {
             <Text style={styles.body}>
               {idea.transcript?.trim()
                 ? idea.transcript
-                : 'Transcript was empty. Try recording again and speak clearly.'}
+                : 'Recording is not clear. Please record properly.'}
             </Text>
           </View>
         </View>

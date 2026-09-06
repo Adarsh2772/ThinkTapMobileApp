@@ -20,19 +20,40 @@ export function WakeWordProvider({ children }: { children: ReactNode }) {
  * Owns the pause/resume window around a take. This lives here, not on Home:
  * navigating to Processing or an idea tears Home's effects down, which used to
  * strand the listener in the paused state so the wake phrase stopped working.
+ *
+ * `pausedForRecording` is also watched, not just `captureActive`: the wake
+ * trigger pauses the listener before any take exists, so if that take never
+ * opens (trigger arrived while already recording, start failed, Home was not
+ * mounted) nothing would ever un-pause and the wake service would stay dead
+ * for the rest of the session.
  */
 function usePauseWakeWhileCapturing() {
   const captureActive = useWakeWordStore((s) => s.captureActive);
+  const captureStarting = useWakeWordStore((s) => s.captureStarting);
+  const playbackActive = useWakeWordStore((s) => s.playbackActive);
+  const pausedForRecording = useWakeWordStore((s) => s.pausedForRecording);
   const setPausedForRecording = useWakeWordStore((s) => s.setPausedForRecording);
+  const setCaptureStarting = useWakeWordStore((s) => s.setCaptureStarting);
+
+  const holdMic = captureActive || captureStarting || playbackActive;
 
   useEffect(() => {
-    if (captureActive) {
+    if (holdMic) {
       setPausedForRecording(true);
       return;
     }
+    if (!pausedForRecording) return;
     const timer = setTimeout(() => setPausedForRecording(false), 4000);
     return () => clearTimeout(timer);
-  }, [captureActive, setPausedForRecording]);
+  }, [holdMic, pausedForRecording, setPausedForRecording]);
+
+  // A wake heard while minimized sets captureStarting. If the user never
+  // returns, drop it so listening can resume instead of staying paused forever.
+  useEffect(() => {
+    if (!captureStarting || captureActive) return;
+    const timer = setTimeout(() => setCaptureStarting(false), 30_000);
+    return () => clearTimeout(timer);
+  }, [captureStarting, captureActive, setCaptureStarting]);
 }
 
 function useNavigateHomeOnWake() {

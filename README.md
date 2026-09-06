@@ -1,14 +1,32 @@
-# Think Tap (OneTap) — Mobile App
+# ThinkTap — Mobile App
 
-Voice-first idea capture for Android and iOS. Tap to record → AI transcribes, titles, tags, and summarizes → ideas live in a searchable archive.
+Voice-only thought capture for Android and iOS. **Start recording → stop recording → keep the raw transcript → find it again from remembered fragments.**
+
+Product specification: `docs/ThinkTap_MVP_V1_Specifications.docx`  
+Working spec for this build: [`docs/ThinkTap_MVP_V1.md`](docs/ThinkTap_MVP_V1.md)
 
 **Design reference:** [Stitch — Think Tap](https://stitch.withgoogle.com/preview/7240260240508960783?node-id=095cb0509f804164959e531f4b1babcd)  
-**Client docs:** `stitch_think_tap_mobile_app/`, `OneTap_Mobile_App_Technical_Document.pdf`  
-**Branding note:** Stitch UI uses **Think Tap** / Idea Bank; the technical PDF uses **OneTap**. Confirm final product name with the client before store submission.
+**Also in repo:** `stitch_think_tap_mobile_app/`, `OneTap_Mobile_App_Technical_Document.pdf` (historical engineering depth — do not expand this first version to match the full PDF).
 
 ---
 
-## Getting started (Phase 0–1 MVP)
+## Current first version
+
+This is the ship target. It is smaller than the full Word-spec V1 on purpose.
+
+| Capability | What it means |
+|------------|----------------|
+| **Start / stop recording** | Tap the mic on Home to start; tap again to stop. Audio is saved locally even if the network is down. |
+| **Raw transcribed data** | Speech-to-text is stored as the **Human Signal** (`transcript`). It is never overwritten by a title, summary, or analysis. The thought view shows this text in full. |
+| **Search** | Retrieval runs **only** on the raw transcript (Word spec §8). Type remembered fragments; results narrow as you add words. Sort: Best Match, Newest, Oldest, Recently Visited, Dormant Gems. |
+
+Search does **not** use AI insight as the index. Matching is Free: a different phrasing of the same idea must still find the original words.
+
+Hands-free auto-start, silence auto-stop, ThinkFlow, split Source/Thought extraction, Deep Intelligence, and Retap are **not** this first version. See the working spec.
+
+---
+
+## Getting started
 
 ```bash
 npm install
@@ -16,29 +34,20 @@ npx expo start
 ```
 
 - Press `a` for Android emulator / device, `i` for iOS simulator (macOS).
-- Create an account in-app, then use **Tap to Record** on Home.
-- Mock AI is on by default (`EXPO_PUBLIC_USE_MOCK_AI=true`). See `.env.example`.
-
-### MVP implemented
-
-- Auth (email/password, local persistence)
-- Tabs: Home, Ideas, Search, Settings
-- Record → Processing → Idea detail
-- Ideas list + category filters + text search
-- Design tokens from Stitch / `DESIGN.md`
+- **Tap to Record** on Home, speak, tap to stop. Open **Search** and type a fragment from what you said.
+- STT: device speech recognition and/or the proxy in `server/` (see `.env.example`). Do not put production API keys in `EXPO_PUBLIC_*`.
 
 ---
 
 ## 1. Product summary
 
-Think Tap helps creators capture thoughts hands-free and turn them into organized, searchable ideas.
+ThinkTap is the first implementation of a Human Thought Operating System (HTOS): preserve what the person said, then make it findable. AI may organize later; it must never become the author of the thought.
 
 | Layer | Source | Role |
 |-------|--------|------|
-| Product UX | Stitch screens + `DESIGN.md` | Visual design, flows, copy |
-| Engineering depth | OneTap technical document | Auth, encryption, AI pipeline, wake word, library, sharing |
-
-**Guiding principle:** Ship a solid **MVP** matching Stitch first. Deliver OneTap advanced features in later phases.
+| Product (this build) | `docs/ThinkTap_MVP_V1_Specifications.docx` + `docs/ThinkTap_MVP_V1.md` | Start/stop, raw transcript, search |
+| Product UX visuals | Stitch screens + `DESIGN.md` | Layout, type, color |
+| Later engineering | OneTap technical PDF, backend API Word doc | Auth, cloud, encryption, wake word — after this build |
 
 ---
 
@@ -106,16 +115,13 @@ Implement UI to match `stitch_think_tap_mobile_app/zenith_archive/DESIGN.md` and
 
 ## 4. Scope of work — overview
 
-Work is split into **MVP** and **post-MVP phases**. Implementation must follow this order unless the client re-prioritizes in writing.
+Work is split into **this first version**, **full Word-spec V1 leftovers**, and **later phases**. Do not pull later phases into the first version unless the founder expands scope in writing.
 
 ```text
-Phase 0  → Project setup (Expo)
-Phase 1  → MVP (Stitch core loop)     ← primary delivery target
-Phase 2  → Library polish & sharing
-Phase 3  → Multi-language AI
-Phase 4  → Security (encryption / .onetap)
-Phase 5  → Wake word (Android first)
-Phase 6  → Biometrics, deep links, store hardening
+This build     → Start / stop + raw transcript + search (§8)
+Full V1 leftover → ThinkFlow, Source+Thought split, AI Core Insight cards
+Next build     → Deep Intelligence + Retap (Word spec §11)
+Later          → Library polish, encryption, production wake word, store
 ```
 
 ---
@@ -149,157 +155,86 @@ src/
 
 ---
 
-## 6. Phase 1 — MVP (in scope — implement first)
+## 6. This first version (in scope — implement and keep)
 
-**Goal:** End-to-end loop matching Stitch. Target ~1 week with focused RN development + AI-assisted coding.
+**Goal:** Capture without friction, store the raw words, find them again. Match Word spec §8 for search. Do not make the user title, tag, or file the thought.
 
-### 6.1 Authentication
+### 6.1 Capture (Home)
 
-- [ ] Email/password sign-up and login
-- [ ] Session persistence (auto login on relaunch)
-- [ ] Logout
-- [ ] Per-user data isolation (ideas belong to signed-in user)
-- [ ] Validation: required fields, password rules (align with PDF: 8+ chars, uppercase, number — confirm with client)
-- [ ] Clear error messaging (including duplicate account if backend supports it)
+- [x] One-tap **start** and **stop**
+- [x] Live timer while recording
+- [x] Mic permission handling (Android + iOS)
+- [x] Discard current take without saving
+- [x] Save audio locally first so a transcription failure cannot drop the thought
 
-**MVP optional (nice-to-have if time):**
+Pause / resume and spoken stop are already in the app; they are helpers, not a substitute for tap start/stop.
 
-- [ ] Soft onboarding: allow recording before login, migrate ideas on sign-in (from OneTap PDF — defer if it risks MVP timeline)
+**Still open (Word spec §10):** always-on background start, lock-screen / hardware shortcuts, silence-detection auto-stop.
 
-### 6.2 Navigation & shell
-
-- [ ] Bottom tabs: **Home**, **Ideas**, **Search**, **Settings**
-- [ ] Stack screens: Processing, Idea Details, Auth screens
-- [ ] Match Stitch layout, active tab accent, glass/blur bottom bar where feasible
-
-### 6.3 Home
-
-- [ ] Personalized greeting (“Hello, {name}”)
-- [ ] Recent Ideas list (title, category chip, relative date, duration)
-- [ ] “View all” → Ideas tab
-- [ ] Large center **Tap to Record** mic button with pulse animation
-- [ ] Helper copy: AI will transcribe and categorize
-
-### 6.4 Recording
-
-- [ ] One-tap start / stop recording
-- [ ] Live timer during recording
-- [ ] Mic permission handling (Android + iOS)
-- [ ] Pause / resume (include if straightforward with Expo Audio; otherwise Phase 2)
-- [ ] Discard recording without saving
-- [ ] Keep recording usable when app is backgrounded for short sessions (best-effort on MVP; full wake-lock behavior is Phase 5+)
-
-### 6.5 AI processing pipeline
+### 6.2 Raw transcript (Human Signal)
 
 After stop:
 
-1. Show **Processing** screen (“Organizing your idea…”)
-2. Upload audio to secure storage
-3. **Speech-to-text** (Whisper — OpenAI or Azure, per client credentials)
-4. **LLM** generates:
-   - Title
-   - Category / tags (e.g. Movies, Business, Design, Music, Songs, Books, Scripts)
-   - Short AI summary
-5. Persist idea + transcript + audio URL
-6. Navigate to Idea Details (or Ideas list)
+1. Persist the take (audio + empty or partial transcript if needed).
+2. Run speech-to-text (device OS and/or `server/` Whisper proxy).
+3. Write **`transcript`** as the verbatim result. Never overwrite it with LLM title, summary, story, or analysis.
 
-- [ ] Stage-aware status text (e.g. transcribing → extracting themes → drafting summary)
-- [ ] Block accidental back navigation during critical processing (or confirm cancel)
-- [ ] Error handling: network failure, STT failure, LLM failure — retry + keep raw audio if possible
+- [x] Thought view shows the full raw transcript
+- [x] Language auto-detect when the STT provider returns it
+- [ ] Light filler/grammar cleanup only if it does not change meaning (do not invent content)
 
-**MVP AI output:**
+Titles, categories, summaries, and analysis may still exist in storage from earlier work. They are **not** the first-version contract and must not become the search index.
 
-| Field | Required |
-|-------|----------|
-| Title | Yes |
-| Category / tags | Yes |
-| Summary | Yes |
-| Full transcript (raw) | Yes |
-| Polished “AI story” rewrite | Optional in MVP; preferred if time (PDF has Story + Raw tabs) |
+### 6.3 Search (Word spec §8)
 
-### 6.6 Ideas / Archive
+- [x] Index = full Human Signal (`transcript`) only
+- [x] Progressive refinement: each extra fragment ANDs and narrows results
+- [x] Phrase / synonym matching so “Bollywood movie” can hit “movie in Bollywood”
+- [x] Sorts: Best Match (default), Newest First, Oldest First, Recently Visited, Dormant Gems
+- [x] Result card: Thought = truncated raw transcript (…); Source / AI Core Insight rows only if already present
+- [x] Empty / no-match states
+- [x] Open result → full transcript view
 
-- [ ] List all user ideas
-- [ ] Category filter chips (All + categories)
-- [ ] Card: title, snippet/summary preview, category, date, duration, AI-transcribed indicator
-- [ ] Tap → Idea Details
-- [ ] Empty state
+**Not this build:** vector embeddings, “these thoughts are related” gated callouts, using insight text as the index.
 
-### 6.7 Idea details
+### 6.4 Navigation & view
 
-- [ ] Title, category chip, date
-- [ ] Audio player: play/pause, progress, duration
-- [ ] AI Summary section
-- [ ] Transcript section (scrollable)
-- [ ] Basic actions: favorite/star (UI), more menu stub or delete
+- [x] Tabs include **Home (Capture)** and **Search**
+- [x] Expanded view: full raw transcript, audio playback, delete
+- [x] Last-accessed timestamp for Recently Visited / Dormant Gems (opening a thought must not change `createdAt`)
 
-**MVP player extras (if time):** seek, ±10s, playback speed — otherwise Phase 2.
+Ideas / Settings tabs may remain from earlier work; they must not replace Capture + Search + View.
 
-### 6.8 Search
+### 6.5 Backend (this build)
 
-- [ ] Text search over title, summary, transcript
-- [ ] Suggested queries UI (can be static or derived from recent categories)
-- [ ] Results list → Idea Details
-- [ ] Empty / discovery state matching Stitch
+| Concern | This build |
+|---------|------------|
+| Thoughts + audio | Local (AsyncStorage + document directory) |
+| STT | Device STT and/or `server/` proxy (`POST /api/speech-to-text` or `/api/transcribe`) |
+| API keys | Server-side only in production |
+| Search | On-device over `transcript` |
 
-**Out of MVP:** true semantic / vector “Deep Discovery” search (Phase 2+).
+Minimum record: `id`, `userId`, `transcript`, `audioUri`, `durationSec`, `language`, `createdAt`, `lastAccessedAt`, `updatedAt`.  
+`transcript` is never replaced by `aiStory` / summary / analysis.
 
-### 6.9 Settings (MVP)
+### 6.6 Acceptance criteria (this first version)
 
-- [ ] Profile basics (name, email)
-- [ ] Logout
-- [ ] App version
-- [ ] Placeholders for language / wake word (disabled until later phases)
-
-### 6.10 Backend (MVP)
-
-Recommended default:
-
-| Concern | Choice |
-|---------|--------|
-| Auth + DB + file storage | Supabase (Auth, Postgres, Storage) |
-| STT | OpenAI Whisper **or** Azure Whisper |
-| LLM | GPT-4o-mini / Azure GPT (title, tags, summary) |
-| API keys | Server-side / Edge Functions only — never in app binary |
-
-**Minimum data model — `ideas`:**
-
-| Column | Type | Notes |
-|--------|------|--------|
-| id | uuid | PK |
-| user_id | uuid | FK auth user |
-| title | text | |
-| category | text | |
-| summary | text | |
-| transcript | text | raw STT |
-| ai_story | text | nullable MVP |
-| audio_path | text | storage path/URL |
-| duration_sec | number | |
-| language | text | default `en` until Phase 3 |
-| created_at | timestamptz | |
-| updated_at | timestamptz | |
-
-### 6.11 MVP acceptance criteria
-
-- [ ] User can sign up / log in
-- [ ] User can record a voice idea on Android (and iOS if builds available)
-- [ ] After recording, AI produces title, category, summary, transcript
-- [ ] Idea appears in Home recent + Ideas list
-- [ ] User can open detail, play audio, read summary/transcript
-- [ ] User can search by text and find ideas
-- [ ] UI reasonably matches Stitch light-mode design
+- [ ] User can start and stop a recording on Android (and iOS if builds exist)
+- [ ] After stop, the thought is kept; the raw transcript appears when STT succeeds
+- [ ] User can open the thought and read the **full raw transcript** (and play audio)
+- [ ] User can search remembered fragments and find the thought from the **transcript**, including different word order / common synonyms
+- [ ] Sorts work as listed in §6.3
+- [ ] A failed STT or network call does not delete the audio
 - [ ] No secrets in source control
 
-### 6.12 Explicitly out of MVP
+### 6.7 Explicitly out of this first version
 
-- Wake word (“Hey OneTap” / “Hey Think Tap”)
-- AES-256 / proprietary `.onetap` format
-- Biometric login
-- 10-language full pipeline + UI i18n
-- Deep-link open of shared encrypted files
-- Picovoice Porcupine
-- Cross-app deferred share automation
-- Full Redux architecture (optional; Zustand / Query is fine for MVP)
+- ThinkFlow prompt, required AI Core Insight, Deep Intelligence, Retap
+- User-authored folders, tags, titles, or categories as the way to organize
+- Editing or rewriting the Human Signal
+- Collaboration, sharing, marketplace
+- AES-256 / `.onetap`, biometrics, production always-on wake word
+- Charging to capture or to find a thought you already captured
 
 ---
 
@@ -398,22 +333,23 @@ Hands-free: say wake phrase → start recording.
 
 ---
 
-## 13. AI pipeline (logical flow)
+## 13. Capture pipeline (this first version)
 
 ```text
-[Mic] → audio file
-     → upload (Storage)
-     → STT (Whisper) → raw transcript
-     → LLM prompt → { title, category, summary [, ai_story] }
-     → save row in DB
-     → Idea Details UI
+[Mic start] → [Mic stop]
+     → save audio locally
+     → STT (device and/or Whisper proxy) → raw transcript
+     → persist Human Signal (transcript)  ← never overwrite
+     → Search indexes transcript only
+     → Thought view shows full transcript
 ```
 
 **Rules:**
 
-- Raw transcript is the source of truth; never overwrite it with polished story.
-- Processing UI must communicate stage (transcribe vs generate).
-- Failures must not silently drop the user’s audio when avoidable.
+- Raw transcript is the source of truth; never overwrite it with title, summary, story, or analysis.
+- Capture must not depend on network or LLM availability.
+- Failures must not silently drop the user’s audio.
+- Search matching is not a paid feature.
 
 ---
 
@@ -431,15 +367,13 @@ Delivery style: **AI-assisted Expo development** for Phase 1; **structured phase
 
 ## 15. Client / stakeholder checklist
 
-Confirm before or during Phase 1:
+Confirm during this first version:
 
-1. Final product name: Think Tap vs OneTap  
-2. STT/LLM provider: OpenAI vs Azure (and who owns the keys)  
-3. Auth method: email only vs Google/Apple Sign-In  
-4. Anonymous record-before-login: in MVP or later?  
-5. Categories list (final taxonomy)  
-6. Android-only first release vs Android + iOS together  
-7. Whether Phase 4–5 (encryption, wake word) are contracted in v1 or roadmap  
+1. Final product name: ThinkTap vs Think Tap vs OneTap  
+2. STT provider for raw transcript (device vs Groq/OpenAI Whisper vs BharatGen)  
+3. Android-only first release vs Android + iOS together  
+4. When to pull Word-spec leftovers (ThinkFlow, Source/Thought split) into a later build  
+5. Capture start/stop R&D (Word spec §10) vs tap-only for launch  
 
 ---
 
@@ -460,7 +394,12 @@ A feature is done when:
 
 | Asset | Path / link |
 |-------|-------------|
-| Technical PDF | `OneTap_Mobile_App_Technical_Document.pdf` |
+| Product spec (Word) | `docs/ThinkTap_MVP_V1_Specifications.docx` |
+| Working spec (this build) | `docs/ThinkTap_MVP_V1.md` |
+| Indian multilingual STT | `docs/AI-Indian Multilingual.md` |
+| Backend API guide (Word) | `docs/ThinkTap_Backend_API_Implementation_Guide.docx` |
+| STT proxy | `server/README.md` |
+| Technical PDF (historical) | `OneTap_Mobile_App_Technical_Document.pdf` |
 | Stitch HTML + PNGs | `stitch_think_tap_mobile_app/` |
 | Design tokens | `stitch_think_tap_mobile_app/zenith_archive/DESIGN.md` |
 | Stitch preview | https://stitch.withgoogle.com/preview/7240260240508960783?node-id=095cb0509f804164959e531f4b1babcd |
@@ -469,11 +408,11 @@ A feature is done when:
 
 ## 18. Implementation order (team rule)
 
-1. Read this README and Stitch screens.  
-2. Implement **Phase 0 + Phase 1 only** until MVP acceptance is signed off.  
-3. Do not pull Phase 4–5 work into MVP unless the client explicitly expands scope and timeline.  
-4. When adding native modules, document them under Phase 4/5 and use Expo Dev Client.
+1. Read `docs/ThinkTap_MVP_V1_Specifications.docx` and `docs/ThinkTap_MVP_V1.md`.  
+2. Keep **this first version** to start/stop recording, raw transcript, and search over that transcript.  
+3. Do not pull ThinkFlow, Deep Intelligence, Retap, encryption, or production wake word into this build unless the founder expands scope.  
+4. When adding native modules, document them under later phases and use Expo Dev Client.
 
 ---
 
-*Scope derived from client Stitch package, OneTap technical document (v1.0, July 2026), and agreed build plan (Expo, MVP-first, phased advanced features).*
+*First-version scope derived from ThinkTap MVP V1 Product Specification (HTOS). Stitch and the OneTap PDF remain visual / later-engineering references.*

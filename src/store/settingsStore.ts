@@ -25,7 +25,7 @@ const SAVE_AUDIO_KEY = '@thinktap/save_audio';
 type SettingsState = {
   languageCode: AppLanguageCode;
   speechLocale: SpeechLocaleCode;
-  /** Android 12 and below: keep the audio file instead of the live transcript. */
+  /** Persist the take as a file so cloud STT can auto-detect language. */
   saveAudioRecording: boolean;
   hydrated: boolean;
   hydrate: () => Promise<void>;
@@ -40,13 +40,13 @@ type SettingsState = {
 export const useSettingsStore = create<SettingsState>((set, get) => ({
   languageCode: DEFAULT_LANGUAGE,
   speechLocale: DEFAULT_SPEECH_LOCALE,
-  saveAudioRecording: false,
+  saveAudioRecording: true,
   hydrated: false,
 
   hydrate: async () => {
     let languageCode: AppLanguageCode = DEFAULT_LANGUAGE;
     let speechLocale: SpeechLocaleCode = DEFAULT_SPEECH_LOCALE;
-    let saveAudioRecording = false;
+    let saveAudioRecording = true;
 
     try {
       const raw = await AsyncStorage.getItem(LANGUAGE_KEY);
@@ -69,7 +69,8 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
     }
 
     try {
-      saveAudioRecording = (await AsyncStorage.getItem(SAVE_AUDIO_KEY)) === 'true';
+      const rawSave = await AsyncStorage.getItem(SAVE_AUDIO_KEY);
+      saveAudioRecording = rawSave === null ? true : rawSave === 'true';
     } catch {
       // ignore
     }

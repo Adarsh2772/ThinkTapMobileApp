@@ -12,6 +12,8 @@ type IdeasState = {
   addIdea: (idea: Idea) => Promise<void>;
   updateIdea: (id: string, patch: Partial<Idea>) => Promise<void>;
   deleteIdea: (id: string) => Promise<void>;
+  /** Record a view without changing updatedAt (capture time must stay intact). */
+  touchIdea: (id: string) => Promise<void>;
   getIdea: (id: string) => Idea | undefined;
   ideasForUser: (userId: string) => Idea[];
 };
@@ -33,6 +35,7 @@ export const useIdeasStore = create<IdeasState>((set, get) => ({
           ...idea,
           transcriptSource: idea.transcriptSource ?? 'demo',
           analysis: idea.analysis ?? null,
+          lastAccessedAt: idea.lastAccessedAt ?? null,
         }));
         set({ ideas: normalized, hydrated: true });
         return;
@@ -59,6 +62,15 @@ export const useIdeasStore = create<IdeasState>((set, get) => ({
 
   deleteIdea: async (id) => {
     const ideas = get().ideas.filter((item) => item.id !== id);
+    set({ ideas });
+    await persist(ideas);
+  },
+
+  touchIdea: async (id) => {
+    const now = new Date().toISOString();
+    const ideas = get().ideas.map((item) =>
+      item.id === id ? { ...item, lastAccessedAt: now } : item,
+    );
     set({ ideas });
     await persist(ideas);
   },

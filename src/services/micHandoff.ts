@@ -8,29 +8,36 @@ function delay(ms: number) {
 }
 
 /**
- * Android allows only one SpeechRecognizer. The wake-word service must be fully
- * stopped (not merely paused) before idea capture can hear the mic.
+ * Android allows only one SpeechRecognizer. Pause the wake-word service
+ * (keep the FGS alive so minimized capture can still hear “stop”) and wait
+ * until its recognizer is gone before idea capture takes the mic.
+ *
+ * When Hey Think Tap is off, skip the settle delays so Record starts immediately.
  */
 export async function releaseWakeMicForCapture(): Promise<void> {
   useWakeWordStore.getState().setPausedForRecording(true);
   abortLiveRecognition();
 
+  const wakeRunning =
+    AndroidWakeWord.isSupported() && AndroidWakeWord.isRunning();
+  if (!wakeRunning) {
+    AndroidWakeWord.restoreRecognitionUi();
+    return;
+  }
+
   try {
-    if (AndroidWakeWord.isSupported() && AndroidWakeWord.isRunning()) {
-      await AndroidWakeWord.stopServiceSilent();
-      const deadline = Date.now() + 2500;
-      while (AndroidWakeWord.isRunning() && Date.now() < deadline) {
-        await delay(120);
-      }
+    if (!AndroidWakeWord.isPaused()) {
+      await AndroidWakeWord.pauseService();
+    }
+    const deadline = Date.now() + 700;
+    while (!AndroidWakeWord.isPaused() && Date.now() < deadline) {
+      await delay(60);
     }
   } catch {
-    // still abort JS recognition below
+    // still restore below
   }
 
   abortLiveRecognition();
-  AndroidWakeWord.silenceRecognitionUi();
-  await delay(900);
-  abortLiveRecognition();
-  AndroidWakeWord.silenceRecognitionUi();
-  await delay(500);
+  AndroidWakeWord.restoreRecognitionUi();
+  await delay(200);
 }

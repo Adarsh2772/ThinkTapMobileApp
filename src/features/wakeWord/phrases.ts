@@ -16,7 +16,10 @@ const WAKE_PHRASES = [
   'think app',
   'start recording',
   'start record',
+  'start the recording',
+  'hey thinktap start',
   'hey think tap start',
+  'begin recording',
 ];
 
 /**
@@ -44,6 +47,9 @@ const STOP_COMMANDS = [
   'stop record',
   'stop the recording',
   'hey think tap stop',
+  'hey thinktap stop',
+  'hey think tap, stop',
+  'hey thinktap, stop',
   'think tap stop',
   'end recording',
   'finish recording',

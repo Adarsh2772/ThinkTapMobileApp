@@ -5,12 +5,12 @@ import { Pressable, StyleSheet, Text, View } from 'react-native';
 import { DeleteThoughtDialog } from '@/src/components/DeleteThoughtDialog';
 
 import {
-  categoryColor,
-  colors,
-  fonts,
-  radii,
-  spacing,
-  typography,
+    categoryColor,
+    colors,
+    fonts,
+    radii,
+    spacing,
+    typography,
 } from '@/src/theme/tokens';
 import type { Idea } from '@/src/types';
 import { formatDuration, relativeDate } from '@/src/utils/format';
@@ -63,18 +63,13 @@ export function IdeaCard({ idea, variant = 'compact', onPress, onDelete }: Props
           onPress={onPress}
           style={({ pressed }) => [styles.archiveBody, pressed && styles.pressed]}
         >
-          <Text style={styles.archiveTitle}>{idea.title}</Text>
-          <Text style={styles.snippet} numberOfLines={2}>
-            {idea.analysis?.thought?.trim() || idea.summary}
+          <Text style={styles.archiveTitle} numberOfLines={2}>
+            {idea.transcript?.trim() || 'Recording is not clear. Please record properly.'}
           </Text>
           <View style={styles.archiveFooter}>
             <View style={styles.metaRow}>
               <Ionicons name="mic-outline" size={16} color={colors.secondary} />
               <Text style={styles.metaText}>{formatDuration(idea.durationSec)}</Text>
-            </View>
-            <View style={styles.metaRow}>
-              <Ionicons name="flash-outline" size={16} color={colors.accent} />
-              <Text style={styles.metaText}>AI Transcribed</Text>
             </View>
           </View>
         </Pressable>
@@ -101,7 +96,7 @@ export function IdeaCard({ idea, variant = 'compact', onPress, onDelete }: Props
       </View>
       <View style={{ flex: 1 }}>
         <Text style={styles.compactTitle} numberOfLines={1}>
-          {idea.title}
+          {idea.transcript?.trim() || 'Recording is not clear. Please record properly.'}
         </Text>
         <View style={styles.chipRow}>
           <View style={[styles.chip, { backgroundColor: tint.soft }]}>

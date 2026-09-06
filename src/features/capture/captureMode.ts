@@ -16,9 +16,19 @@ export function supportsAudioWithLiveTranscript(): boolean {
 /**
  * - `device`: OS speech recognition owns the mic (live text / spoken stop).
  * - `audio-file`: expo-audio owns the mic; transcript comes after Stop (e.g. Groq).
+ *
+ * Android 12 and below cannot persist SpeechRecognizer audio. The only way a
+ * take survives Stop is expo-audio writing a file — the Settings toggle cannot
+ * create an audio file that the OS recognizer never wrote.
  */
 export function resolveCaptureMode(preferSavedAudio: boolean): CaptureMode {
-  if (supportsAudioWithLiveTranscript()) {
+  if (!supportsAudioWithLiveTranscript()) {
+    return 'audio-file';
+  }
+  // Android 13+: SpeechRecognizer can persist the take while still hearing
+  // “stop recording”. Forcing expo-audio here owns the mic exclusively, so
+  // spoken start/stop never fire.
+  if (Platform.OS === 'android') {
     return 'device';
   }
   return preferSavedAudio ? 'audio-file' : 'device';

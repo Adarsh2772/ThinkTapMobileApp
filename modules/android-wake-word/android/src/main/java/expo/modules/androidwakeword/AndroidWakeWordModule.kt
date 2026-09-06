@@ -26,19 +26,43 @@ class AndroidWakeWordModule : Module() {
   private val context: Context
     get() = appContext.reactContext ?: throw IllegalStateException("React context lost")
 
+  private var callWatcher: CallStateWatcher? = null
+
   override fun definition() = ModuleDefinition {
     Name("AndroidWakeWord")
 
-    Events("onWakeDetected", "onPartialResult", "onError", "onListeningChange")
+    Events("onWakeDetected", "onStopDetected", "onPartialResult", "onError", "onListeningChange", "onCallState")
 
     OnCreate {
       instance = this@AndroidWakeWordModule
+      try {
+        val ctx = appContext.reactContext ?: appContext.currentActivity
+        if (ctx != null) {
+          RecognitionAudioGuard.restore(ctx)
+        }
+      } catch (_: Exception) {
+        // React context may not be ready yet; service start also restores.
+      }
     }
 
     OnDestroy {
+      try {
+        val ctx = appContext.reactContext ?: appContext.currentActivity
+        if (ctx != null) {
+          RecognitionAudioGuard.restore(ctx)
+        }
+      } catch (_: Exception) {
+        // ignore
+      }
       if (instance === this@AndroidWakeWordModule) {
         instance = null
       }
+      try {
+        callWatcher?.stop()
+      } catch (_: Exception) {
+        // ignore
+      }
+      callWatcher = null
     }
 
     Function("isSupported") {
@@ -51,6 +75,22 @@ class AndroidWakeWordModule : Module() {
 
     Function("isPaused") {
       return@Function WakeWordForegroundService.isPaused
+    }
+
+    Function("isCallActive") {
+      return@Function callWatcher?.isCallActive() == true
+    }
+
+    AsyncFunction("startCallWatch") {
+      val ctx = context
+      val watcher = callWatcher ?: CallStateWatcher(ctx).also { callWatcher = it }
+      watcher.start()
+      return@AsyncFunction watcher.isCallActive()
+    }
+
+    AsyncFunction("stopCallWatch") {
+      callWatcher?.stop()
+      return@AsyncFunction true
     }
 
     AsyncFunction("startService") {
@@ -86,7 +126,11 @@ class AndroidWakeWordModule : Module() {
     }
 
     Function("silenceRecognitionUi") {
-      RecognitionAudioGuard.mute(context)
+      RecognitionAudioGuard.swallowRecognizerCue(context)
+    }
+
+    Function("cancelRecognizerHaptic") {
+      RecognitionAudioGuard.cancelRecognizerHaptic(context)
     }
 
     Function("restoreRecognitionUi") {
@@ -95,6 +139,11 @@ class AndroidWakeWordModule : Module() {
 
     AsyncFunction("playRecordingStartCue") {
       RecognitionAudioGuard.playStartCue(context)
+      return@AsyncFunction true
+    }
+
+    AsyncFunction("playRecordingStopCue") {
+      RecognitionAudioGuard.playStopCue(context)
       return@AsyncFunction true
     }
 
@@ -116,6 +165,15 @@ class AndroidWakeWordModule : Module() {
       return@AsyncFunction true
     }
 
+    AsyncFunction("listenForStop") {
+      if (!WakeWordForegroundService.isRunning) return@AsyncFunction false
+      val intent = Intent(context, WakeWordForegroundService::class.java).apply {
+        action = WakeWordForegroundService.ACTION_LISTEN_STOP
+      }
+      context.startService(intent)
+      return@AsyncFunction true
+    }
+
     AsyncFunction("consumePendingWake") {
       val prefs = context.getSharedPreferences("thinktap_wake", Context.MODE_PRIVATE)
       val pending = prefs.getBoolean("pending", false)
@@ -124,7 +182,33 @@ class AndroidWakeWordModule : Module() {
       }
       val transcript = prefs.getString("transcript", "") ?: ""
       val at = prefs.getLong("at", 0L)
-      prefs.edit().clear().apply()
+      prefs.edit()
+        .remove("pending")
+        .remove("transcript")
+        .remove("at")
+        .apply()
+      if (System.currentTimeMillis() - at > 30_000) {
+        return@AsyncFunction null
+      }
+      return@AsyncFunction mapOf(
+        "transcript" to transcript,
+        "at" to at,
+      )
+    }
+
+    AsyncFunction("consumePendingStop") {
+      val prefs = context.getSharedPreferences("thinktap_wake", Context.MODE_PRIVATE)
+      val pending = prefs.getBoolean("pendingStop", false)
+      if (!pending) {
+        return@AsyncFunction null
+      }
+      val transcript = prefs.getString("stopTranscript", "") ?: ""
+      val at = prefs.getLong("stopAt", 0L)
+      prefs.edit()
+        .remove("pendingStop")
+        .remove("stopTranscript")
+        .remove("stopAt")
+        .apply()
       if (System.currentTimeMillis() - at > 30_000) {
         return@AsyncFunction null
       }
