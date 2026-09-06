@@ -170,6 +170,21 @@ export function findLanguageByWhisperCode(code: string | null | undefined): AppL
   );
 }
 
+/** Languages ThinkTap will keep after STT. Unknown codes (e.g. Romanian on silence) are not understood. */
+export function isSupportedSpokenLanguage(code: string | null | undefined): boolean {
+  const raw = (code ?? '').trim().toLowerCase();
+  if (!raw) return false;
+  const iso = raw.split(/[-_+]/)[0] ?? raw;
+  if (findIndicSpoken(iso) || findIndicSpoken(raw)) return true;
+  if (findLanguageByWhisperCode(iso) || findLanguageByWhisperCode(raw)) return true;
+  return (
+    INDIC_SPOKEN_LANGUAGES.some(
+      (l) => l.name.toLowerCase() === raw || l.name.toLowerCase() === iso,
+    ) ||
+    APP_LANGUAGES.some((l) => l.name.toLowerCase() === raw || l.name.toLowerCase() === iso)
+  );
+}
+
 /**
  * Resolve auto-detected STT language into enrichment metadata.
  * Known app languages keep native scripts; unknown ISO codes use latin defaults.

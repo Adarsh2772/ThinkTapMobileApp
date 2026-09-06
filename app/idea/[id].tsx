@@ -154,7 +154,7 @@ export default function IdeaDetailScreen() {
           <View style={[styles.category, { backgroundColor: tint.bg }]}>
             <Text style={styles.categoryText}>{idea.category}</Text>
           </View>
-          {spoken ? (
+          {idea.language?.trim() && spoken ? (
             <Text style={styles.date}>
               {knownLanguage ? `${knownLanguage.flag} ` : ''}
               {spoken.name}
@@ -190,7 +190,7 @@ export default function IdeaDetailScreen() {
             <Text style={styles.body}>
               {idea.transcript?.trim()
                 ? idea.transcript
-                : 'Transcript was empty. Try recording again and speak clearly.'}
+                : 'Recording is not clear. Please record properly.'}
             </Text>
           </View>
         </View>

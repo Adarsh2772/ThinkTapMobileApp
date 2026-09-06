@@ -71,13 +71,16 @@ export async function recordingExists(uri: string): Promise<boolean> {
 }
 
 /** Read duration from a saved file. Used so Ideas/playback match captured audio. */
-export async function probeAudioDurationSec(uri: string): Promise<number | null> {
+export async function probeAudioDurationSec(
+  uri: string,
+  timeoutMs = 2500,
+): Promise<number | null> {
   const source = normalizeFileUri(uri);
   if (!source) return null;
   let player: ReturnType<typeof createAudioPlayer> | null = null;
   try {
     player = createAudioPlayer(source, { updateInterval: 80, keepAudioSessionActive: false });
-    const deadline = Date.now() + 2500;
+    const deadline = Date.now() + Math.max(200, timeoutMs);
     while (Date.now() < deadline) {
       const seconds = player.duration;
       if (typeof seconds === 'number' && Number.isFinite(seconds) && seconds > 0) {

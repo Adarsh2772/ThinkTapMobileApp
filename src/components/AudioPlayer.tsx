@@ -82,7 +82,8 @@ export function AudioPlayer({ uri, durationSec }: Props) {
 
   const playing = status.playing;
   const positionSec = Math.floor(status.currentTime || 0);
-  const totalSec = Math.max(durationSec, Math.floor(status.duration || 0), 1);
+  const totalSec =
+    status.duration > 0 ? Math.max(1, Math.floor(status.duration)) : Math.max(durationSec, 1);
   const progress = Math.min(1, positionSec / totalSec);
 
   const toggle = async () => {

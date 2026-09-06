@@ -21,7 +21,7 @@ const VOICE_RECORDING: RecordingOptions = {
   numberOfChannels: 1,
   bitRate: 96000,
   directory: 'document',
-  isMeteringEnabled: false,
+  isMeteringEnabled: true,
   android: {
     outputFormat: 'mpeg4',
     audioEncoder: 'aac',
@@ -270,6 +270,7 @@ export function useRecording(options?: { onInterrupted?: () => void }) {
     isActivelyRecording: inSession && !paused && status === 'recording',
     isPaused: paused && active,
     durationSec: Math.floor((recorderState.durationMillis || 0) / 1000),
+    metering: recorderState.metering ?? -160,
     error,
     start,
     pause,

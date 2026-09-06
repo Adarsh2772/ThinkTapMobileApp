@@ -2,10 +2,12 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { AppState, Platform } from 'react-native';
 
 import { resolveCaptureMode } from '@/src/features/capture/captureMode';
+import { AndroidWakeWord } from 'android-wake-word';
 import { useLanguageTranscript } from '@/src/hooks/useLanguageTranscript';
 import { useRecording } from '@/src/hooks/useRecording';
 import { useVoiceStopListener } from '@/src/hooks/useVoiceStopListener';
-import { persistRecording } from '@/src/services/audioStorage';
+import { persistRecording, probeAudioDurationSec } from '@/src/services/audioStorage';
+import { looksLikeWhisperHallucination } from '@/src/services/aiService';
 import {
   abortLiveRecognition,
   isSpeechRecognitionAvailable,
@@ -23,6 +25,10 @@ type CaptureResult = {
 
 export type RecordingStatus = 'idle' | 'recording' | 'paused' | 'stopping';
 
+const SILENCE_PAUSE_MS = 10_000;
+const INACTIVE_PAUSE_MS = 450;
+const SPEECH_METER_THRESHOLD = -42;
+
 /**
  * Idea capture uses OS speech recognition as the microphone owner on Android.
  * Running expo-audio in parallel steals the mic, so the take is empty and
@@ -32,18 +38,22 @@ export function useIdeaCapture(
   options: {
     onCaptureFailed?: (message: string) => void;
     onInterrupted?: () => void;
+    onSilencePause?: () => void;
   } = {},
 ) {
   const onCaptureFailedRef = useRef(options.onCaptureFailed);
   onCaptureFailedRef.current = options.onCaptureFailed;
   const onInterruptedRef = useRef(options.onInterrupted);
   onInterruptedRef.current = options.onInterrupted;
+  const onSilencePauseRef = useRef(options.onSilencePause);
+  onSilencePauseRef.current = options.onSilencePause;
   const speechLocale = useSettingsStore((s) => s.speechLocale);
   const preferSavedAudio = useSettingsStore((s) => s.saveAudioRecording);
 
   const [active, setActive] = useState(false);
   const [paused, setPaused] = useState(false);
   const [stopping, setStopping] = useState(false);
+  const [callHold, setCallHold] = useState(false);
   const [durationSec, setDurationSec] = useState(0);
   const [error, setError] = useState<string | null>(null);
 
@@ -52,10 +62,13 @@ export function useIdeaCapture(
   const backgroundHoldRef = useRef(false);
   const lifecyclePausedRef = useRef(false);
   const interruptionPausedRef = useRef(false);
+  const silenceHoldRef = useRef(false);
+  const lastSpeechAtRef = useRef(0);
+  const leaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const activeRef = useRef(false);
   const pausedRef = useRef(false);
   const lastErrorRef = useRef<string | null>(null);
-  const pauseRef = useRef<(reason?: 'user' | 'lifecycle' | 'interruption') => Promise<boolean>>(
+  const pauseRef = useRef<(reason?: 'user' | 'lifecycle' | 'interruption' | 'silence') => Promise<boolean>>(
     async () => false,
   );
   const resumeRef = useRef<() => Promise<boolean>>(async () => false);
@@ -78,6 +91,8 @@ export function useIdeaCapture(
       if (stoppingNowRef.current) return;
       interruptionPausedRef.current = true;
       lifecyclePausedRef.current = false;
+      silenceHoldRef.current = false;
+      setCallHold(true);
       void pauseRef.current('interruption');
       notifyInterrupted();
     },
@@ -86,6 +101,8 @@ export function useIdeaCapture(
   // and the transcript comes from the saved file after the take.
   const audioOnly = resolveCaptureMode(preferSavedAudio) === 'audio-file';
   const fileRecorder = Platform.OS !== 'android' || audioOnly;
+  const meteringRef = useRef(-160);
+  meteringRef.current = audio.metering;
 
   const fail = useCallback((message: string) => {
     lastErrorRef.current = message;
@@ -115,7 +132,7 @@ export function useIdeaCapture(
     reset,
   } = useLanguageTranscript({
     speechLocale,
-    enabled: active && !audioOnly,
+    enabled: active && !audioOnly && !callHold,
     capturing: active && !paused && !audioOnly,
     onStopPhrase: () => {
       onVoiceStopRef.current?.();
@@ -143,8 +160,13 @@ export function useIdeaCapture(
       if (stoppingNowRef.current) return;
       interruptionPausedRef.current = true;
       lifecyclePausedRef.current = false;
+      silenceHoldRef.current = false;
+      setCallHold(true);
       void pauseRef.current('interruption');
       notifyInterrupted();
+    },
+    onSpeechActivity: () => {
+      lastSpeechAtRef.current = Date.now();
     },
   });
 
@@ -158,9 +180,9 @@ export function useIdeaCapture(
   );
 
   useEffect(() => {
-    if (!active || paused) return;
+    if (!active || paused || stopping) return;
     const tick = () => {
-      if (backgroundHoldRef.current) {
+      if (stoppingNowRef.current || backgroundHoldRef.current) {
         setDurationSec(Math.max(0, Math.floor(pausedAccumMsRef.current / 1000)));
         return;
       }
@@ -170,30 +192,112 @@ export function useIdeaCapture(
     tick();
     const id = setInterval(tick, 250);
     return () => clearInterval(id);
-  }, [active, paused]);
+  }, [active, paused, stopping]);
 
   // Time spent in another app or on the lock screen is not recorded audio.
-  // Android `inactive` is a brief focus blip (Stop tap, speech overlay) — do
-  // not pause/resume on it or Stop will lose the race and the take continues.
+  // Android `inactive` is often an app-switch, but Stop tap is a brief blip —
+  // debounce it so Stop does not pause-then-resume the take.
   useEffect(() => {
+    const clearLeaveTimer = () => {
+      if (leaveTimerRef.current) {
+        clearTimeout(leaveTimerRef.current);
+        leaveTimerRef.current = null;
+      }
+    };
+    const pauseForLeave = () => {
+      leaveTimerRef.current = null;
+      if (!activeRef.current || stoppingNowRef.current || pausedRef.current) return;
+      if (interruptionPausedRef.current || silenceHoldRef.current) return;
+      lifecyclePausedRef.current = true;
+      void pauseRef.current('lifecycle');
+    };
     const sub = AppState.addEventListener('change', (state) => {
-      if (!activeRef.current || stoppingNowRef.current) return;
-      const leftForeground =
-        state === 'background' || (Platform.OS === 'ios' && state === 'inactive');
-      if (leftForeground) {
-        if (pausedRef.current || interruptionPausedRef.current) return;
-        lifecyclePausedRef.current = true;
-        void pauseRef.current('lifecycle');
+      if (!activeRef.current || stoppingNowRef.current) {
+        clearLeaveTimer();
+        return;
+      }
+      if (state === 'background') {
+        clearLeaveTimer();
+        pauseForLeave();
+        return;
+      }
+      if (state === 'inactive') {
+        if (pausedRef.current || interruptionPausedRef.current) {
+          clearLeaveTimer();
+          return;
+        }
+        clearLeaveTimer();
+        leaveTimerRef.current = setTimeout(pauseForLeave, INACTIVE_PAUSE_MS);
         return;
       }
       if (state !== 'active') return;
-      if (lifecyclePausedRef.current && !interruptionPausedRef.current && pausedRef.current) {
+      clearLeaveTimer();
+      if (silenceHoldRef.current || interruptionPausedRef.current) return;
+      if (lifecyclePausedRef.current && pausedRef.current) {
         lifecyclePausedRef.current = false;
         void resumeRef.current();
       }
     });
-    return () => sub.remove();
+    return () => {
+      clearLeaveTimer();
+      sub.remove();
+    };
   }, []);
+
+  useEffect(() => {
+    if (!active || paused || stopping) return;
+    const id = setInterval(() => {
+      if (stoppingNowRef.current || pausedRef.current || !activeRef.current) return;
+      if (fileRecorder) {
+        const meter = meteringRef.current;
+        if (typeof meter === 'number' && meter > SPEECH_METER_THRESHOLD) {
+          lastSpeechAtRef.current = Date.now();
+        }
+      }
+      if (Date.now() - lastSpeechAtRef.current < SILENCE_PAUSE_MS) return;
+      silenceHoldRef.current = true;
+      lifecyclePausedRef.current = false;
+      void pauseRef.current('silence');
+      onSilencePauseRef.current?.();
+    }, 500);
+    return () => clearInterval(id);
+  }, [active, paused, stopping, fileRecorder]);
+
+  // Incoming / outgoing calls (cellular or VoIP) must pause the take and
+  // must not auto-resume when the call ends.
+  useEffect(() => {
+    if (!active || Platform.OS !== 'android' || !AndroidWakeWord.isSupported()) {
+      return;
+    }
+    let cancelled = false;
+    const sub = AndroidWakeWord.addListener('onCallState', (event) => {
+      if (!event.active || stoppingNowRef.current || !activeRef.current) return;
+      interruptionPausedRef.current = true;
+      lifecyclePausedRef.current = false;
+      silenceHoldRef.current = false;
+      setCallHold(true);
+      if (!pausedRef.current) {
+        void pauseRef.current('interruption');
+      }
+      notifyInterrupted();
+    });
+    void AndroidWakeWord.startCallWatch().then((alreadyInCall) => {
+      if (cancelled || !alreadyInCall || stoppingNowRef.current || !activeRef.current) return;
+      interruptionPausedRef.current = true;
+      lifecyclePausedRef.current = false;
+      silenceHoldRef.current = false;
+      setCallHold(true);
+      if (!pausedRef.current) {
+        void pauseRef.current('interruption');
+      }
+      notifyInterrupted();
+    });
+    return () => {
+      cancelled = true;
+      sub.remove();
+      void AndroidWakeWord.stopCallWatch();
+    };
+  }, [active]);
 
   const start = useCallback(async () => {
     if (activeRef.current) return true;
@@ -224,6 +328,9 @@ export function useIdeaCapture(
     backgroundHoldRef.current = false;
     lifecyclePausedRef.current = false;
     interruptionPausedRef.current = false;
+    silenceHoldRef.current = false;
+    lastSpeechAtRef.current = Date.now();
+    setCallHold(false);
     startedAtRef.current = Date.now();
     setDurationSec(0);
     pausedRef.current = false;
@@ -233,7 +340,7 @@ export function useIdeaCapture(
     return true;
   }, [reset, audio, audioOnly, fail, fileRecorder]);
 
-  const pause = useCallback(async (_reason?: 'user' | 'lifecycle' | 'interruption') => {
+  const pause = useCallback(async (_reason?: 'user' | 'lifecycle' | 'interruption' | 'silence') => {
     if (!activeRef.current || pausedRef.current) return false;
     if (!backgroundHoldRef.current) {
       pausedAccumMsRef.current += Date.now() - startedAtRef.current;
@@ -249,8 +356,17 @@ export function useIdeaCapture(
 
   const resume = useCallback(async () => {
     if (!activeRef.current || !pausedRef.current) return false;
+    if (Platform.OS === 'android' && AndroidWakeWord.isCallActive()) {
+      interruptionPausedRef.current = true;
+      setCallHold(true);
+      notifyInterrupted();
+      return false;
+    }
     interruptionPausedRef.current = false;
     lifecyclePausedRef.current = false;
+    silenceHoldRef.current = false;
+    setCallHold(false);
+    lastSpeechAtRef.current = Date.now();
     startedAtRef.current = Date.now();
     pausedRef.current = false;
     setPaused(false);
@@ -267,7 +383,10 @@ export function useIdeaCapture(
       if (!pausedRef.current && !backgroundHoldRef.current) {
         pausedAccumMsRef.current += Date.now() - startedAtRef.current;
       }
+      // Freeze the clock so Stop cannot add elapsed time twice (20s → 40s).
+      backgroundHoldRef.current = true;
       const seconds = Math.max(1, Math.round(pausedAccumMsRef.current / 1000));
+      setDurationSec(seconds);
       if (!audioOnly) {
         // Abort immediately so Stop cannot lose a race with STT restarts.
         stopListening(true);
@@ -277,11 +396,22 @@ export function useIdeaCapture(
         await waitForIdle(400);
       }
 
-      const transcript = audioOnly ? '' : getFullTranscript();
       const speechUri = getAudioUri();
       const uri =
         audioResult?.uri || (speechUri ? await persistRecording(speechUri) : '');
-      const durationSec = audioResult?.durationSec ?? seconds;
+      let transcript = audioOnly ? '' : getFullTranscript();
+      if (looksLikeWhisperHallucination(transcript)) {
+        transcript = '';
+      }
+      let durationSec = seconds;
+      if (uri) {
+        const probed = await probeAudioDurationSec(uri, 800);
+        if (probed && probed > 0) {
+          durationSec = probed;
+        } else if (audioResult?.durationSec && audioResult.durationSec > 0) {
+          durationSec = Math.min(audioResult.durationSec, seconds);
+        }
+      }
 
       if (!audioOnly) {
         abortLiveRecognition();
@@ -293,6 +423,8 @@ export function useIdeaCapture(
       backgroundHoldRef.current = false;
       lifecyclePausedRef.current = false;
       interruptionPausedRef.current = false;
+      silenceHoldRef.current = false;
+      setCallHold(false);
       setActive(false);
       setPaused(false);
       setDurationSec(0);
@@ -341,6 +473,8 @@ export function useIdeaCapture(
     backgroundHoldRef.current = false;
     lifecyclePausedRef.current = false;
     interruptionPausedRef.current = false;
+    silenceHoldRef.current = false;
+    setCallHold(false);
     setActive(false);
     setPaused(false);
     setDurationSec(0);

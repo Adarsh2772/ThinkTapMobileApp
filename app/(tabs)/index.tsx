@@ -82,6 +82,9 @@ export default function HomeScreen() {
     onInterrupted: () => {
       showToast('Recording paused — call in progress', 'info');
     },
+    onSilencePause: () => {
+      showToast('Recording paused — no speech for 10 seconds', 'info');
+    },
   });
   const stoppingRef = useRef(false);
   const finishLockRef = useRef(false);

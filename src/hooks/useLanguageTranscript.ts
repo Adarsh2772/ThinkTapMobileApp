@@ -30,6 +30,8 @@ type Options = {
   onUnavailable?: (message: string) => void;
   /** Mic stolen (phone call / audio focus) — pause the take, do not restart STT. */
   onInterrupted?: () => void;
+  /** Real words arrived — used to reset the 10s silence auto-pause. */
+  onSpeechActivity?: () => void;
 };
 
 function normalize(text: string): string {
@@ -59,6 +61,7 @@ export function useLanguageTranscript({
   onResumePhrase,
   onUnavailable,
   onInterrupted,
+  onSpeechActivity,
 }: Options) {
   const [transcript, setTranscript] = useState('');
   const [interim, setInterim] = useState('');
@@ -73,11 +76,13 @@ export function useLanguageTranscript({
   const onResumeRef = useRef(onResumePhrase);
   const onUnavailableRef = useRef(onUnavailable);
   const onInterruptedRef = useRef(onInterrupted);
+  const onSpeechActivityRef = useRef(onSpeechActivity);
   onStopRef.current = onStopPhrase;
   onPauseRef.current = onPausePhrase;
   onResumeRef.current = onResumePhrase;
   onUnavailableRef.current = onUnavailable;
   onInterruptedRef.current = onInterrupted;
+  onSpeechActivityRef.current = onSpeechActivity;
 
   const genRef = useRef(0);
   const nativeGenRef = useRef(0);
@@ -342,6 +347,7 @@ export function useLanguageTranscript({
     }
 
     if (!capturingRef.current) return;
+    onSpeechActivityRef.current?.();
     commitText(top, Boolean(event.isFinal));
   });
 
@@ -393,13 +399,13 @@ export function useLanguageTranscript({
     }
     if (code === 'audio-capture') {
       persistRef.current = false;
-      // Phone calls steal the mic and usually background the app. The same
-      // error also fires on every SpeechRecognizer restart — do not pause
-      // the take while we are still in the foreground.
-      if (AppState.currentState !== 'active') {
+      // Phone calls steal the mic. App-switch also kills STT after we already
+      // paused — do not mark that as a call or returning to the app stays paused.
+      if (AppState.currentState !== 'active' && capturingRef.current) {
         onInterruptedRef.current?.();
         return;
       }
+      if (AppState.currentState !== 'active') return;
       scheduleRestart(Platform.OS === 'android' ? 800 : 600);
       return;
     }

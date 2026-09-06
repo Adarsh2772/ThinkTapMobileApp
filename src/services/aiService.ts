@@ -6,6 +6,7 @@ import { normalizeFileUri } from '@/src/services/audioStorage';
 import {
   applyCodeMixIfNeeded,
   hasIndicScript,
+  isSupportedSpokenLanguage,
   looksRomanizedIndic,
   resolveSpokenLanguage,
   type AppLanguageCode,
@@ -198,6 +199,16 @@ const HALLUCINATION_LANGS = new Set([
   'nynorsk',
   'norwegian',
   'norwegian nynorsk',
+  'ro',
+  'romanian',
+  'hu',
+  'hungarian',
+  'cy',
+  'welsh',
+  'mt',
+  'maltese',
+  'la',
+  'latin',
 ]);
 
 const CANNED_HALLUCINATIONS = [
@@ -205,7 +216,22 @@ const CANNED_HALLUCINATIONS = [
   'thanks for watching',
   'thanks for listening',
   'please subscribe',
-  'subscribe to',
+  'subscribe to my',
+  'subscribe to the',
+  'like and subscribe',
+  "don't forget to subscribe",
+  'dont forget to subscribe',
+  'nu uitați să vă abonați',
+  'nu uitati sa va abonati',
+  'abonați la canalul',
+  'abonati la canalul',
+  'canalul meu',
+  'publicez noile video',
+  'suscríbete',
+  'suscribete',
+  'abonnez-vous',
+  'inscreva-se no canal',
+  'iscriviti al canale',
   'mbc news',
   '시청해 주셔서',
   '구독',
@@ -216,6 +242,37 @@ const CANNED_HALLUCINATIONS = [
   '[applause]',
   '(applause)',
 ];
+
+/** Same seed Whisper sees as `prompt`. On silence it often repeats this as the transcript. */
+const WHISPER_SEED_PROMPT =
+  'आज मौसम अच्छा है। आज मी ऑफिसला जाणार आहे. कल मुझे meeting के लिए जाना है।';
+
+function foldHallucinationText(value: string): string {
+  return value
+    .toLowerCase()
+    .replace(/[।.!,?;:'"()[\]]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .replace(/\bmi\b/g, 'मी')
+    .replace(/काळ/g, 'कल')
+    .replace(/मीटिंग|मिटींग/g, 'meeting')
+    .replace(/लिये/g, 'लिए')
+    .replace(/\bजन\b/g, 'जाना')
+    .trim();
+}
+
+function looksLikeWhisperPromptEcho(text: string): boolean {
+  const folded = foldHallucinationText(text);
+  const prompt = foldHallucinationText(WHISPER_SEED_PROMPT);
+  if (!folded) return true;
+  if (prompt.includes(folded) && folded.split(' ').length >= 4) return true;
+  if (folded.includes(prompt)) return true;
+
+  const promptTokens = new Set(prompt.split(' ').filter(Boolean));
+  const words = folded.split(' ').filter(Boolean);
+  if (words.length < 5) return false;
+  const hits = words.filter((word) => promptTokens.has(word)).length;
+  return hits >= 5 && hits / words.length >= 0.65;
+}
 
 /**
  * Whisper often invents Korean / Punjabi / Norwegian / “thanks for watching”
@@ -239,6 +296,7 @@ export function looksLikeWhisperHallucination(
   const lang = (language ?? '').trim().toLowerCase();
   const langIso = lang.split(/[-_]/)[0] ?? lang;
   if (HALLUCINATION_LANGS.has(lang) || HALLUCINATION_LANGS.has(langIso)) return true;
+  if (lang && !isSupportedSpokenLanguage(lang) && !isSupportedSpokenLanguage(langIso)) return true;
 
   const gurmukhi = (t.match(/[\u0A00-\u0A7F]/g) ?? []).length;
   if ((langIso === 'pa' || lang === 'panjabi' || lang === 'punjabi') && gurmukhi === 0) {
@@ -247,6 +305,7 @@ export function looksLikeWhisperHallucination(
 
   const lower = t.toLowerCase();
   if (CANNED_HALLUCINATIONS.some((p) => lower.includes(p))) return true;
+  if (looksLikeWhisperPromptEcho(t)) return true;
 
   return false;
 }
@@ -280,12 +339,15 @@ export function transcriptFromWhisperSegments(
   return { text, language };
 }
 
+export const UNCLEAR_RECORDING_MESSAGE =
+  'Recording is not clear. Please record properly.';
+
 export function emptySpeechEnrichment(): EnrichmentResult {
   return {
     transcript: '',
     title: 'Voice note',
     category: 'Business',
-    summary: 'Your recording was saved. No speech was detected in this take.',
+    summary: UNCLEAR_RECORDING_MESSAGE,
     aiStory: null,
     detectedLanguage: '',
     source: 'demo',
@@ -426,7 +488,7 @@ export async function enrichIdeaFromAudio(input: {
  * English instructions bias the model to English. Seed with native-script speech.
  */
 export function whisperPromptFor(_languageName: string | 'auto'): string {
-  return 'आज मौसम अच्छा है। आज मी ऑफिसला जाणार आहे. कल मुझे meeting के लिए जाना है।';
+  return WHISPER_SEED_PROMPT;
 }
 
 function providerConfig(apiKey: string) {

@@ -64,7 +64,7 @@ export function IdeaCard({ idea, variant = 'compact', onPress, onDelete }: Props
           style={({ pressed }) => [styles.archiveBody, pressed && styles.pressed]}
         >
           <Text style={styles.archiveTitle} numberOfLines={2}>
-            {idea.transcript?.trim() || 'No transcript yet'}
+            {idea.transcript?.trim() || 'Recording is not clear. Please record properly.'}
           </Text>
           <View style={styles.archiveFooter}>
             <View style={styles.metaRow}>
@@ -96,7 +96,7 @@ export function IdeaCard({ idea, variant = 'compact', onPress, onDelete }: Props
       </View>
       <View style={{ flex: 1 }}>
         <Text style={styles.compactTitle} numberOfLines={1}>
-          {idea.transcript?.trim() || 'No transcript yet'}
+          {idea.transcript?.trim() || 'Recording is not clear. Please record properly.'}
         </Text>
         <View style={styles.chipRow}>
           <View style={[styles.chip, { backgroundColor: tint.soft }]}>

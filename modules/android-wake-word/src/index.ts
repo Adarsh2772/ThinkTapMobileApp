@@ -8,6 +8,7 @@ export type WakePayload = { transcript: string };
 export type PartialPayload = { transcript: string; isFinal: boolean };
 export type ErrorPayload = { code: string; message: string };
 export type ListeningPayload = { listening: boolean; paused: boolean };
+export type CallStatePayload = { active: boolean };
 export type PendingWake = { transcript: string; at: number } | null;
 
 type WakeEventMap = {
@@ -16,12 +17,16 @@ type WakeEventMap = {
   onPartialResult: PartialPayload;
   onError: ErrorPayload;
   onListeningChange: ListeningPayload;
+  onCallState: CallStatePayload;
 };
 
 type AndroidWakeWordNativeModule = {
   isSupported(): boolean;
   isRunning(): boolean;
   isPaused(): boolean;
+  isCallActive(): boolean;
+  startCallWatch(): Promise<boolean>;
+  stopCallWatch(): Promise<boolean>;
   startService(): Promise<boolean>;
   stopService(): Promise<boolean>;
   stopServiceSilent(): Promise<boolean>;
@@ -79,6 +84,33 @@ export const AndroidWakeWord = {
     if (!Native) return false;
     try {
       return Native.isPaused();
+    } catch {
+      return false;
+    }
+  },
+
+  isCallActive(): boolean {
+    if (!Native) return false;
+    try {
+      return Native.isCallActive();
+    } catch {
+      return false;
+    }
+  },
+
+  async startCallWatch(): Promise<boolean> {
+    if (!Native) return false;
+    try {
+      return Native.startCallWatch();
+    } catch {
+      return false;
+    }
+  },
+
+  async stopCallWatch(): Promise<boolean> {
+    if (!Native) return false;
+    try {
+      return Native.stopCallWatch();
     } catch {
       return false;
     }

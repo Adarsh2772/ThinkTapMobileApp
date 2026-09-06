@@ -26,10 +26,12 @@ class AndroidWakeWordModule : Module() {
   private val context: Context
     get() = appContext.reactContext ?: throw IllegalStateException("React context lost")
 
+  private var callWatcher: CallStateWatcher? = null
+
   override fun definition() = ModuleDefinition {
     Name("AndroidWakeWord")
 
-    Events("onWakeDetected", "onStopDetected", "onPartialResult", "onError", "onListeningChange")
+    Events("onWakeDetected", "onStopDetected", "onPartialResult", "onError", "onListeningChange", "onCallState")
 
     OnCreate {
       instance = this@AndroidWakeWordModule
@@ -55,6 +57,12 @@ class AndroidWakeWordModule : Module() {
       if (instance === this@AndroidWakeWordModule) {
         instance = null
       }
+      try {
+        callWatcher?.stop()
+      } catch (_: Exception) {
+        // ignore
+      }
+      callWatcher = null
     }
 
     Function("isSupported") {
@@ -67,6 +75,22 @@ class AndroidWakeWordModule : Module() {
 
     Function("isPaused") {
       return@Function WakeWordForegroundService.isPaused
+    }
+
+    Function("isCallActive") {
+      return@Function callWatcher?.isCallActive() == true
+    }
+
+    AsyncFunction("startCallWatch") {
+      val ctx = context
+      val watcher = callWatcher ?: CallStateWatcher(ctx).also { callWatcher = it }
+      watcher.start()
+      return@AsyncFunction watcher.isCallActive()
+    }
+
+    AsyncFunction("stopCallWatch") {
+      callWatcher?.stop()
+      return@AsyncFunction true
     }
 
     AsyncFunction("startService") {
