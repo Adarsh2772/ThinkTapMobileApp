@@ -32,7 +32,19 @@ type Options = {
   onInterrupted?: () => void;
   /** Real words arrived — used to reset the 10s silence auto-pause. */
   onSpeechActivity?: () => void;
+  /**
+   * STT error from the engine. Return true to swallow the error (no retry).
+   * Used to detect mic contention and fall back to audio-only.
+   */
+  onSttError?: (code: string) => boolean | void;
 };
+
+/**
+ * WHY: only one instance may drive the recognizer. Screen remounts can leave an
+ * old instance alive whose async cleanup has not finished. Newest mount wins.
+ * No version check — this affects every Android version.
+ */
+let recognizerOwner: symbol | null = null;
 
 function normalize(text: string): string {
   return text.replace(/\s+/g, ' ').trim();
@@ -62,6 +74,7 @@ export function useLanguageTranscript({
   onUnavailable,
   onInterrupted,
   onSpeechActivity,
+  onSttError,
 }: Options) {
   const [transcript, setTranscript] = useState('');
   const [interim, setInterim] = useState('');
@@ -77,14 +90,18 @@ export function useLanguageTranscript({
   const onUnavailableRef = useRef(onUnavailable);
   const onInterruptedRef = useRef(onInterrupted);
   const onSpeechActivityRef = useRef(onSpeechActivity);
+  const onSttErrorRef = useRef(onSttError);
   onStopRef.current = onStopPhrase;
   onPauseRef.current = onPausePhrase;
   onResumeRef.current = onResumePhrase;
   onUnavailableRef.current = onUnavailable;
   onInterruptedRef.current = onInterrupted;
   onSpeechActivityRef.current = onSpeechActivity;
+  onSttErrorRef.current = onSttError;
 
   const genRef = useRef(0);
+  const ownerRef = useRef<symbol>(Symbol('stt'));
+  const mountedRef = useRef(true);
   const nativeGenRef = useRef(0);
   const nativeActiveRef = useRef(false);
   const stopFiredRef = useRef(false);
@@ -204,6 +221,10 @@ export function useLanguageTranscript({
     commitInterimRef.current();
     clearRestart();
     setListening(false);
+    if (recognizerOwner !== ownerRef.current) {
+      notifyEnded();
+      return;
+    }
     if (abort) {
       nativeActiveRef.current = false;
       genRef.current += 1;
@@ -216,12 +237,20 @@ export function useLanguageTranscript({
   }, []);
 
   const startListening = useCallback(async (fromRestart = false) => {
-    if (!enabledRef.current || stopFiredRef.current || fatalRef.current) return;
+    if (!mountedRef.current || !enabledRef.current || stopFiredRef.current || fatalRef.current) {
+      return;
+    }
+    // WHY: claim the recognizer so a stale instance cannot restart underneath us.
+    recognizerOwner = ownerRef.current;
     startingRef.current = true;
     const gen = fromRestart ? genRef.current : ++genRef.current;
 
     try {
       const granted = await requestSpeechPermissions();
+      if (recognizerOwner !== ownerRef.current || !mountedRef.current) {
+        startingRef.current = false;
+        return;
+      }
       if (!granted) {
         startingRef.current = false;
         setError('Speech recognition permission is required to transcribe.');
@@ -239,7 +268,12 @@ export function useLanguageTranscript({
       const settleMs = nativeActiveRef.current ? 450 : fromRestart ? 120 : 250;
       if (nativeActiveRef.current) abortLiveRecognition();
       await new Promise((r) => setTimeout(r, settleMs));
-      if (gen !== genRef.current || !enabledRef.current || stopFiredRef.current) {
+      if (
+        gen !== genRef.current ||
+        !enabledRef.current ||
+        stopFiredRef.current ||
+        recognizerOwner !== ownerRef.current
+      ) {
         startingRef.current = false;
         return;
       }
@@ -253,14 +287,21 @@ export function useLanguageTranscript({
         outputFileName: `idea-${Date.now()}-${fileSeq.current}.wav`,
         persist: persistRef.current,
       });
-      if (gen !== genRef.current || !enabledRef.current) {
+      if (
+        gen !== genRef.current ||
+        !enabledRef.current ||
+        recognizerOwner !== ownerRef.current
+      ) {
         nativeActiveRef.current = false;
         startingRef.current = false;
-        abortLiveRecognition();
+        if (recognizerOwner === ownerRef.current) abortLiveRecognition();
         return;
       }
       setListening(true);
       startingRef.current = false;
+      if (__DEV__) {
+        console.log('[STT] listening', { at: Date.now(), gen });
+      }
     } catch (e) {
       console.warn('Language transcript failed to start', e);
       nativeActiveRef.current = false;
@@ -278,7 +319,12 @@ export function useLanguageTranscript({
   const scheduleRestart = (ms: number) => {
     clearRestart();
     restartTimer.current = setTimeout(() => {
-      if (enabledRef.current && !stopFiredRef.current && !fatalRef.current) {
+      if (
+        mountedRef.current &&
+        enabledRef.current &&
+        !stopFiredRef.current &&
+        !fatalRef.current
+      ) {
         void startListening(true);
       }
     }, ms);
@@ -307,6 +353,7 @@ export function useLanguageTranscript({
   };
 
   useSpeechRecognitionEvent('result', (event) => {
+    if (recognizerOwner !== ownerRef.current) return;
     if (nativeGenRef.current !== genRef.current) return;
 
     const results = event.results ?? [];
@@ -359,6 +406,18 @@ export function useLanguageTranscript({
   });
 
   useSpeechRecognitionEvent('end', () => {
+    if (recognizerOwner !== ownerRef.current) {
+      notifyEnded();
+      return;
+    }
+    if (__DEV__) {
+      console.log('[STT] end', {
+        at: Date.now(),
+        starting: startingRef.current,
+        gen: genRef.current,
+        nativeGen: nativeGenRef.current,
+      });
+    }
     if (startingRef.current) {
       notifyEnded();
       return;
@@ -377,6 +436,24 @@ export function useLanguageTranscript({
   });
 
   useSpeechRecognitionEvent('error', (event) => {
+    if (recognizerOwner !== ownerRef.current) {
+      notifyEnded();
+      return;
+    }
+    if (__DEV__) {
+      console.log('[STT] error', event?.error, {
+        at: Date.now(),
+        starting: startingRef.current,
+      });
+    }
+    const code = event?.error ?? '';
+    if (onSttErrorRef.current?.(code)) {
+      nativeActiveRef.current = false;
+      startingRef.current = false;
+      setListening(false);
+      notifyEnded();
+      return;
+    }
     if (startingRef.current) {
       notifyEnded();
       return;
@@ -391,7 +468,6 @@ export function useLanguageTranscript({
     setListening(false);
     notifyEnded();
     if (!enabledRef.current || stopFiredRef.current) return;
-    const code = event?.error ?? '';
     if (code === 'aborted') return;
     if (code === 'language-not-supported' || code === 'service-not-allowed') {
       handleLanguageUnavailable();
@@ -419,6 +495,17 @@ export function useLanguageTranscript({
     }
     scheduleRestart(150);
   });
+
+  useEffect(() => {
+    mountedRef.current = true;
+    recognizerOwner = ownerRef.current;
+    return () => {
+      mountedRef.current = false;
+      if (recognizerOwner === ownerRef.current) {
+        recognizerOwner = null;
+      }
+    };
+  }, []);
 
   useEffect(() => {
     stopFiredRef.current = false;

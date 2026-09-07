@@ -12,6 +12,7 @@ type Props = {
   isStarting?: boolean;
   durationSec: number;
   liveTranscript?: string;
+  transcribingPlaceholder?: boolean;
   wakeEnabled?: boolean;
   supportsVoiceStop?: boolean;
   speechLocaleName?: string;
@@ -34,6 +35,7 @@ export function VoiceAssistantStage({
   isStarting = false,
   durationSec,
   liveTranscript,
+  transcribingPlaceholder = false,
   wakeEnabled = false,
   supportsVoiceStop = true,
   speechLocaleName,
@@ -115,6 +117,8 @@ export function VoiceAssistantStage({
         <Text style={styles.transcript} numberOfLines={4}>
           {liveTranscript}
         </Text>
+      ) : isRecording && !isPaused && transcribingPlaceholder ? (
+        <Text style={styles.transcript}>Transcribing…</Text>
       ) : null}
     </View>
   );

@@ -1,5 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { AppState, Platform } from 'react-native';
+import AsyncStorage from '@react-native-async-storage/async-storage';
+import Constants from 'expo-constants';
 
 import { resolveCaptureMode } from '@/src/features/capture/captureMode';
 import { AndroidWakeWord } from 'android-wake-word';
@@ -28,11 +30,56 @@ export type RecordingStatus = 'idle' | 'recording' | 'paused' | 'stopping';
 const SILENCE_PAUSE_MS = 10_000;
 const INACTIVE_PAUSE_MS = 450;
 const SPEECH_METER_THRESHOLD = -42;
+const PARALLEL_GRACE_MS = 2500;
+const MIC_SHARE_KEY = '@thinktap/mic_share_supported';
+
+type MicShareCache = {
+  supported: boolean;
+  appVersion: string;
+  osVersion: string;
+};
+
+function currentAppVersion(): string {
+  return Constants.expoConfig?.version ?? '1.0.0';
+}
+
+function currentOsVersion(): string {
+  return `${Platform.OS}-${String(Platform.Version)}`;
+}
+
+async function readMicShareCache(): Promise<boolean | null> {
+  try {
+    const raw = await AsyncStorage.getItem(MIC_SHARE_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as MicShareCache;
+    if (parsed.appVersion !== currentAppVersion() || parsed.osVersion !== currentOsVersion()) {
+      await AsyncStorage.removeItem(MIC_SHARE_KEY);
+      return null;
+    }
+    return parsed.supported;
+  } catch {
+    return null;
+  }
+}
+
+async function writeMicShareCache(supported: boolean): Promise<void> {
+  const payload: MicShareCache = {
+    supported,
+    appVersion: currentAppVersion(),
+    osVersion: currentOsVersion(),
+  };
+  try {
+    await AsyncStorage.setItem(MIC_SHARE_KEY, JSON.stringify(payload));
+  } catch {
+    // ignore
+  }
+}
 
 /**
- * Idea capture uses OS speech recognition as the microphone owner on Android.
- * Running expo-audio in parallel steals the mic, so the take is empty and
- * spoken “stop recording” is never heard.
+ * expo-audio always writes the file, on every Android version. The take
+ * must survive Stop even if the recognizer, the network, or the AI layer fails.
+ * Live transcription is attempted in parallel; mic-sharing failure is detected
+ * at runtime rather than guessed from Platform.Version.
  */
 export function useIdeaCapture(
   options: {
@@ -77,6 +124,9 @@ export function useIdeaCapture(
   const onVoiceStopRef = useRef<(() => void) | null>(null);
   const onVoicePauseRef = useRef<(() => void) | null>(null);
   const onVoiceResumeRef = useRef<(() => void) | null>(null);
+  const micShareFailedRef = useRef(false);
+  const parallelStartedAtRef = useRef(0);
+  const [micShareFailed, setMicShareFailed] = useState(false);
 
   const notifyInterrupted = () => {
     if (stoppingNowRef.current) return;
@@ -100,7 +150,12 @@ export function useIdeaCapture(
   // In audio-file mode the recorder owns the mic, so live speech-to-text is off
   // and the transcript comes from the saved file after the take.
   const audioOnly = resolveCaptureMode(preferSavedAudio) === 'audio-file';
-  const fileRecorder = Platform.OS !== 'android' || audioOnly;
+  /**
+   * WHY: expo-audio always writes the file, on every Android version. The take
+   * must survive Stop even if the recognizer, the network, or the AI layer fails.
+   * No Platform.Version check — capability is detected at runtime below.
+   */
+  const fileRecorder = true;
   const meteringRef = useRef(-160);
   meteringRef.current = audio.metering;
 
@@ -121,6 +176,18 @@ export function useIdeaCapture(
     onVoiceResumeRef.current = handler;
   }, []);
 
+  useEffect(() => {
+    let cancelled = false;
+    void readMicShareCache().then((supported) => {
+      if (cancelled || supported !== false) return;
+      micShareFailedRef.current = true;
+      setMicShareFailed(true);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
   const {
     displayText,
     error: sttError,
@@ -132,8 +199,8 @@ export function useIdeaCapture(
     reset,
   } = useLanguageTranscript({
     speechLocale,
-    enabled: active && !audioOnly && !callHold,
-    capturing: active && !paused && !audioOnly,
+    enabled: active && !audioOnly && !callHold && !micShareFailed,
+    capturing: active && !paused && !audioOnly && !micShareFailed,
     onStopPhrase: () => {
       onVoiceStopRef.current?.();
     },
@@ -143,9 +210,32 @@ export function useIdeaCapture(
     onResumePhrase: () => {
       onVoiceResumeRef.current?.();
     },
+    onSttError: (code: string) => {
+      const withinGrace = Date.now() - parallelStartedAtRef.current < PARALLEL_GRACE_MS;
+      const contention = code === 'audio-capture' || code === 'client' || code === 'busy';
+      if (withinGrace && contention && !micShareFailedRef.current && fileRecorder) {
+        // WHY: this device cannot share the mic. Stop retrying live transcription
+        // and let the take continue as audio-only — the file is already recording,
+        // so nothing is lost. Transcript comes from the file after Stop.
+        micShareFailedRef.current = true;
+        setMicShareFailed(true);
+        void writeMicShareCache(false);
+        if (__DEV__) {
+          console.log('[CAPTURE] mic sharing unsupported — falling back to audio-only');
+        }
+        abortLiveRecognition();
+        return true;
+      }
+      return false;
+    },
     onUnavailable: (message) => {
-      // Nothing can be captured, so close the take rather than leaving the
-      // timer running over a recogniser that will never produce a word.
+      // File is already recording — keep the take. Transcript comes after Stop.
+      if (fileRecorder && activeRef.current) {
+        micShareFailedRef.current = true;
+        setMicShareFailed(true);
+        abortLiveRecognition();
+        return;
+      }
       if (fileRecorder) void audio.discard();
       activeRef.current = false;
       pausedRef.current = false;
@@ -307,10 +397,6 @@ export function useIdeaCapture(
       fail('Speech recognition permission is required to transcribe.');
       return null;
     }
-    if (!audioOnly && !isSpeechRecognitionAvailable()) {
-      fail('Speech recognition is unavailable on this device.');
-      return null;
-    }
 
     reset();
     abortLiveRecognition();
@@ -321,6 +407,11 @@ export function useIdeaCapture(
         fail(audio.error ?? 'Could not start the recorder. Try again.');
         return null;
       }
+      parallelStartedAtRef.current = Date.now();
+    }
+    if (!audioOnly && !isSpeechRecognitionAvailable()) {
+      micShareFailedRef.current = true;
+      setMicShareFailed(true);
     }
     lastErrorRef.current = null;
     setError(null);
@@ -337,6 +428,13 @@ export function useIdeaCapture(
     activeRef.current = true;
     setPaused(false);
     setActive(true);
+    if (__DEV__) {
+      console.log('[CAPTURE] mode', {
+        audioOnly,
+        micShareFailed: micShareFailedRef.current,
+        androidVersion: Platform.Version,
+      });
+    }
     return true;
   }, [reset, audio, audioOnly, fail, fileRecorder]);
 
@@ -522,11 +620,12 @@ export function useIdeaCapture(
     setVoiceStopHandler,
     setVoicePauseHandler,
     setVoiceResumeHandler,
-    supportsVoiceStop: !audioOnly || Platform.OS !== 'android',
+    supportsVoiceStop: (!audioOnly && !micShareFailed) || Platform.OS !== 'android',
     savesAudioFile: fileRecorder,
-    captureMode: audioOnly ? ('audio-file' as const) : ('device' as const),
+    captureMode: audioOnly || micShareFailed ? ('audio-file' as const) : ('device' as const),
     liveTranscript: displayText,
     listening,
     speechLocale,
+    micShareFailed,
   };
 }

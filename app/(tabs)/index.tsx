@@ -44,7 +44,16 @@ export default function HomeScreen() {
   const setCaptureStarting = useWakeWordStore((s) => s.setCaptureStarting);
   const lastTrigger = useRef(0);
   const lastStop = useRef(0);
+  const mountIdRef = useRef(Math.random().toString(36).slice(2, 7));
   const [appState, setAppState] = useState(AppState.currentState);
+
+  useEffect(() => {
+    if (__DEV__) {
+      console.log('[HOME] mount', mountIdRef.current);
+      return () => console.log('[HOME] unmount', mountIdRef.current);
+    }
+    return undefined;
+  }, []);
 
   useEffect(() => {
     const sub = AppState.addEventListener('change', setAppState);
@@ -74,6 +83,8 @@ export default function HomeScreen() {
     supportsVoiceStop,
     liveTranscript,
     speechLocale,
+    micShareFailed,
+    captureMode,
   } = useIdeaCapture({
     onCaptureFailed: (message) => {
       showToast(message, 'error');
@@ -335,6 +346,7 @@ export default function HomeScreen() {
             isStarting={captureStarting && !isRecording && status !== 'stopping'}
             durationSec={durationSec}
             liveTranscript={liveTranscript}
+            transcribingPlaceholder={micShareFailed || captureMode === 'audio-file'}
             wakeEnabled={wakeEnabled}
             supportsVoiceStop={supportsVoiceStop}
             speechLocaleName={isRecording ? getSpeechLocale(speechLocale).name : undefined}

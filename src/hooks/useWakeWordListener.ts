@@ -229,6 +229,9 @@ export function useWakeWordListener() {
 
     const subs = [
       AndroidWakeWord.addListener('onWakeDetected', (event) => {
+        if (__DEV__) {
+          console.log('[WAKE] WAKE FIRED:', JSON.stringify(event.transcript));
+        }
         setLastHeard(event.transcript);
         fireWakeTrigger();
         // The service also persists the wake so a cold start can pick it up.
@@ -237,12 +240,20 @@ export function useWakeWordListener() {
         void AndroidWakeWord.consumePendingWake();
       }),
       AndroidWakeWord.addListener('onStopDetected', (event) => {
+        if (__DEV__) {
+          console.log('[WAKE] STOP FIRED:', JSON.stringify(event.transcript));
+        }
         setLastHeard(event.transcript);
         fireStopTrigger();
         void AndroidWakeWord.consumePendingStop();
       }),
       AndroidWakeWord.addListener('onPartialResult', (event) => {
-        if (event.transcript) setLastHeard(event.transcript);
+        if (event.transcript) {
+          if (__DEV__) {
+            console.log('[WAKE] heard:', JSON.stringify(event.transcript));
+          }
+          setLastHeard(event.transcript);
+        }
       }),
       AndroidWakeWord.addListener('onListeningChange', (event) => {
         setListening(event.listening && !event.paused);

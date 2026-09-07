@@ -72,48 +72,25 @@ class WakeWordForegroundService : Service() {
     var listenMode: String = MODE_WAKE
       private set
 
-    private val WAKE_PHRASES = listOf(
-      "hey think tap",
-      "hey thinktap",
-      "hey think app",
-      "hey thinktab",
-      "a think tap",
-      "hey thin tap",
-      "hey thing tap",
-      "hi think tap",
-      "hey think that",
-      "hey think cap",
-      "hey think top",
-      "think tap",
-      "thinktap",
-      "think app",
-      "start recording",
-      "start record",
-      "start the recording",
-      "hey thinktap start",
-      "hey think tap start",
-      "begin recording",
+    /**
+     * WHY: Google returns a different mangling every time ("think that",
+     * "thinking tab", "hitting tap", "I think that"). Match the shape of the
+     * name, not a fixed list of strings. Applies to every Android version —
+     * the recognizer mangles the brand name on all of them.
+     */
+    private val NAME_PATTERN = Regex(
+      "\\b(hey|hi|a|i|hitting|thinking)?\\s*" +
+        "(think|thin|thing|sink|hitting|thinking)\\s*" +
+        "(tap|tab|top|app|cap|that|taps|tabs|i have)\\b"
     )
 
-    private val STOP_COMMANDS = listOf(
-      "stop recording",
-      "stop record",
-      "stop the recording",
-      "hey think tap stop",
-      "hey thinktap stop",
-      "think tap stop",
-      "end recording",
-      "finish recording",
-    )
+    private val START_ONLY = Regex("\\b(start|begin|new)\\s+(recording|record|note|idea)\\b")
+    private val STOP_ONLY = Regex("\\b(stop|end|finish)\\s+(the\\s+)?(recording|record)\\b")
+    private val TRAILING_STOP = Regex("\\b(stop|end|finish|done)\\b\\s*$")
 
     private val STOP_WORDS = listOf(
-      "stop",
-      "please stop",
-      "that is all",
-      "thats all",
-      "im done",
-      "i m done",
-      "i am done",
+      "stop", "please stop", "that is all", "thats all",
+      "im done", "i m done", "i am done",
     )
 
     fun normalize(text: String): String =
@@ -122,17 +99,22 @@ class WakeWordForegroundService : Service() {
         .replace(Regex("\\s+"), " ")
         .trim()
 
-    fun matchesWakePhrase(text: String): Boolean {
-      val n = normalize(text)
-      if (n.isEmpty()) return false
-      return WAKE_PHRASES.any { phrase -> n == phrase || n.contains(phrase) }
-    }
-
     fun matchesStopPhrase(text: String): Boolean {
       val n = normalize(text)
       if (n.isEmpty()) return false
-      if (STOP_COMMANDS.any { phrase -> n.contains(phrase) }) return true
-      return STOP_WORDS.any { phrase -> n == phrase }
+      if (STOP_ONLY.containsMatchIn(n)) return true
+      if (NAME_PATTERN.containsMatchIn(n) && TRAILING_STOP.containsMatchIn(n)) return true
+      return STOP_WORDS.any { it == n }
+    }
+
+    fun matchesWakePhrase(text: String): Boolean {
+      val n = normalize(text)
+      if (n.isEmpty()) return false
+      // WHY: a stop utterance also contains the name — stop must win.
+      if (matchesStopPhrase(n)) return false
+      if (START_ONLY.containsMatchIn(n)) return true
+      if (NAME_PATTERN.containsMatchIn(n)) return true
+      return false
     }
   }
 

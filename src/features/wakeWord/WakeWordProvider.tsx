@@ -1,6 +1,6 @@
 import type { ReactNode } from 'react';
 import { useEffect, useRef } from 'react';
-import { useRouter } from 'expo-router';
+import { usePathname, useRouter } from 'expo-router';
 
 import { useWakeWordListener } from '@/src/hooks/useWakeWordListener';
 import { useWakeWordStore } from '@/src/store/wakeWordStore';
@@ -58,13 +58,18 @@ function usePauseWakeWhileCapturing() {
 
 function useNavigateHomeOnWake() {
   const router = useRouter();
+  const pathname = usePathname();
   const triggerToken = useWakeWordStore((s) => s.triggerToken);
   const lastToken = useRef(0);
 
   useEffect(() => {
     if (!triggerToken || triggerToken === lastToken.current) return;
     lastToken.current = triggerToken;
-    // Always open the Think Tap Home tab (index) before recording starts.
+    // WHY: replacing the route with itself remounts HomeScreen and leaves a
+    // second live transcript hook fighting for the microphone.
+    if (pathname === '/' || pathname === '/(tabs)' || pathname === '/(tabs)/index') {
+      return;
+    }
     router.replace('/(tabs)');
-  }, [triggerToken, router]);
+  }, [triggerToken, router, pathname]);
 }

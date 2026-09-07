@@ -165,12 +165,13 @@ export type LiveRecognitionOptions = {
 };
 
 /**
- * Only Android 13+ writes the recognized audio to a file — below that the
- * recognizer cannot share the mic with a recorder at all. Other platforms
- * capture the take with expo-audio instead, so a second file is not needed.
+ * WHY: recognizer audio persistence behaves differently on every Android
+ * version — on API 35 it terminates the session after ~2s. The audio file now
+ * always comes from expo-audio, so this path is retired entirely.
+ * One behaviour on every device beats three version branches.
  */
 function canPersistRecognitionAudio(): boolean {
-  return Platform.OS === 'android' && Number(Platform.Version) >= 33;
+  return false;
 }
 
 export async function startLiveRecognition(options: LiveRecognitionOptions): Promise<void> {
@@ -187,6 +188,10 @@ export async function startLiveRecognition(options: LiveRecognitionOptions): Pro
         outputFileName: options.outputFileName ?? `idea-${Date.now()}.wav`,
       };
     }
+  }
+
+  if (__DEV__) {
+    console.log('[STT] start', { lang, persist, at: Date.now() });
   }
 
   ExpoSpeechRecognitionModule.start({

@@ -1,13 +1,23 @@
 import { Ionicons } from '@expo/vector-icons';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useEffect, useState } from 'react';
-import { BackHandler, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import {
+  ActivityIndicator,
+  BackHandler,
+  Pressable,
+  ScrollView,
+  StyleSheet,
+  Text,
+  View,
+} from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { AudioPlayer } from '@/src/components/AudioPlayer';
 import { DeleteThoughtDialog } from '@/src/components/DeleteThoughtDialog';
-import { findLanguageByWhisperCode, resolveSpokenLanguage } from '@/src/i18n/languages';
+import { hasIndicScript, findLanguageByWhisperCode, resolveSpokenLanguage } from '@/src/i18n/languages';
+import { analyzeTranscript, hasAnalysisContent } from '@/src/services/transcriptAnalysisService';
 import { useIdeasStore } from '@/src/store/ideasStore';
+import { showToast } from '@/src/store/toastStore';
 import { categoryColor, colors, fonts, radii, spacing, typography } from '@/src/theme/tokens';
 import type { TranscriptAnalysis } from '@/src/types';
 import { relativeDate } from '@/src/utils/format';
@@ -67,6 +77,7 @@ export default function IdeaDetailScreen() {
   const deleteIdea = useIdeasStore((s) => s.deleteIdea);
   const touchIdea = useIdeasStore((s) => s.touchIdea);
   const [confirmDelete, setConfirmDelete] = useState(false);
+  const [analyzing, setAnalyzing] = useState(false);
   const knownLanguage = idea ? findLanguageByWhisperCode(idea.language) : undefined;
   const spoken = idea ? resolveSpokenLanguage(idea.language) : null;
   const isLive = idea?.transcriptSource === 'live';
@@ -106,6 +117,29 @@ export default function IdeaDetailScreen() {
     setConfirmDelete(false);
     await deleteIdea(idea.id);
     router.replace('/(tabs)/ideas');
+  };
+
+  const onReanalyze = async () => {
+    const transcript = idea.transcript?.trim() ?? '';
+    if (!transcript || analyzing) return;
+    setAnalyzing(true);
+    try {
+      const next = await analyzeTranscript(transcript);
+      const analysisThought = next.thought?.trim() ?? '';
+      const keepAnalysisSummary =
+        Boolean(analysisThought) &&
+        !(hasIndicScript(transcript) && !hasIndicScript(analysisThought));
+      await updateIdea(idea.id, {
+        analysis: keepAnalysisSummary ? next : idea.analysis,
+        summary: keepAnalysisSummary ? analysisThought : idea.summary,
+      });
+      showToast(keepAnalysisSummary || hasAnalysisContent(next) ? 'Analysis updated' : 'Analysis returned empty');
+    } catch (e) {
+      const message = e instanceof Error ? e.message : 'Analysis failed. Try again.';
+      showToast(message, 'error');
+    } finally {
+      setAnalyzing(false);
+    }
   };
 
   const sourceLabel = isDevice
@@ -201,6 +235,25 @@ export default function IdeaDetailScreen() {
             <Text style={[styles.sectionTitle, styles.sectionTitleInline]}>Analysis</Text>
           </View>
           <Text style={styles.sectionHint}>Response from analyzing the transcript above</Text>
+
+          {idea.transcript?.trim() ? (
+            <Pressable
+              onPress={() => void onReanalyze()}
+              disabled={analyzing}
+              style={({ pressed }) => [styles.reanalyzeBtn, pressed && { opacity: 0.85 }]}
+              accessibilityRole="button"
+              accessibilityLabel="Re-run analysis"
+            >
+              {analyzing ? (
+                <ActivityIndicator size="small" color={colors.secondary} />
+              ) : (
+                <Ionicons name="refresh" size={16} color={colors.secondary} />
+              )}
+              <Text style={styles.reanalyzeText}>
+                {analyzing ? 'Analyzing…' : 'Re-run analysis'}
+              </Text>
+            </Pressable>
+          ) : null}
 
           {showAnalysis ? (
             <View style={styles.analysisStack}>
@@ -413,6 +466,22 @@ const styles = StyleSheet.create({
   emptyValue: {
     color: colors.onSurfaceVariant,
     fontStyle: 'italic',
+  },
+  reanalyzeBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    alignSelf: 'flex-start',
+    paddingVertical: 8,
+    paddingHorizontal: 12,
+    marginBottom: spacing.stackMd,
+    borderRadius: radii.md,
+    backgroundColor: colors.secondarySoft,
+  },
+  reanalyzeText: {
+    fontFamily: fonts.bodySemi,
+    fontSize: typography.labelMd.fontSize,
+    color: colors.secondary,
   },
   missing: { flex: 1, alignItems: 'center', justifyContent: 'center', gap: 12 },
   missingText: { fontFamily: fonts.body, color: colors.onSurfaceVariant },

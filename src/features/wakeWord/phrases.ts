@@ -33,12 +33,7 @@ const WAKE_PHRASES = [
 const PAUSE_COMMANDS = ['pause recording', 'pause the recording', 'pause record'];
 const PAUSE_WORDS = ['pause', 'please pause', 'hold', 'hold on'];
 
-const RESUME_COMMANDS = [
-  'resume recording',
-  'continue recording',
-  'start recording',
-  'start record',
-];
+const RESUME_COMMANDS = ['resume recording', 'continue recording'];
 const RESUME_WORDS = ['resume', 'continue', 'start', 'go on', 'carry on'];
 
 /** Ends an active recording (English + Indian languages). */
@@ -97,9 +92,27 @@ export function normalizeSpeech(text: string): string {
     .trim();
 }
 
+const WAKE_SUFFIX_STOP = /\b(stop|end|finish|pause)\b\s*$/;
+
+/** Same shape as the Kotlin NAME_PATTERN — Google mangles the brand every time. */
+const NAME_PATTERN =
+  /\b(hey|hi|a|i|hitting|thinking)?\s*(think|thin|thing|sink|hitting|thinking)\s*(tap|tab|top|app|cap|that|taps|tabs|i have)\b/;
+const START_ONLY = /\b(start|begin|new)\s+(recording|record|note|idea)\b/;
+
+function isCommandUtterance(normalized: string): boolean {
+  if (STOP_COMMANDS.some((p) => normalized.includes(p))) return true;
+  if (PAUSE_COMMANDS.some((p) => normalized.includes(p))) return true;
+  if (WAKE_SUFFIX_STOP.test(normalized)) return true;
+  return false;
+}
+
 export function matchesWakePhrase(text: string): boolean {
   const normalized = normalizeSpeech(text);
   if (!normalized) return false;
+  // WHY: "hey thinktap stop" contains "thinktap" — it is a stop, not a wake.
+  if (isCommandUtterance(normalized)) return false;
+  if (START_ONLY.test(normalized)) return true;
+  if (NAME_PATTERN.test(normalized)) return true;
   return WAKE_PHRASES.some(
     (phrase) => normalized === phrase || normalized.includes(phrase),
   );
@@ -113,6 +126,11 @@ function matchesCommand(text: string, commands: string[], words: string[]): bool
 }
 
 export function matchesStopPhrase(text: string): boolean {
+  const normalized = normalizeSpeech(text);
+  if (!normalized) return false;
+  if (/\bthink\s?(tap|app|tab|that|cap|top)\b/.test(normalized)) {
+    if (WAKE_SUFFIX_STOP.test(normalized)) return true;
+  }
   return matchesCommand(text, STOP_COMMANDS, STOP_WORDS);
 }
 

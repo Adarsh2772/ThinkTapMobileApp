@@ -51,14 +51,24 @@ export async function analyzeTranscript(transcript: string): Promise<TranscriptA
     throw new Error('No speech detected in this recording. Try speaking more clearly.');
   }
 
-  const response = await fetch(analyzeUrl(), {
-    method: 'POST',
-    headers: {
-      accept: 'application/json',
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify({ transcript: cleaned }),
-  });
+  let response: Response;
+  try {
+    response = await fetch(analyzeUrl(), {
+      method: 'POST',
+      headers: {
+        accept: 'application/json',
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ transcript: cleaned }),
+      signal: AbortSignal.timeout(20_000),
+    });
+  } catch (e) {
+    const name = e instanceof Error ? e.name : '';
+    if (name === 'TimeoutError' || name === 'AbortError') {
+      throw new Error('Analysis timed out. Use Re-run analysis to try again.');
+    }
+    throw e;
+  }
 
   if (!response.ok) {
     let detail = `Analyze failed (${response.status})`;
