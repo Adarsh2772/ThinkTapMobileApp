@@ -3,6 +3,7 @@ import {
   Alert,
   PermissionsAndroid,
   Platform,
+  Pressable,
   ScrollView,
   StyleSheet,
   Switch,
@@ -11,26 +12,38 @@ import {
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
+import { LanguagePickerModal } from '@/src/components/LanguagePickerModal';
 import { ScreenHeader } from '@/src/components/ScreenHeader';
+import { SpeechLocalePickerModal } from '@/src/components/SpeechLocalePickerModal';
 import { SubscribeModal } from '@/src/components/SubscribeModal';
 import { Button } from '@/src/components/ui';
 import { supportsAudioWithLiveTranscript } from '@/src/features/capture/captureMode';
+import { getSpeechLocale } from '@/src/features/languageTranscript/locales';
+import { getLanguage } from '@/src/i18n/languages';
 import { useAuthStore } from '@/src/store/authStore';
 import { useSettingsStore } from '@/src/store/settingsStore';
 import { useSubscriptionStore } from '@/src/store/subscriptionStore';
-import { showToast } from '@/src/store/toastStore';
 import { useWakeWordStore } from '@/src/store/wakeWordStore';
 import { colors, fonts, radii, spacing, typography } from '@/src/theme/tokens';
 
 export default function SettingsScreen() {
   const user = useAuthStore((s) => s.session?.user);
+  const languageCode = useSettingsStore((s) => s.languageCode);
+  const speechLocale = useSettingsStore((s) => s.speechLocale);
+  const saveAudio = useSettingsStore((s) => s.saveAudioRecording);
+  const setSaveAudioRecording = useSettingsStore((s) => s.setSaveAudioRecording);
   const tx = useSettingsStore((s) => s.tx);
+  const language = getLanguage(languageCode);
+  const speechLang = getSpeechLocale(speechLocale);
   const subscription = useSubscriptionStore((s) => s.profile);
   const wakeEnabled = useWakeWordStore((s) => s.enabled);
+  const wakeListeningArmed = useWakeWordStore((s) => s.listeningArmed);
   const wakeAvailable = useWakeWordStore((s) => s.available);
   const wakeListening = useWakeWordStore((s) => s.listening);
   const wakeLastHeard = useWakeWordStore((s) => s.lastHeard);
   const setWakeEnabled = useWakeWordStore((s) => s.setEnabled);
+  const [pickerOpen, setPickerOpen] = useState(false);
+  const [speechPickerOpen, setSpeechPickerOpen] = useState(false);
   const [subscribeOpen, setSubscribeOpen] = useState(false);
 
   const onToggleWake = async (enabled: boolean) => {
@@ -50,12 +63,7 @@ export default function SettingsScreen() {
         await PermissionsAndroid.request(PermissionsAndroid.PERMISSIONS.POST_NOTIFICATIONS);
       }
     }
-    // Let the permission dialog finish before SpeechRecognizer starts — same
-    // delay as WakeWordPermissionGate — otherwise ColorOS fires tik-tik-tik.
-    showToast('Hey Think Tap is on — say it anytime to record');
-    setTimeout(() => {
-      void setWakeEnabled(true);
-    }, 1500);
+    await setWakeEnabled(true);
   };
 
   return (
@@ -83,7 +91,33 @@ export default function SettingsScreen() {
           </View>
         </View>
 
-        {/* App Language + Live preview language temporarily hidden from Settings */}
+        <Pressable style={styles.card} onPress={() => setPickerOpen(true)}>
+          <Text style={styles.label}>{tx('appLanguage')}</Text>
+          <View style={styles.langRow}>
+            <Text style={styles.flag}>{language.flag}</Text>
+            <View style={{ flex: 1 }}>
+              <Text style={styles.value}>{language.name}</Text>
+              <Text style={styles.meta}>{language.nativeName}</Text>
+            </View>
+            <Text style={styles.change}>›</Text>
+          </View>
+          <Text style={styles.hint}>{tx('appLanguageHint')}</Text>
+        </Pressable>
+
+        <Pressable style={styles.card} onPress={() => setSpeechPickerOpen(true)}>
+          <Text style={styles.label}>{tx('transcriptionLanguage')}</Text>
+          <View style={styles.langRow}>
+            <View style={{ flex: 1 }}>
+              <Text style={styles.value}>{speechLang.name}</Text>
+              <Text style={styles.meta}>{speechLang.nativeName}</Text>
+            </View>
+            <View style={[styles.modePill, styles.modeLive]}>
+              <Text style={styles.modePillText}>OS · Device</Text>
+            </View>
+            <Text style={styles.change}>›</Text>
+          </View>
+          <Text style={styles.hint}>{tx('transcriptionLanguageHint')}</Text>
+        </Pressable>
 
         <View style={styles.card}>
           <View style={styles.wakeRow}>
@@ -100,14 +134,16 @@ export default function SettingsScreen() {
           </View>
           <Text style={styles.hint}>
             {Platform.OS === 'android'
-              ? 'Say “Hey Think Tap”, “Hey Think”, or “start recording” to begin, and “stop recording” to finish — including when the app is minimized. Listening stays quiet — the phone only vibrates when a take starts or stops. On OPPO, Vivo, and similar phones, set Battery to Unrestricted so listening is not killed. Turn this off when you don’t need it to save battery.'
-              : 'When on (app open in the foreground), say “Hey Think Tap” or “start recording” to begin a capture.'}
+              ? 'While Think Tap is open, say “Hey Think Tap”, “start recording”, or Marathi “रेकॉर्डिंग सुरू करा”. Closing the app or turning this off stops listening.'
+              : 'When on (app open in the foreground), say “Hey Think Tap”, “start recording”, or “रेकॉर्डिंग सुरू करा” to begin a capture.'}
             {wakeEnabled
-              ? wakeAvailable === false
-                ? ' Speech recognition is unavailable on this device/build.'
-                : wakeListening
-                  ? ' Listening…'
-                  : ' Enabled.'
+              ? !wakeListeningArmed
+                ? ' Enabled — toggle off and on to start listening after opening the app.'
+                : wakeAvailable === false
+                  ? ' Speech recognition is unavailable on this device/build.'
+                  : wakeListening
+                    ? ' Listening…'
+                    : ' Starting…'
               : ''}
           </Text>
           {wakeEnabled && wakeLastHeard ? (
@@ -117,12 +153,22 @@ export default function SettingsScreen() {
 
         {!supportsAudioWithLiveTranscript() ? (
           <View style={styles.card}>
-            <Text style={styles.label}>Save audio recording</Text>
-            <Text style={styles.value}>Always on for this Android version</Text>
+            <View style={styles.wakeRow}>
+              <View style={{ flex: 1 }}>
+                <Text style={styles.label}>Save audio recording</Text>
+                <Text style={styles.value}>Keep the voice file for playback</Text>
+              </View>
+              <Switch
+                value={saveAudio}
+                onValueChange={(v) => void setSaveAudioRecording(v)}
+                trackColor={{ false: colors.outlineVariant, true: colors.secondary }}
+                thumbColor={colors.surfaceContainerLowest}
+              />
+            </View>
             <Text style={styles.hint}>
-              This phone cannot share the microphone between live captions and a
-              saved voice file. Think Tap records the file so your idea is kept
-              after Stop. Transcripts are added once the network is available.
+              {saveAudio
+                ? 'Audio-only mode: your voice file is saved, but live text is OFF while recording on this Android version (mic cannot be shared). Turn this off to see live transcription on devices like OPPO Android 11.'
+                : 'Live text appears while you speak and spoken “pause”/“stop” work. No separate audio file is kept — this Android version cannot do both at once.'}
             </Text>
           </View>
         ) : null}
@@ -138,6 +184,11 @@ export default function SettingsScreen() {
         </View>
       </ScrollView>
 
+      <LanguagePickerModal visible={pickerOpen} onClose={() => setPickerOpen(false)} />
+      <SpeechLocalePickerModal
+        visible={speechPickerOpen}
+        onClose={() => setSpeechPickerOpen(false)}
+      />
       <SubscribeModal visible={subscribeOpen} onClose={() => setSubscribeOpen(false)} />
     </SafeAreaView>
   );
@@ -193,11 +244,34 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     gap: 12,
   },
+  langRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+    marginTop: 4,
+  },
+  flag: { fontSize: 28 },
+  change: {
+    fontSize: 28,
+    color: colors.secondary,
+    lineHeight: 28,
+  },
   hint: {
     marginTop: 10,
     fontFamily: fonts.label,
     fontSize: typography.labelSm.fontSize,
     lineHeight: 18,
     color: colors.textSecondary,
+  },
+  modePill: {
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    borderRadius: radii.full,
+  },
+  modeLive: { backgroundColor: colors.successSoft },
+  modePillText: {
+    fontFamily: fonts.label,
+    fontSize: 12,
+    color: colors.success,
   },
 });

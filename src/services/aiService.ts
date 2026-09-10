@@ -1,19 +1,13 @@
 import { File, UploadType } from 'expo-file-system';
 import { getInfoAsync } from 'expo-file-system/legacy';
 
-import { hasDevanagari } from '@/src/features/wakeWord/phrases';
-import { normalizeFileUri } from '@/src/services/audioStorage';
 import {
-  applyCodeMixIfNeeded,
-  hasIndicScript,
-  isSupportedSpokenLanguage,
-  looksRomanizedIndic,
   resolveSpokenLanguage,
   type AppLanguageCode,
   type SpokenLanguage,
 } from '@/src/i18n/languages';
+import { hasDevanagari } from '@/src/features/wakeWord/phrases';
 import { useAiConfigStore } from '@/src/store/aiConfigStore';
-import { normalizeCategory } from '@/src/theme/tokens';
 import type { AiEnrichment } from '@/src/types';
 
 export type EnrichmentResult = AiEnrichment & {
@@ -24,86 +18,13 @@ export type EnrichmentResult = AiEnrichment & {
 export const MAX_STT_UPLOAD_BYTES = 25 * 1024 * 1024;
 
 const CATEGORY_HINTS: { category: string; keywords: string[] }[] = [
-  {
-    category: 'Movies',
-    keywords: [
-      'movie',
-      'movies',
-      'film',
-      'films',
-      'cinema',
-      'hollywood',
-      'bollywood',
-      'actor',
-      'actress',
-      'director',
-      'trailer',
-      'netflix',
-      'sequel',
-      'plot',
-      'watching',
-      'फिल्म',
-      'फिल्मे',
-      'मूवी',
-      'सिनेमा',
-      'कहानी',
-      'अभिनेता',
-      'अभिनेत्री',
-      'निर्देशक',
-      'चित्रपट',
-      'कथा',
-      'नायक',
-      'नायिका',
-      'दिग्दर्शक',
-      'बॉलिवूड',
-      'बॉलीवुड',
-    ],
-  },
-  {
-    category: 'Songs',
-    keywords: [
-      'song',
-      'songs',
-      'lyrics',
-      'verse',
-      'chorus',
-      'rap',
-      'singer',
-      'karaoke',
-      'गाना',
-      'गीत',
-    ],
-  },
-  {
-    category: 'Music',
-    keywords: ['music', 'beat', 'melody', 'drum', 'bass', 'album', 'instrument', 'संगीत'],
-  },
-  {
-    category: 'Books',
-    keywords: ['book', 'books', 'novel', 'chapter', 'author', 'reading', 'किताब', 'पुस्तक'],
-  },
-  {
-    category: 'Scripts',
-    keywords: ['dialogue', 'screenplay', 'monologue', 'script', 'screen play'],
-  },
-  {
-    category: 'Design',
-    keywords: ['design', 'poster', 'ui', 'brand', 'visual', 'layout', 'figma'],
-  },
-  {
-    category: 'Business',
-    keywords: [
-      'business',
-      'startup',
-      'customer',
-      'revenue',
-      'meeting',
-      'office',
-      'client',
-      'sales',
-      'investor',
-    ],
-  },
+  { category: 'Movies', keywords: ['movie', 'film', 'scene', 'director', 'script', 'cinema'] },
+  { category: 'Music', keywords: ['music', 'song', 'beat', 'melody', 'drum', 'bass', 'rain'] },
+  { category: 'Business', keywords: ['business', 'startup', 'app', 'market', 'customer', 'product'] },
+  { category: 'Design', keywords: ['design', 'poster', 'ui', 'brand', 'visual', 'layout'] },
+  { category: 'Books', keywords: ['book', 'novel', 'chapter', 'story', 'character'] },
+  { category: 'Scripts', keywords: ['dialogue', 'screenplay', 'act', 'monologue'] },
+  { category: 'Songs', keywords: ['lyrics', 'verse', 'chorus', 'rap'] },
 ];
 
 const MOCK_BY_LANGUAGE: Record<
@@ -188,182 +109,10 @@ const MOCK_BY_LANGUAGE: Record<
 
 function guessCategory(text: string): string {
   const lower = text.toLowerCase();
-  let best = '';
-  let bestScore = 0;
   for (const hint of CATEGORY_HINTS) {
-    const score = hint.keywords.reduce((n, k) => n + (lower.includes(k.toLowerCase()) ? 1 : 0), 0);
-    if (score > bestScore) {
-      bestScore = score;
-      best = hint.category;
-    }
+    if (hint.keywords.some((k) => lower.includes(k))) return hint.category;
   }
-  return normalizeCategory(bestScore > 0 ? best : 'Scripts');
-}
-
-export type WhisperSegment = { no_speech_prob?: number; text?: string };
-
-const HALLUCINATION_LANGS = new Set([
-  'ko',
-  'korean',
-  'nn',
-  'no',
-  'nb',
-  'nynorsk',
-  'norwegian',
-  'norwegian nynorsk',
-  'ro',
-  'romanian',
-  'hu',
-  'hungarian',
-  'cy',
-  'welsh',
-  'mt',
-  'maltese',
-  'la',
-  'latin',
-]);
-
-const CANNED_HALLUCINATIONS = [
-  'thank you for watching',
-  'thanks for watching',
-  'thanks for listening',
-  'please subscribe',
-  'subscribe to my',
-  'subscribe to the',
-  'like and subscribe',
-  "don't forget to subscribe",
-  'dont forget to subscribe',
-  'nu uitați să vă abonați',
-  'nu uitati sa va abonati',
-  'abonați la canalul',
-  'abonati la canalul',
-  'canalul meu',
-  'publicez noile video',
-  'suscríbete',
-  'suscribete',
-  'abonnez-vous',
-  'inscreva-se no canal',
-  'iscriviti al canale',
-  'mbc news',
-  '시청해 주셔서',
-  '구독',
-  'subtitles by',
-  'amara.org',
-  '[music]',
-  '(music)',
-  '[applause]',
-  '(applause)',
-];
-
-/** Same seed Whisper sees as `prompt`. On silence it often repeats this as the transcript. */
-const WHISPER_SEED_PROMPT =
-  'आज मौसम अच्छा है। आज मी ऑफिसला जाणार आहे. कल मुझे meeting के लिए जाना है।';
-
-function foldHallucinationText(value: string): string {
-  return value
-    .toLowerCase()
-    .replace(/[।.!,?;:'"()[\]]/g, ' ')
-    .replace(/\s+/g, ' ')
-    .replace(/\bmi\b/g, 'मी')
-    .replace(/काळ/g, 'कल')
-    .replace(/मीटिंग|मिटींग/g, 'meeting')
-    .replace(/लिये/g, 'लिए')
-    .replace(/\bजन\b/g, 'जाना')
-    .trim();
-}
-
-function looksLikeWhisperPromptEcho(text: string): boolean {
-  const folded = foldHallucinationText(text);
-  const prompt = foldHallucinationText(WHISPER_SEED_PROMPT);
-  if (!folded) return true;
-  if (prompt.includes(folded) && folded.split(' ').length >= 4) return true;
-  if (folded.includes(prompt)) return true;
-
-  const promptTokens = new Set(prompt.split(' ').filter(Boolean));
-  const words = folded.split(' ').filter(Boolean);
-  if (words.length < 5) return false;
-  const hits = words.filter((word) => promptTokens.has(word)).length;
-  return hits >= 5 && hits / words.length >= 0.65;
-}
-
-/**
- * Whisper often invents Korean / Punjabi / Norwegian / “thanks for watching”
- * on silence, noise, or overlapping speech. Those must not become the saved
- * transcript or detected language.
- */
-export function looksLikeWhisperHallucination(
-  text: string,
-  language?: string | null,
-): boolean {
-  const t = text.replace(/\s+/g, ' ').trim();
-  if (!t) return true;
-
-  const letters = t.replace(/[\s\d.,!?'"“”‘’\-—[\]()]/g, '');
-  if (!letters) return true;
-  if (t.length >= 8 && letters.length / t.length < 0.15) return true;
-
-  const hangul = (t.match(/[\uAC00-\uD7A3]/g) ?? []).length;
-  if (hangul / Math.max(letters.length, 1) >= 0.35) return true;
-
-  const lang = (language ?? '').trim().toLowerCase();
-  const langIso = lang.split(/[-_]/)[0] ?? lang;
-  if (HALLUCINATION_LANGS.has(lang) || HALLUCINATION_LANGS.has(langIso)) return true;
-  if (lang && !isSupportedSpokenLanguage(lang) && !isSupportedSpokenLanguage(langIso)) return true;
-
-  const gurmukhi = (t.match(/[\u0A00-\u0A7F]/g) ?? []).length;
-  if ((langIso === 'pa' || lang === 'panjabi' || lang === 'punjabi') && gurmukhi === 0) {
-    return true;
-  }
-
-  const lower = t.toLowerCase();
-  if (CANNED_HALLUCINATIONS.some((p) => lower.includes(p))) return true;
-  if (looksLikeWhisperPromptEcho(t)) return true;
-
-  return false;
-}
-
-/**
- * Drop non-speech Whisper segments, then reject leftover hallucination.
- * Overlapping speakers must not invent words that were never said.
- */
-export function transcriptFromWhisperSegments(
-  fullText: string,
-  language: string | undefined,
-  segments: WhisperSegment[] = [],
-): { text: string; language?: string } {
-  let text = cleanTranscript(fullText);
-  if (segments.length > 0) {
-    const kept = segments
-      .filter((s) => (s.no_speech_prob ?? 0) < 0.7)
-      .map((s) => cleanTranscript(s.text ?? ''))
-      .filter(Boolean);
-    const allNoise = segments.every(
-      (s) => (s.no_speech_prob ?? 0) >= 0.7 || !cleanTranscript(s.text ?? ''),
-    );
-    if (allNoise || kept.length === 0) {
-      return { text: '', language: undefined };
-    }
-    text = cleanTranscript(kept.join(' '));
-  }
-  if (!text || looksLikeWhisperHallucination(text, language)) {
-    return { text: '', language: undefined };
-  }
-  return { text, language };
-}
-
-export const UNCLEAR_RECORDING_MESSAGE =
-  'Recording is not clear. Please record properly.';
-
-export function emptySpeechEnrichment(): EnrichmentResult {
-  return {
-    transcript: '',
-    title: 'Voice note',
-    category: 'Business',
-    summary: UNCLEAR_RECORDING_MESSAGE,
-    aiStory: null,
-    detectedLanguage: '',
-    source: 'demo',
-  };
+  return 'Business';
 }
 
 function titleFromTranscript(transcript: string): string {
@@ -384,10 +133,12 @@ function summaryFromTranscript(transcript: string): string {
 /**
  * Enrich an idea from an OS (device) transcript — no Whisper / LLM APIs.
  * Uses the same local title / category / summary heuristics as demo mode.
+ * Spoken language is auto-detected from transcript script + speech context
+ * (no manual language selection).
  */
 export function enrichIdeaFromDeviceTranscript(input: {
   transcript: string;
-  /** BCP-47 locale e.g. hi-IN → stored as hi */
+  /** BCP-47 locale e.g. hi-IN → stored as hi (hint only; never required) */
   speechLocale?: string;
   onStage?: (stage: 'transcribing' | 'extracting' | 'summarizing') => void;
 }): EnrichmentResult {
@@ -403,9 +154,11 @@ export function enrichIdeaFromDeviceTranscript(input: {
 
   input.onStage?.('summarizing');
   const summary = summaryFromTranscript(transcript);
-  const localeTag = (input.speechLocale ?? '').trim();
+  const localeHint = (input.speechLocale ?? '').trim().split(/[-_]/)[0]?.toLowerCase();
+  const fromScript = detectLanguageCodeFromText(transcript);
   const detectedLanguage =
-    localeTag.split(/[-_]/)[0]?.toLowerCase() ||
+    fromScript ||
+    localeHint ||
     resolveSpokenLanguage(undefined).whisperCode;
 
   return {
@@ -419,13 +172,46 @@ export function enrichIdeaFromDeviceTranscript(input: {
   };
 }
 
-export function isCloudSttAvailable(): boolean {
-  if (process.env.EXPO_PUBLIC_USE_MOCK_AI === 'true') return false;
-  if (backendBaseUrl()) return true;
-  return Boolean(useAiConfigStore.getState().getApiKey());
+/** Save audio locally when cloud STT is unavailable (offline / network error). */
+export function enrichIdeaFromSavedAudioFallback(input: {
+  durationSec: number;
+  languageCode?: AppLanguageCode;
+}): EnrichmentResult {
+  const mins = Math.floor(input.durationSec / 60);
+  const secs = input.durationSec % 60;
+  const stamp = `${mins}:${String(secs).padStart(2, '0')}`;
+  const when = new Date().toLocaleString();
+  const summary = `Recording saved on ${when}. Connect to the internet to transcribe this take.`;
+  return {
+    transcript: '',
+    title: `Voice note (${stamp})`,
+    category: 'Other',
+    summary,
+    aiStory: summary,
+    detectedLanguage: input.languageCode ?? 'en',
+    source: 'demo',
+  };
 }
 
-export function mimeAndName(uri: string): { mime: string; name: string } {
+/** Infer ISO language code from writing system in the transcript (auto, no UI). */
+function detectLanguageCodeFromText(text: string): string | null {
+  if (/[\u0B80-\u0BFF]/.test(text)) return 'ta';
+  if (/[\u0C00-\u0C7F]/.test(text)) return 'te';
+  if (/[\u0C80-\u0CFF]/.test(text)) return 'kn';
+  if (/[\u0D00-\u0D7F]/.test(text)) return 'ml';
+  if (/[\u0A80-\u0AFF]/.test(text)) return 'gu';
+  if (/[\u0A00-\u0A7F]/.test(text)) return 'pa';
+  if (/[\u0B00-\u0B7F]/.test(text)) return 'or';
+  if (/[\u0980-\u09FF]/.test(text)) return 'bn';
+  if (/[\u0900-\u097F]/.test(text)) return null; // hi vs mr — need Whisper/locale hint
+  if (/[\u0600-\u06FF]/.test(text)) return 'ur';
+  if (/[\u3040-\u30FF]/.test(text)) return 'ja';
+  if (/[\u4E00-\u9FFF]/.test(text)) return 'zh';
+  if (/[A-Za-z]/.test(text)) return 'en';
+  return null;
+}
+
+function mimeAndName(uri: string): { mime: string; name: string } {
   const lower = uri.toLowerCase();
   if (lower.includes('.wav')) return { mime: 'audio/wav', name: 'idea.wav' };
   if (lower.includes('.mp3')) return { mime: 'audio/mpeg', name: 'idea.mp3' };
@@ -434,7 +220,7 @@ export function mimeAndName(uri: string): { mime: string; name: string } {
   return { mime: 'audio/mp4', name: 'idea.m4a' };
 }
 
-export function backendBaseUrl(): string | null {
+function backendBaseUrl(): string | null {
   const raw = process.env.EXPO_PUBLIC_API_URL?.trim();
   if (!raw) return null;
   return raw.replace(/\/$/, '');
@@ -450,8 +236,6 @@ export async function enrichIdeaFromAudio(input: {
   durationSec: number;
   /** UI language only — used for demo mocks / fallback display, never forced into Whisper. */
   languageCode?: AppLanguageCode;
-  /** Selected live-STT locale (mr-IN, hi-IN, …) used as a Whisper language hint. */
-  speechLocale?: string;
   onStage?: (stage: 'transcribing' | 'extracting' | 'summarizing') => void;
 }): Promise<EnrichmentResult> {
   const uiLanguageCode = input.languageCode ?? 'en';
@@ -460,12 +244,7 @@ export async function enrichIdeaFromAudio(input: {
   const apiBase = backendBaseUrl();
   if (apiBase) {
     try {
-      const live = await enrichViaBackend(
-        apiBase,
-        input.audioUri,
-        input.onStage,
-        input.speechLocale,
-      );
+      const live = await enrichViaBackend(apiBase, input.audioUri, input.onStage);
       return { ...live, source: 'live' };
     } catch (error) {
       console.warn('Backend transcription failed', error);
@@ -476,13 +255,7 @@ export async function enrichIdeaFromAudio(input: {
   const apiKey = useAiConfigStore.getState().getApiKey();
   if (apiKey) {
     try {
-      const live = await enrichWithCloudStt(
-        apiKey,
-        input.audioUri,
-        uiLanguageCode,
-        input.onStage,
-        input.speechLocale,
-      );
+      const live = await enrichWithCloudStt(apiKey, input.audioUri, uiLanguageCode, input.onStage);
       return { ...live, source: 'live' };
     } catch (error) {
       console.warn('Live transcription failed', error);
@@ -508,12 +281,25 @@ export async function enrichIdeaFromAudio(input: {
   };
 }
 
-/**
- * Whisper treats `prompt` as previous transcript text, not a system instruction.
- * English instructions bias the model to English. Seed with native-script speech.
- */
-export function whisperPromptFor(_languageName: string | 'auto'): string {
-  return WHISPER_SEED_PROMPT;
+/** Prompt Whisper to keep the spoken language — never force English / another language. */
+export function whisperPromptFor(languageName: string | 'auto'): string {
+  if (languageName === 'auto') {
+    return [
+      'Automatically detect the language the speaker originally used.',
+      'Transcribe exactly in that same language and correct native script.',
+      'Never translate into English unless the speaker spoke English.',
+      'Never translate into Hindi, Marathi, or any other language unless that is what was spoken.',
+      'Marathi/Hindi → Devanagari. Tamil → Tamil script. Preserve code-mixing naturally.',
+      'Preserve names, numbers, dates, addresses, product names, and technical terms.',
+      'Do not summarize or add information.',
+    ].join(' ');
+  }
+  return [
+    `Transcribe in ${languageName} using the correct script.`,
+    `Stay in ${languageName} only — do not translate to another language.`,
+    'If Marathi or Hindi, use Devanagari only — never romanize.',
+    'Preserve names, numbers, and punctuation. Do not summarize.',
+  ].join(' ');
 }
 
 function providerConfig(apiKey: string) {
@@ -549,15 +335,8 @@ export function mapSttError(error: unknown): Error {
   if (/401|403|invalid.*api.?key|incorrect api key/i.test(msg)) {
     return new Error('Speech-to-text API key is invalid. Update it in Settings.');
   }
-  if (/Unsupported FormData/i.test(msg)) {
-    return new Error('Could not send the recording for transcription. The file is still saved.');
-  }
-  if (
-    /FileSystemUploadTask|Unable to resolve host|No address associated|UnknownHostException|ENOTFOUND|getaddrinfo|network request failed|Failed to fetch|fetch failed|ECONNREFUSED|timed out|timeout|network/i.test(
-      msg,
-    )
-  ) {
-    return new Error('Could not reach the transcription service. Check internet and try again.');
+  if (/network|fetch failed|Failed to fetch|ECONNREFUSED|timed out|timeout|unable to resolve host|ENOTFOUND|getaddrinfo/i.test(msg)) {
+    return new Error('No internet connection. Your recording is saved — transcription needs network.');
   }
   if (/25\s*MB|file too large|payload too large|413/i.test(msg)) {
     return new Error(
@@ -567,52 +346,7 @@ export function mapSttError(error: unknown): Error {
   if (/No speech detected/i.test(msg)) {
     return error;
   }
-  if (/503|not configured|provider unavailable|BharatGen/i.test(msg)) {
-    return new Error('Speech-to-text provider is unavailable. Check the server configuration.');
-  }
-  if (/invalid transcription response|invalid API response/i.test(msg)) {
-    return new Error('The transcription service returned an invalid response. Try again.');
-  }
   return error;
-}
-
-/**
- * Native multipart upload via expo-file-system. Avoids expo/fetch FormData,
- * which rejects Expo File parts as "Unsupported FormDataPart implementation".
- */
-export async function uploadAudioMultipart(input: {
-  url: string;
-  audioUri: string;
-  mime: string;
-  fileName: string;
-  fieldName?: string;
-  fields: Record<string, string>;
-  headers?: Record<string, string>;
-}): Promise<{ status: number; body: string }> {
-  const uri = normalizeFileUri(input.audioUri);
-  let file: File;
-  try {
-    file = new File(uri);
-  } catch {
-    file = new File(uri.replace(/^file:\/\//, ''));
-  }
-  if (!file.exists) {
-    throw new Error('Recording file not found on device');
-  }
-
-  try {
-    const result = await file.upload(input.url, {
-      httpMethod: 'POST',
-      uploadType: UploadType.MULTIPART,
-      fieldName: input.fieldName ?? 'file',
-      mimeType: input.mime,
-      headers: input.headers,
-      parameters: input.fields,
-    });
-    return { status: result.status, body: result.body };
-  } catch (error) {
-    throw new Error(error instanceof Error ? error.message : 'Audio upload failed (network)');
-  }
 }
 
 async function whisperTranscribe(
@@ -620,24 +354,33 @@ async function whisperTranscribe(
   apiKey: string,
   audioUri: string,
   mime: string,
-  _speechLocale?: string,
 ): Promise<{ text: string; language?: string }> {
-  const { name: fileName } = mimeAndName(audioUri);
-  // Omit `language` so Whisper auto-detects whatever the user spoke.
-  const uploadResult = await uploadAudioMultipart({
-    url: `${provider.baseUrl}/audio/transcriptions`,
-    audioUri,
-    mime,
-    fileName,
-    headers: {
-      Authorization: `Bearer ${apiKey}`,
-    },
-    fields: {
-      model: provider.whisperModel,
-      temperature: '0',
-      response_format: provider.responseFormat,
-    },
-  });
+  const audioFile = new File(audioUri);
+  // Omit `language` so the model auto-detects the spoken language.
+  const parameters: Record<string, string> = {
+    model: provider.whisperModel,
+    temperature: '0',
+    prompt: whisperPromptFor('auto'),
+    response_format: provider.responseFormat,
+  };
+
+  let uploadResult: { status: number; body: string };
+  try {
+    uploadResult = await audioFile.upload(`${provider.baseUrl}/audio/transcriptions`, {
+      uploadType: UploadType.MULTIPART,
+      httpMethod: 'POST',
+      fieldName: 'file',
+      mimeType: mime,
+      headers: {
+        Authorization: `Bearer ${apiKey}`,
+      },
+      parameters,
+    });
+  } catch (error) {
+    throw new Error(
+      error instanceof Error ? error.message : `${provider.name} upload failed (network)`,
+    );
+  }
 
   if (uploadResult.status === 429) {
     throw new Error(`${provider.name} rate limit (429): ${uploadResult.body.slice(0, 180)}`);
@@ -655,16 +398,11 @@ async function whisperTranscribe(
   }
 
   try {
-    const json = JSON.parse(uploadResult.body) as {
-      text?: string;
-      language?: string;
-      segments?: Array<{ no_speech_prob?: number; text?: string }>;
+    const json = JSON.parse(uploadResult.body) as { text?: string; language?: string };
+    return {
+      text: cleanTranscript(json.text ?? ''),
+      language: json.language,
     };
-    return transcriptFromWhisperSegments(
-      json.text ?? '',
-      json.language,
-      json.segments ?? [],
-    );
   } catch {
     throw new Error(`${provider.name} returned an invalid transcription response`);
   }
@@ -674,7 +412,6 @@ async function enrichViaBackend(
   apiBase: string,
   audioUri: string,
   onStage?: (stage: 'transcribing' | 'extracting' | 'summarizing') => void,
-  _speechLocale?: string,
 ): Promise<AiEnrichment> {
   const info = await getInfoAsync(audioUri);
   if (!info.exists) {
@@ -684,16 +421,22 @@ async function enrichViaBackend(
     throw new Error('Recording is too long for transcription (max ~25 MB).');
   }
 
-  const { mime, name: fileName } = mimeAndName(audioUri);
+  const { mime } = mimeAndName(audioUri);
+  const audioFile = new File(audioUri);
 
   onStage?.('transcribing');
-  const uploadResult = await uploadAudioMultipart({
-    url: `${apiBase}/api/enrich`,
-    audioUri,
-    mime,
-    fileName,
-    fields: {},
-  });
+  let uploadResult: { status: number; body: string };
+  try {
+    uploadResult = await audioFile.upload(`${apiBase}/api/enrich`, {
+      uploadType: UploadType.MULTIPART,
+      httpMethod: 'POST',
+      fieldName: 'file',
+      mimeType: mime,
+      parameters: {},
+    });
+  } catch (error) {
+    throw new Error(error instanceof Error ? error.message : 'Backend upload failed (network)');
+  }
 
   if (uploadResult.status === 429) {
     throw new Error('Backend rate limit (429)');
@@ -712,22 +455,17 @@ async function enrichViaBackend(
     throw new Error(json.error);
   }
   const transcript = cleanTranscript(json.transcript ?? '');
-  if (!transcript || looksLikeWhisperHallucination(transcript, json.detectedLanguage)) {
+  if (!transcript) {
     throw new Error('No speech detected in this recording. Try speaking more clearly.');
   }
 
   return {
     transcript,
-    title: preferSameScript(transcript, json.title) || titleFromTranscript(transcript),
-    category: normalizeCategory(json.category || guessCategory(transcript)),
-    summary: preferSameScript(transcript, json.summary) || summaryFromTranscript(transcript),
-    aiStory:
-      preferSameScript(transcript, json.aiStory) ||
-      preferSameScript(transcript, json.summary) ||
-      summaryFromTranscript(transcript),
-    detectedLanguage:
-      applyCodeMixIfNeeded(json.detectedLanguage, transcript) ||
-      (json.detectedLanguage ?? '').toLowerCase(),
+    title: json.title || titleFromTranscript(transcript),
+    category: json.category || guessCategory(transcript),
+    summary: json.summary || summaryFromTranscript(transcript),
+    aiStory: json.aiStory || json.summary || summaryFromTranscript(transcript),
+    detectedLanguage: (json.detectedLanguage || 'en').toLowerCase(),
   };
 }
 
@@ -736,7 +474,6 @@ async function enrichWithCloudStt(
   audioUri: string,
   uiLanguageCode: AppLanguageCode,
   onStage?: (stage: 'transcribing' | 'extracting' | 'summarizing') => void,
-  speechLocale?: string,
 ): Promise<AiEnrichment> {
   const info = await getInfoAsync(audioUri);
   if (!info.exists) {
@@ -751,24 +488,17 @@ async function enrichWithCloudStt(
   const provider = providerConfig(apiKey);
   const { mime } = mimeAndName(audioUri);
 
-  const whisper = await whisperTranscribe(provider, apiKey, audioUri, mime, speechLocale);
+  const whisper = await whisperTranscribe(provider, apiKey, audioUri, mime);
 
   let transcript = whisper.text;
   if (!transcript) {
     throw new Error('No speech detected in this recording. Try speaking more clearly.');
   }
 
-  let spoken = resolveSpokenLanguage(
-    applyCodeMixIfNeeded(whisper.language, transcript) || whisper.language,
-    uiLanguageCode,
-  );
+  const spoken = resolveSpokenLanguage(whisper.language, uiLanguageCode);
 
-  // Restore native script for romanized Hindi/Marathi. Never translate to English.
+  // Convert romanized / wrong-script text into the correct native script for detected language.
   transcript = await convertToNativeScript(provider, apiKey, transcript, spoken);
-  spoken = resolveSpokenLanguage(
-    applyCodeMixIfNeeded(spoken.code, transcript) || spoken.code,
-    uiLanguageCode,
-  );
 
   const enrichment = await finalizeFromTranscript(
     provider,
@@ -784,7 +514,7 @@ async function enrichWithCloudStt(
 }
 
 /**
- * Ensures transcript uses the correct writing system for the detected language.
+ * Ensures transcript stays in the language originally spoken (correct script).
  * Example: "mala ek idea aala" → "मला एक आयडिया आला"
  */
 async function convertToNativeScript(
@@ -793,50 +523,15 @@ async function convertToNativeScript(
   rawTranscript: string,
   targetLang: SpokenLanguage,
 ): Promise<string> {
-  if (hasIndicScript(rawTranscript)) {
+  if (targetLang.script === 'latin') {
     return rawTranscript;
   }
 
-  const shouldRestore =
-    looksRomanizedIndic(rawTranscript) ||
-    (targetLang.script !== 'latin' && targetLang.script !== 'cjk' && targetLang.script !== 'japanese');
-  if (!shouldRestore) {
+  if (alreadyInTargetScript(rawTranscript, targetLang.script)) {
     return rawTranscript;
   }
 
-  const target =
-    targetLang.script === 'latin' && looksRomanizedIndic(rawTranscript)
-      ? resolveSpokenLanguage(applyCodeMixIfNeeded(undefined, rawTranscript) || 'hi')
-      : targetLang;
-
-  if (target.script === 'latin') {
-    return rawTranscript;
-  }
-
-  if (target.script === 'devanagari' && hasDevanagari(rawTranscript)) {
-    return rawTranscript;
-  }
-  if (target.script === 'arabic' && /[\u0600-\u06FF]/.test(rawTranscript)) {
-    return rawTranscript;
-  }
-  if (targetLang.script === 'cjk' && /[\u4e00-\u9fff]/.test(rawTranscript)) {
-    return rawTranscript;
-  }
-  if (
-    targetLang.script === 'japanese' &&
-    /[\u3040-\u30ff\u4e00-\u9fff]/.test(rawTranscript)
-  ) {
-    return rawTranscript;
-  }
-
-  const scriptLabel =
-    target.script === 'devanagari'
-      ? 'Devanagari (देवनागरी)'
-      : target.script === 'arabic'
-        ? 'Arabic / Nastaliq script'
-        : target.script === 'cjk'
-          ? 'Chinese characters'
-          : 'Japanese script (Kanji/Hiragana/Katakana)';
+  const scriptLabel = scriptLabelFor(targetLang.script);
 
   try {
     const res = await fetch(`${provider.baseUrl}/chat/completions`, {
@@ -852,14 +547,18 @@ async function convertToNativeScript(
         messages: [
           {
             role: 'system',
-            content: `You only change writing system. You never translate.
-Target: ${target.name} (${target.nativeName}) in ${scriptLabel}.
+            content: `You keep speech transcripts in the language the user originally spoke.
+Detected spoken language: ${targetLang.name} (${targetLang.nativeName}, code ${targetLang.code}).
+Target script: ${scriptLabel}.
 Rules:
-- If the input is romanized Hindi/Marathi (e.g. "aaj mi office la janar aahe"), rewrite it in ${scriptLabel}.
-- Keep English words that were spoken in English (meeting, Zoom, office) as English.
-- Do NOT translate Hindi/Marathi into English.
-- Do NOT summarize. Keep the same words and order.
-Return JSON: { "transcript": string }`,
+- Output ONLY text in ${targetLang.name}.
+- If input is romanized, convert to ${scriptLabel}.
+- If input is already in ${targetLang.name}, return it unchanged.
+- Do NOT translate into English unless ${targetLang.code} is en.
+- Do NOT translate into Hindi, Marathi, or any other language unless that is ${targetLang.name}.
+- Preserve meaning, intent, names, numbers, dates, addresses, product names, and technical terms.
+- Preserve natural code-mixing. Do not summarize, explain, or add information.
+Return JSON: { "detected_language": "${targetLang.name}", "language_code": "${targetLang.code}", "translated_text": string }`,
           },
           {
             role: 'user',
@@ -875,15 +574,76 @@ Return JSON: { "transcript": string }`,
     };
     const content = json.choices?.[0]?.message?.content;
     if (!content) return rawTranscript;
-    const parsed = JSON.parse(content) as { transcript?: string };
-    const converted = cleanTranscript(parsed.transcript ?? '');
-    if (!converted) return rawTranscript;
-    if (looksRomanizedIndic(rawTranscript) && !hasIndicScript(converted)) {
-      return rawTranscript;
-    }
-    return converted;
+    const parsed = JSON.parse(content) as {
+      translated_text?: string;
+      transcript?: string;
+    };
+    const converted = cleanTranscript(parsed.translated_text ?? parsed.transcript ?? '');
+    return converted || rawTranscript;
   } catch {
     return rawTranscript;
+  }
+}
+
+function alreadyInTargetScript(text: string, script: SpokenLanguage['script']): boolean {
+  switch (script) {
+    case 'devanagari':
+      return hasDevanagari(text) || /[\u0900-\u097F]/.test(text);
+    case 'bengali':
+      return /[\u0980-\u09FF]/.test(text);
+    case 'gurmukhi':
+      return /[\u0A00-\u0A7F]/.test(text);
+    case 'gujarati':
+      return /[\u0A80-\u0AFF]/.test(text);
+    case 'odia':
+      return /[\u0B00-\u0B7F]/.test(text);
+    case 'tamil':
+      return /[\u0B80-\u0BFF]/.test(text);
+    case 'telugu':
+      return /[\u0C00-\u0C7F]/.test(text);
+    case 'kannada':
+      return /[\u0C80-\u0CFF]/.test(text);
+    case 'malayalam':
+      return /[\u0D00-\u0D7F]/.test(text);
+    case 'arabic':
+      return /[\u0600-\u06FF]/.test(text);
+    case 'cjk':
+      return /[\u4e00-\u9fff]/.test(text);
+    case 'japanese':
+      return /[\u3040-\u30ff\u4e00-\u9fff]/.test(text);
+    default:
+      return true;
+  }
+}
+
+function scriptLabelFor(script: SpokenLanguage['script']): string {
+  switch (script) {
+    case 'devanagari':
+      return 'Devanagari (देवनागरी)';
+    case 'bengali':
+      return 'Bengali script';
+    case 'gurmukhi':
+      return 'Gurmukhi';
+    case 'gujarati':
+      return 'Gujarati script';
+    case 'odia':
+      return 'Odia script';
+    case 'tamil':
+      return 'Tamil script';
+    case 'telugu':
+      return 'Telugu script';
+    case 'kannada':
+      return 'Kannada script';
+    case 'malayalam':
+      return 'Malayalam script';
+    case 'arabic':
+      return 'Arabic script';
+    case 'cjk':
+      return 'Chinese characters';
+    case 'japanese':
+      return 'Japanese script (Kanji/Hiragana/Katakana)';
+    default:
+      return 'Latin';
   }
 }
 
@@ -915,14 +675,26 @@ async function finalizeFromTranscript(
         {
           role: 'system',
           content: `You organize voice ideas for Think Tap.
-Language: ${targetLang.name} (${targetLang.nativeName}).
-Copy the transcript into "transcript" EXACTLY. Do not translate. Do not transliterate.
-Write title, summary, and aiStory in the SAME language and script as the transcript.
-If the transcript mixes Hindi/Marathi with English, keep that mix.
+The user originally spoke ${targetLang.name} (${targetLang.nativeName}, code ${targetLang.code}).
+Keep "transcript" in that same spoken language and script — unchanged if already correct.
+Write title, summary, and aiStory in ${targetLang.name} only (same script).
+Do not translate into English unless ${targetLang.code} is en.
+Do not translate into Hindi, Marathi, or any other language unless that is ${targetLang.name}.
+Preserve names, numbers, dates, addresses, product names, and technical terms.
+Do not summarize beyond the required fields. Do not add information.
 Keep category in English from: Movies, Songs, Books, Business, Scripts, Design, Music.
-Use Movies for films, cinema, actors, trailers, or watching a movie. Use Songs for lyrics or singing. Use Business only when the thought is clearly about work, a company, sales, or a startup. Do not default to Business when another category fits.
 Title: max 8 words. Summary: 1-2 sentences from the transcript only.
-Return JSON: { "transcript": string, "title": string, "category": string, "summary": string, "aiStory": string }`,
+Return JSON: {
+  "detected_language": "${targetLang.name}",
+  "language_code": "${targetLang.code}",
+  "translated_text": string,
+  "transcript": string,
+  "title": string,
+  "category": string,
+  "summary": string,
+  "aiStory": string
+}
+Use the same string for "transcript" and "translated_text" (both in the spoken language).`,
         },
         {
           role: 'user',
@@ -947,32 +719,45 @@ Return JSON: { "transcript": string, "title": string, "category": string, "summa
     choices?: { message?: { content?: string } }[];
   };
   const content = chatJson.choices?.[0]?.message?.content;
-  let parsed: Partial<AiEnrichment> = {};
+  let parsed: Partial<AiEnrichment> & {
+    translated_text?: string;
+    language_code?: string;
+    detected_language?: string;
+  } = {};
   try {
-    parsed = content ? (JSON.parse(content) as Partial<AiEnrichment>) : {};
+    parsed = content
+      ? (JSON.parse(content) as Partial<AiEnrichment> & {
+          translated_text?: string;
+          language_code?: string;
+          detected_language?: string;
+        })
+      : {};
   } catch {
     parsed = {};
   }
 
-  const title = preferSameScript(transcript, parsed.title) || titleFromTranscript(transcript);
-  const summary = preferSameScript(transcript, parsed.summary) || summaryFromTranscript(transcript);
+  const llmTranscript = cleanTranscript(parsed.translated_text ?? parsed.transcript ?? '');
+  const finalTranscript =
+    (targetLang.script !== 'latin' && alreadyInTargetScript(llmTranscript, targetLang.script)
+      ? llmTranscript
+      : null) ||
+    (targetLang.script !== 'latin' && alreadyInTargetScript(transcript, targetLang.script)
+      ? transcript
+      : null) ||
+    llmTranscript ||
+    transcript;
+
+  const languageCode =
+    (parsed.language_code || '').trim().toLowerCase().split(/[-_]/)[0] || targetLang.code;
 
   return {
-    transcript,
-    title,
-    category: normalizeCategory(parsed.category || guessCategory(transcript)),
-    summary,
-    aiStory: preferSameScript(transcript, parsed.aiStory) || summary,
-    detectedLanguage: targetLang.code,
+    transcript: finalTranscript,
+    title: parsed.title || titleFromTranscript(finalTranscript),
+    category: parsed.category || guessCategory(finalTranscript),
+    summary: parsed.summary || summaryFromTranscript(finalTranscript),
+    aiStory: parsed.aiStory || parsed.summary || summaryFromTranscript(finalTranscript),
+    detectedLanguage: languageCode,
   };
-}
-
-/** Drop LLM text that translated an Indic transcript into English. */
-function preferSameScript(original: string, candidate: string | null | undefined): string {
-  const text = cleanTranscript(candidate ?? '');
-  if (!text) return '';
-  if (hasIndicScript(original) && !hasIndicScript(text)) return '';
-  return text;
 }
 
 function cleanTranscript(raw: string): string {

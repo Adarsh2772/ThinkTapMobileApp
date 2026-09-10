@@ -1,12 +1,15 @@
 /**
  * ThinkTap STT proxy — keeps Groq / OpenAI keys off the mobile binary.
  *
- * POST /api/speech-to-text  multipart `audio` or `file` → transcription + language
- * POST /api/transcribe      multipart `file` → { text, language } (compat)
- * POST /api/enrich          multipart `file` → enrichment + detectedLanguage
+ * POST /api/transcribe  multipart field `file` → { text, language }
+ * POST /api/enrich      multipart field `file` → { transcript, title, category, summary, aiStory, detectedLanguage }
  * GET  /health
  *
- * Language is never forced into Whisper — the model auto-detects.
+ * Long recordings (>25 MB): split into ~10-minute chunks server-side and stitch
+ * with a prior-segment prompt (not implemented here — reject oversized uploads).
+ *
+ * Cost ballpark: Whisper / gpt-4o-transcribe ≈ $0.004–0.006 per audio minute.
+ * Prefer Groq for MVP cost; OpenAI gpt-4o-transcribe for higher accuracy.
  */
 import cors from 'cors';
 import dotenv from 'dotenv';
@@ -15,98 +18,158 @@ import multer from 'multer';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 
-import { speechProviderStatus, transcribeAudio, whisperConfigFromEnv } from './speech/index.js';
-
 dotenv.config({ path: path.join(path.dirname(fileURLToPath(import.meta.url)), '.env') });
 
 const PORT = Number(process.env.PORT || 8787);
 const MAX_BYTES = Number(process.env.MAX_UPLOAD_BYTES || 25 * 1024 * 1024);
+
+const AUTO_PROMPT = [
+  'Automatically detect the language the speaker originally used.',
+  'Transcribe exactly in that same language and correct native script.',
+  'Never translate into English unless the speaker spoke English.',
+  'Never translate into Hindi, Marathi, or any other language unless that is what was spoken.',
+  'Marathi/Hindi → Devanagari. Tamil → Tamil script. Preserve code-mixing naturally.',
+  'Preserve names, numbers, dates, addresses, product names, and technical terms.',
+  'Do not summarize or add information.',
+].join(' ');
+
+function providerFromEnv() {
+  const groq = process.env.GROQ_API_KEY?.trim();
+  const openai = process.env.OPENAI_API_KEY?.trim();
+  if (groq) {
+    return {
+      name: 'Groq',
+      apiKey: groq,
+      baseUrl: 'https://api.groq.com/openai/v1',
+      sttModel: process.env.STT_MODEL || 'whisper-large-v3',
+      responseFormat: 'verbose_json',
+      chatModel: process.env.CHAT_MODEL || 'llama-3.3-70b-versatile',
+    };
+  }
+  if (openai) {
+    return {
+      name: 'OpenAI',
+      apiKey: openai,
+      baseUrl: 'https://api.openai.com/v1',
+      sttModel: process.env.STT_MODEL || 'gpt-4o-transcribe',
+      responseFormat: 'json',
+      chatModel: process.env.CHAT_MODEL || 'gpt-4o-mini',
+    };
+  }
+  return null;
+}
 
 const upload = multer({
   storage: multer.memoryStorage(),
   limits: { fileSize: MAX_BYTES },
 });
 
-const uploadAudio = upload.fields([
-  { name: 'audio', maxCount: 1 },
-  { name: 'file', maxCount: 1 },
-]);
-
 const app = express();
 app.use(cors());
 app.use(express.json({ limit: '1mb' }));
 
-function pickAudioFile(req) {
-  return req.files?.audio?.[0] ?? req.files?.file?.[0] ?? req.file ?? null;
-}
-
-function transcribeOptions(req) {
-  return {
-    preferredLanguage: typeof req.body?.preferredLanguage === 'string' ? req.body.preferredLanguage : undefined,
-    conversationId: typeof req.body?.conversationId === 'string' ? req.body.conversationId : undefined,
-  };
-}
-
 app.get('/health', (_req, res) => {
-  const speech = speechProviderStatus();
-  const whisper = whisperConfigFromEnv();
+  const provider = providerFromEnv();
   res.json({
     ok: true,
-    provider: speech.name,
-    speechProvider: speech.id,
-    sttModel: speech.sttModel,
-    configured: speech.configured,
-    chatProvider: whisper?.name ?? null,
+    provider: provider?.name ?? null,
+    sttModel: provider?.sttModel ?? null,
     maxUploadBytes: MAX_BYTES,
   });
 });
 
-app.post('/api/speech-to-text', uploadAudio, async (req, res) => {
+app.post('/api/transcribe', upload.single('file'), async (req, res) => {
   try {
-    const result = await transcribeAudio(pickAudioFile(req), transcribeOptions(req));
-    res.json({
-      success: true,
-      transcription: result.transcription,
-      language: result.language,
-      audio: result.duration != null ? { duration: result.duration } : undefined,
-    });
+    const result = await runTranscribe(req.file);
+    res.json(result);
   } catch (error) {
     sendError(res, error);
   }
 });
 
-app.post('/api/transcribe', uploadAudio, async (req, res) => {
+app.post('/api/enrich', upload.single('file'), async (req, res) => {
   try {
-    const result = await transcribeAudio(pickAudioFile(req), transcribeOptions(req));
+    const stt = await runTranscribe(req.file);
+    if (!stt.text) {
+      res.status(422).json({ error: 'No speech detected in this recording. Try speaking more clearly.' });
+      return;
+    }
+    const enrichment = await runEnrich(stt.text, stt.language || 'en');
+    const transcript =
+      enrichment.translated_text || enrichment.transcript || stt.text;
     res.json({
-      text: result.transcription,
-      language: result.language?.code,
-    });
-  } catch (error) {
-    sendError(res, error);
-  }
-});
-
-app.post('/api/enrich', uploadAudio, async (req, res) => {
-  try {
-    const stt = await transcribeAudio(pickAudioFile(req), transcribeOptions(req));
-    const languageCode = stt.language?.code || '';
-    const enrichment = await runEnrich(stt.transcription, languageCode);
-    res.json({
-      transcript: enrichment.transcript || stt.transcription,
+      transcript,
       title: enrichment.title,
       category: enrichment.category,
       summary: enrichment.summary,
       aiStory: enrichment.aiStory || enrichment.summary,
-      detectedLanguage: (languageCode || '').toLowerCase(),
+      detectedLanguage: (
+        enrichment.language_code ||
+        stt.language ||
+        'en'
+      ).toLowerCase(),
     });
   } catch (error) {
     sendError(res, error);
   }
 });
 
+async function runTranscribe(file) {
+  const provider = providerFromEnv();
+  if (!provider) {
+    const err = new Error('Server missing GROQ_API_KEY or OPENAI_API_KEY');
+    err.status = 503;
+    throw err;
+  }
+  if (!file?.buffer?.length) {
+    const err = new Error('Missing audio file (multipart field "file")');
+    err.status = 400;
+    throw err;
+  }
+  if (file.size > MAX_BYTES) {
+    const err = new Error(
+      `Recording exceeds ${MAX_BYTES} bytes. Split long audio into chunks (~10 min) server-side and stitch transcripts.`,
+    );
+    err.status = 413;
+    throw err;
+  }
+
+  const form = new FormData();
+  const blob = new Blob([file.buffer], { type: file.mimetype || 'audio/mp4' });
+  form.append('file', blob, file.originalname || 'idea.m4a');
+  form.append('model', provider.sttModel);
+  form.append('response_format', provider.responseFormat);
+  form.append('temperature', '0');
+  form.append('prompt', AUTO_PROMPT);
+  // Intentionally omit `language` — auto-detect spoken language.
+
+  const response = await fetch(`${provider.baseUrl}/audio/transcriptions`, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${provider.apiKey}` },
+    body: form,
+  });
+
+  const bodyText = await response.text();
+  if (response.status === 429) {
+    const err = new Error('Upstream rate limit (429)');
+    err.status = 429;
+    throw err;
+  }
+  if (!response.ok) {
+    const err = new Error(`${provider.name} STT ${response.status}: ${bodyText.slice(0, 200)}`);
+    err.status = response.status >= 400 && response.status < 600 ? response.status : 502;
+    throw err;
+  }
+
+  const json = JSON.parse(bodyText);
+  return {
+    text: String(json.text || '').trim(),
+    language: json.language ? String(json.language).toLowerCase() : undefined,
+  };
+}
+
 async function runEnrich(transcript, languageCode) {
-  const provider = whisperConfigFromEnv();
+  const provider = providerFromEnv();
   if (!provider) {
     return localEnrich(transcript, languageCode);
   }
@@ -125,13 +188,26 @@ async function runEnrich(transcript, languageCode) {
         {
           role: 'system',
           content: `You organize voice ideas for Think Tap.
-Detected spoken language code: ${languageCode}.
-Copy the transcript into "transcript" EXACTLY. Do not translate. Do not transliterate.
-Write title, summary, and aiStory in the SAME language and script as the transcript.
-If Hindi/Marathi is mixed with English, keep that mix.
+The user originally spoke language code: ${languageCode}.
+Keep "transcript" / "translated_text" in that same spoken language and script — unchanged if already correct.
+Write title, summary, and aiStory in that same language only.
+Do not translate into English unless the spoken language is English.
+Do not translate into Hindi, Marathi, or any other language unless that is what was spoken.
+Preserve names, numbers, dates, addresses, product names, and technical terms.
+Do not summarize beyond the required fields. Do not add information.
 Keep category in English from: Movies, Songs, Books, Business, Scripts, Design, Music.
 Title: max 8 words. Summary: 1-2 sentences from the transcript only.
-Return JSON: { "transcript": string, "title": string, "category": string, "summary": string, "aiStory": string }`,
+Return JSON: {
+  "detected_language": string,
+  "language_code": "${languageCode}",
+  "translated_text": string,
+  "transcript": string,
+  "title": string,
+  "category": string,
+  "summary": string,
+  "aiStory": string
+}
+Use the same string for "transcript" and "translated_text".`,
         },
         { role: 'user', content: `Transcript:\n${transcript}` },
       ],
@@ -146,11 +222,7 @@ Return JSON: { "transcript": string, "title": string, "category": string, "summa
   const content = chatJson.choices?.[0]?.message?.content;
   if (!content) return localEnrich(transcript, languageCode);
   try {
-    const parsed = JSON.parse(content);
-    return {
-      ...parsed,
-      transcript,
-    };
+    return JSON.parse(content);
   } catch {
     return localEnrich(transcript, languageCode);
   }
@@ -173,12 +245,12 @@ function sendError(res, error) {
   const status = error?.status || 500;
   const message = error instanceof Error ? error.message : 'Server error';
   console.error('[thinktap-stt]', message);
-  res.status(status).json({ error: message, success: false });
+  res.status(status).json({ error: message });
 }
 
 app.listen(PORT, () => {
-  const speech = speechProviderStatus();
+  const provider = providerFromEnv();
   console.log(
-    `ThinkTap STT proxy on http://localhost:${PORT} (${speech.name} / ${speech.sttModel ?? 'NO MODEL'} — ${speech.configured ? 'ready' : 'NOT CONFIGURED'})`,
+    `ThinkTap STT proxy on http://localhost:${PORT} (${provider ? provider.name + ' / ' + provider.sttModel : 'NO API KEY'})`,
   );
 });

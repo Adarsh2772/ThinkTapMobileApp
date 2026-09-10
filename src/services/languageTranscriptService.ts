@@ -1,12 +1,18 @@
 import { ExpoSpeechRecognitionModule } from 'expo-speech-recognition';
 import { Platform } from 'react-native';
-import { AndroidWakeWord } from 'android-wake-word';
 
 import { ensureRecordingsDirectory } from '@/src/services/audioStorage';
+import { allVoiceCommandContextualStrings } from '@/src/features/wakeWord/phrases';
 
 import {
+  autoSpeechLocaleFallbackChain,
   INDIAN_SPEECH_LOCALES,
   matchCatalogLocale,
+  pickAvailableSpeechLocale,
+  pickBestInstalledSpeechLocale,
+  listInstalledVoiceLocales,
+  SAFE_SPEECH_LOCALE_FALLBACK,
+  speechLocaleFallbackChain,
   type LocaleAvailability,
   type SpeechLocaleCode,
 } from '@/src/features/languageTranscript/locales';
@@ -53,10 +59,34 @@ function contextualStringsForLocale(lang: string): string[] {
     'start recording',
   ];
   switch (lang) {
-    case 'hi-IN':
-      return ['थांबा', 'थांब', 'बंद करो', 'बंद', 'रुको', 'बस', ...sharedEn];
     case 'mr-IN':
-      return ['थांबा', 'थांब', 'थांबवा', 'बंद करा', 'बंद', 'बस', ...sharedEn];
+      return [
+        'रेकॉर्डिंग सुरू करा',
+        'रेकॉर्डिंग सुरु करा',
+        'रेकॉर्डिंग चालू करा',
+        'सुरू करा',
+        'थांबा',
+        'थांब',
+        'थांबवा',
+        'बंद करा',
+        'बंद',
+        'बस',
+        ...sharedEn,
+      ];
+    case 'hi-IN':
+      return [
+        'रिकॉर्डिंग शुरू करो',
+        'रिकॉर्डिंग शुरू करें',
+        'शुरू करो',
+        'शुरू करें',
+        'थांबा',
+        'थांब',
+        'बंद करो',
+        'बंद',
+        'रुको',
+        'बस',
+        ...sharedEn,
+      ];
     case 'bn-IN':
       return ['বন্ধ কর', 'থামো', 'থামুন', ...sharedEn];
     case 'te-IN':
@@ -111,6 +141,7 @@ export async function getIndianLocaleAvailability(): Promise<LocaleAvailability[
     installed = result?.installedLocales ?? [];
   } catch (e) {
     console.warn('getSupportedLocales failed', e);
+    clearSpeechLocaleCache();
   }
 
   const installedSet = new Set(
@@ -120,15 +151,28 @@ export async function getIndianLocaleAvailability(): Promise<LocaleAvailability[
     locales.map(matchCatalogLocale).filter(Boolean) as SpeechLocaleCode[],
   );
 
-  const deviceReportedNothing = installedSet.size === 0 && supportedSet.size === 0;
+  const localeQueryFailed = installedSet.size === 0 && supportedSet.size === 0;
+
+  // When Google speech returns error 14 / empty lists, do not assume every Indian
+  // locale is installed — that causes language-not-supported loops on English-only phones.
+  if (localeQueryFailed) {
+    const safe = new Set(SAFE_SPEECH_LOCALE_FALLBACK);
+    return INDIAN_SPEECH_LOCALES.map((locale) => ({
+      code: locale.code,
+      available: safe.has(locale.code),
+      installedOnDevice: false,
+      supportedOnDevice: false,
+      online: true,
+    }));
+  }
 
   return INDIAN_SPEECH_LOCALES.map((locale) => {
     const installedOnDevice = installedSet.has(locale.code);
     const supportedOnDevice = supportedSet.has(locale.code);
-    const online = deviceReportedNothing || supportedOnDevice || !installedOnDevice;
+    const online = supportedOnDevice || !installedOnDevice;
     return {
       code: locale.code,
-      available: installedOnDevice || supportedOnDevice || deviceReportedNothing,
+      available: installedOnDevice || supportedOnDevice,
       installedOnDevice,
       supportedOnDevice: supportedOnDevice && !installedOnDevice,
       online,
@@ -159,26 +203,64 @@ export async function triggerOfflineModelDownload(locale: SpeechLocaleCode): Pro
 
 export type LiveRecognitionOptions = {
   lang: SpeechLocaleCode | 'en-US';
+  /** Bias toward wake/stop/pause phrases in every supported language. */
+  contextualStrings?: string[];
   requiresOnDeviceRecognition?: boolean;
   outputFileName?: string;
   /** Persist recognized audio. Disable on retries — persist can leave the mic busy. */
   persist?: boolean;
 };
 
+let localeAvailabilityCache: LocaleAvailability[] | null = null;
+
+/** Cached device locale list — refreshed after a failed start. */
+export async function getCachedIndianLocaleAvailability(
+  refresh = false,
+): Promise<LocaleAvailability[]> {
+  if (refresh || !localeAvailabilityCache) {
+    localeAvailabilityCache = await getIndianLocaleAvailability();
+  }
+  return localeAvailabilityCache;
+}
+
+export function clearSpeechLocaleCache(): void {
+  localeAvailabilityCache = null;
+}
+
+/** Best locale for this device before starting SpeechRecognizer (avoids beep loops). */
+export async function resolveDeviceSpeechLocale(
+  preferred: SpeechLocaleCode,
+): Promise<SpeechLocaleCode | 'en-US'> {
+  const availability = await getCachedIndianLocaleAvailability();
+  return pickAvailableSpeechLocale(preferred, availability);
+}
+
+/** Auto locale — ignores Settings; prefers Devanagari packs (hi/mr) over English. */
+export async function resolveAutoSpeechLocale(): Promise<SpeechLocaleCode | 'en-US'> {
+  const availability = await getCachedIndianLocaleAvailability();
+  return pickBestInstalledSpeechLocale(availability);
+}
+
+/** Locales to round-robin for wake/stop commands (multilingual, Settings-independent). */
+export async function listVoiceCommandLocales(): Promise<(SpeechLocaleCode | 'en-US')[]> {
+  const availability = await getCachedIndianLocaleAvailability();
+  return listInstalledVoiceLocales(availability);
+}
+
+export { autoSpeechLocaleFallbackChain, allVoiceCommandContextualStrings };
+
 /**
- * WHY: recognizer audio persistence behaves differently on every Android
- * version — on API 35 it terminates the session after ~2s. The audio file now
- * always comes from expo-audio, so this path is retired entirely.
- * One behaviour on every device beats three version branches.
+ * Only Android 13+ writes the recognized audio to a file — below that the
+ * recognizer cannot share the mic with a recorder at all. Other platforms
+ * capture the take with expo-audio instead, so a second file is not needed.
  */
 function canPersistRecognitionAudio(): boolean {
-  return false;
+  return Platform.OS === 'android' && Number(Platform.Version) >= 33;
 }
 
 export async function startLiveRecognition(options: LiveRecognitionOptions): Promise<void> {
   const lang = options.lang;
   const persist = (options.persist ?? true) && canPersistRecognitionAudio();
-  const androidPkg = resolveAndroidSpeechPackage();
 
   let recordingOptions: { persist: true; outputDirectory: string; outputFileName: string } | undefined;
   if (persist) {
@@ -192,21 +274,6 @@ export async function startLiveRecognition(options: LiveRecognitionOptions): Pro
     }
   }
 
-  if (__DEV__) {
-    console.log('[STT] start', { lang, persist, at: Date.now() });
-  }
-
-  // Mute OEM SpeechRecognizer start chimes before every session.
-  // Works on all Android versions where the native module is present
-  // (not gated on FGS / API 26+ isSupported).
-  if (Platform.OS === 'android') {
-    try {
-      AndroidWakeWord.silenceRecognitionUi();
-    } catch {
-      // ignore
-    }
-  }
-
   ExpoSpeechRecognitionModule.start({
     lang,
     interimResults: true,
@@ -214,17 +281,14 @@ export async function startLiveRecognition(options: LiveRecognitionOptions): Pro
     addsPunctuation: lang === 'en-IN' || lang === 'en-US',
     requiresOnDeviceRecognition: options.requiresOnDeviceRecognition ?? false,
     iosTaskHint: 'dictation',
-    contextualStrings: contextualStringsForLocale(lang),
+    contextualStrings: options.contextualStrings ?? allVoiceCommandContextualStrings(),
     ...(recordingOptions ? { recordingOptions } : {}),
     // Silence lengths are deliberately not set here: expo-speech-recognition
     // applies its own long continuous-mode values last, and overriding them
     // makes the engine close the session on every natural pause.
-    // Prefer free-form on every Android version; do not set API-specific extras.
     androidIntentOptions: {
       EXTRA_LANGUAGE_MODEL: 'free_form',
-      EXTRA_PARTIAL_RESULTS: true,
     },
-    ...(androidPkg ? { androidRecognitionServicePackage: androidPkg } : {}),
   });
 }
 
@@ -244,44 +308,24 @@ export function abortLiveRecognition(): void {
   }
 }
 
-/** Strip trailing / repeated stop-command words from a transcript. */
+/** Strip trailing stop-command words from a transcript. */
 export function stripTrailingStopCommand(transcript: string): string {
-  let result = transcript.replace(/\s+/g, ' ').trim();
-  if (!result) return '';
-
-  // Cut a trailing run of “stop recording” (user often repeats the command).
-  const cluster =
-    /\bstop\s+recording\b(?:[\s,.]*(?:hitting\s+that|please|stop|recording|the|end|finish))*\s*$/i;
-  if (cluster.test(result)) {
-    const cut = result.search(/\bstop\s+recording\b/i);
-    if (cut >= 0) {
-      const rest = result.slice(cut).toLowerCase();
-      const words = rest.replace(/[.,!]/g, ' ').split(/\s+/).filter(Boolean);
-      const cmd = new Set([
-        'stop',
-        'recording',
-        'hitting',
-        'that',
-        'please',
-        'the',
-        'end',
-        'finish',
-      ]);
-      if (words.length > 0 && words.filter((w) => cmd.has(w)).length >= words.length * 0.55) {
-        result = result.slice(0, cut).trim();
-      }
-    }
-  }
+  const cleaned = transcript.replace(/\s+/g, ' ').trim();
+  if (!cleaned) return '';
 
   const patterns = [
-    /\b(please\s+)?stop(\s+(the\s+)?recording)?\s*$/i,
-    /\b(end|finish)\s+(the\s+)?recording\s*$/i,
+    /\b(please\s+)?stop(\s+recording)?\s*$/i,
+    /\b(end|finish)\s+recording\s*$/i,
     /\b(please\s+)?pause(\s+(the\s+)?recording)?\s*$/i,
     /\b(resume|continue)(\s+recording)?\s*$/i,
     /(थांबा|थांब|थांबवा|बंद\s*करा?|बंद\s*करो|रोका|रुको|बस)\s*$/u,
     /(நிறுத்து|நிறுத்துங்கள்|ரூகோ|போதும்)\s*$/u,
     /(বন্ধ\s*কর|থামো|থামুন)\s*$/u,
     /(ఆపు|ఆపండి|ఆగు)\s*$/u,
+    /(റെക്കോർഡിംഗ് നിർത്തുക|നിർത്തുക|നിർത്തൂ)\s*$/u,
+    /(ରେକର୍ଡିଂ ବନ୍ଦ କର|ବନ୍ଦ କର)\s*$/u,
+    /(ৰেকৰ্ডিং বন্ধ কৰক|বন্ধ কৰক)\s*$/u,
+    /(ریکارڈنگ بند کریں|بند کرو|روکو)\s*$/u,
     /(ನಿಲ್ಲಿಸಿ|ನಿಲ್ಲು)\s*$/u,
     /(നിർത്തുക|നിർത്തൂ)\s*$/u,
     /(બંધ\s*કરો|રોકો)\s*$/u,
@@ -289,13 +333,9 @@ export function stripTrailingStopCommand(transcript: string): string {
     /(بند\s*کرو|روکو)\s*$/u,
   ];
 
-  for (let i = 0; i < 4; i += 1) {
-    let next = result;
-    for (const re of patterns) {
-      next = next.replace(re, '').trim();
-    }
-    if (next === result) break;
-    result = next;
+  let result = cleaned;
+  for (const re of patterns) {
+    result = result.replace(re, '').trim();
   }
   return result;
 }

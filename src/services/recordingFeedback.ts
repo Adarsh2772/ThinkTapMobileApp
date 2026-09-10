@@ -6,35 +6,17 @@ import { Platform, Vibration } from 'react-native';
  * Wake-word listening stays silent — no chime/haptic on SpeechRecognizer restarts.
  */
 export async function announceRecordingStarted(): Promise<void> {
-  if (Platform.OS === 'android') {
+  if (Platform.OS === 'android' && AndroidWakeWord.isSupported()) {
     try {
-      AndroidWakeWord.silenceRecognitionUi();
-      if (AndroidWakeWord.isSupported()) {
-        const played = await AndroidWakeWord.playRecordingStartCue();
-        if (played) return;
-      }
+      await AndroidWakeWord.playRecordingStartCue();
+      return;
     } catch {
-      // fall through to JS haptic
+      // ignore — no fallback vibration on start
     }
-  }
-  try {
-    Vibration.vibrate(80);
-  } catch {
-    // ignore
   }
 }
 
 export async function announceRecordingStopped(): Promise<void> {
-  if (Platform.OS === 'android') {
-    try {
-      if (AndroidWakeWord.isSupported()) {
-        const played = await AndroidWakeWord.playRecordingStopCue();
-        if (played) return;
-      }
-    } catch {
-      // fall through to JS haptic
-    }
-  }
   try {
     Vibration.vibrate([0, 40, 60, 40]);
   } catch {

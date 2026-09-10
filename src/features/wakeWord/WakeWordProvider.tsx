@@ -1,75 +1,57 @@
+import { useRouter } from 'expo-router';
 import type { ReactNode } from 'react';
 import { useEffect, useRef } from 'react';
-import { usePathname, useRouter } from 'expo-router';
 
+import { IdeaCaptureProvider } from '@/src/features/capture/IdeaCaptureProvider';
 import { useWakeWordListener } from '@/src/hooks/useWakeWordListener';
 import { useWakeWordStore } from '@/src/store/wakeWordStore';
 
 /**
  * Mount once under the authenticated app tree to run wake-word listening
- * and always land on the Home tab when "Hey Think Tap" is heard.
+ * and route voice commands to the global recording session.
  */
 export function WakeWordProvider({ children }: { children: ReactNode }) {
-  useWakeWordListener();
-  useNavigateHomeOnWake();
-  usePauseWakeWhileCapturing();
-  return children;
+  return (
+    <IdeaCaptureProvider>
+      <WakeWordListenerMount />
+      <WakeNavigateOnWake />
+      <PauseWakeWhileCapturing />
+      {children}
+    </IdeaCaptureProvider>
+  );
 }
 
-/**
- * Owns the pause/resume window around a take. This lives here, not on Home:
- * navigating to Processing or an idea tears Home's effects down, which used to
- * strand the listener in the paused state so the wake phrase stopped working.
- *
- * `pausedForRecording` is also watched, not just `captureActive`: the wake
- * trigger pauses the listener before any take exists, so if that take never
- * opens (trigger arrived while already recording, start failed, Home was not
- * mounted) nothing would ever un-pause and the wake service would stay dead
- * for the rest of the session.
- */
-function usePauseWakeWhileCapturing() {
-  const captureActive = useWakeWordStore((s) => s.captureActive);
-  const captureStarting = useWakeWordStore((s) => s.captureStarting);
-  const playbackActive = useWakeWordStore((s) => s.playbackActive);
-  const pausedForRecording = useWakeWordStore((s) => s.pausedForRecording);
-  const setPausedForRecording = useWakeWordStore((s) => s.setPausedForRecording);
-  const setCaptureStarting = useWakeWordStore((s) => s.setCaptureStarting);
+function WakeWordListenerMount() {
+  useWakeWordListener();
+  return null;
+}
 
-  const holdMic = captureActive || captureStarting || playbackActive;
+function PauseWakeWhileCapturing() {
+  const captureActive = useWakeWordStore((s) => s.captureActive);
+  const setPausedForRecording = useWakeWordStore((s) => s.setPausedForRecording);
 
   useEffect(() => {
-    if (holdMic) {
+    if (captureActive) {
       setPausedForRecording(true);
       return;
     }
-    if (!pausedForRecording) return;
-    const timer = setTimeout(() => setPausedForRecording(false), 800);
+    const timer = setTimeout(() => setPausedForRecording(false), 1200);
     return () => clearTimeout(timer);
-  }, [holdMic, pausedForRecording, setPausedForRecording]);
+  }, [captureActive, setPausedForRecording]);
 
-  // A wake heard while minimized sets captureStarting. If the user never
-  // returns, drop it so listening can resume instead of staying paused forever.
-  useEffect(() => {
-    if (!captureStarting || captureActive) return;
-    const timer = setTimeout(() => setCaptureStarting(false), 30_000);
-    return () => clearTimeout(timer);
-  }, [captureStarting, captureActive, setCaptureStarting]);
+  return null;
 }
 
-function useNavigateHomeOnWake() {
+function WakeNavigateOnWake() {
   const router = useRouter();
-  const pathname = usePathname();
   const triggerToken = useWakeWordStore((s) => s.triggerToken);
   const lastToken = useRef(0);
 
   useEffect(() => {
     if (!triggerToken || triggerToken === lastToken.current) return;
     lastToken.current = triggerToken;
-    // WHY: replacing the route with itself remounts HomeScreen and leaves a
-    // second live transcript hook fighting for the microphone.
-    if (pathname === '/' || pathname === '/(tabs)' || pathname === '/(tabs)/index') {
-      return;
-    }
-    router.replace('/(tabs)');
-  }, [triggerToken, router, pathname]);
+    router.replace('/(tabs)/');
+  }, [triggerToken, router]);
+
+  return null;
 }

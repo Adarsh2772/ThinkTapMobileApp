@@ -2,43 +2,15 @@ import { Ionicons } from '@expo/vector-icons';
 import { Modal, Pressable, StyleSheet, Text, View } from 'react-native';
 
 import { colors, fonts, radii, spacing, typography } from '@/src/theme/tokens';
-import type { ProcessingStage } from '@/src/types';
 
 type Props = {
   visible: boolean;
   onClose: () => void;
   /** Shown under the main message while AI/organize still runs. */
   organizing?: boolean;
-  stage?: ProcessingStage;
-  detectedLanguageName?: string | null;
 };
 
-function stageCopy(stage: ProcessingStage | undefined, organizing: boolean): string {
-  if (!organizing) {
-    return 'It will appear in Ideas when ready.';
-  }
-  switch (stage) {
-    case 'uploading':
-      return 'Processing audio…';
-    case 'transcribing':
-      return 'Detecting language and transcribing…';
-    case 'extracting':
-      return 'Language detected. Organizing your idea…';
-    case 'summarizing':
-    case 'saving':
-      return 'Transcription complete. Saving…';
-    default:
-      return 'Organizing your idea in the background…';
-  }
-}
-
-export function AudioSavedModal({
-  visible,
-  onClose,
-  organizing = false,
-  stage,
-  detectedLanguageName,
-}: Props) {
+export function AudioSavedModal({ visible, onClose, organizing = false }: Props) {
   return (
     <Modal
       visible={visible}
@@ -57,10 +29,11 @@ export function AudioSavedModal({
           <Text style={styles.body}>
             Your recording has been successfully saved.
           </Text>
-          {detectedLanguageName ? (
-            <Text style={styles.language}>Detected language: {detectedLanguageName}</Text>
-          ) : null}
-          <Text style={styles.meta}>{stageCopy(stage, organizing)}</Text>
+          {organizing ? (
+            <Text style={styles.meta}>Organizing your idea in the background…</Text>
+          ) : (
+            <Text style={styles.meta}>It will appear in Ideas when ready.</Text>
+          )}
 
           <Pressable
             onPress={onClose}
@@ -123,14 +96,6 @@ const styles = StyleSheet.create({
     fontSize: typography.bodyMd.fontSize,
     lineHeight: 22,
     color: colors.onSurfaceVariant,
-    textAlign: 'center',
-  },
-  language: {
-    marginTop: spacing.stackSm,
-    fontFamily: fonts.bodySemi,
-    fontSize: typography.bodyMd.fontSize,
-    lineHeight: 22,
-    color: colors.primary,
     textAlign: 'center',
   },
   meta: {

@@ -1,24 +1,38 @@
 import { useSpeechRecognitionEvent } from 'expo-speech-recognition';
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { AppState, Platform } from 'react-native';
+import { Platform } from 'react-native';
 
+import { detectSpeechLocaleFromText } from '@/src/features/languageTranscript/detectLanguage';
+import type { SpeechLocaleCode } from '@/src/features/languageTranscript/locales';
+import {
+  flushInterimToFinals,
+  mergeTranscriptSegment,
+  normalizeTranscriptText,
+} from '@/src/features/languageTranscript/transcriptMerge';
 import {
   matchesPausePhrase,
   matchesResumePhrase,
   matchesStopPhrase,
 } from '@/src/features/wakeWord/phrases';
-import type { SpeechLocaleCode } from '@/src/features/languageTranscript/locales';
 import {
   abortLiveRecognition,
+  allVoiceCommandContextualStrings,
+  autoSpeechLocaleFallbackChain,
+  clearSpeechLocaleCache,
   isSpeechRecognitionAvailable,
   requestSpeechPermissions,
+  listVoiceCommandLocales,
   startLiveRecognition,
   stopLiveRecognition,
   stripTrailingStopCommand,
 } from '@/src/services/languageTranscriptService';
+import { useSettingsStore } from '@/src/store/settingsStore';
+import { useWakeWordStore } from '@/src/store/wakeWordStore';
+import {
+  SAFE_SPEECH_LOCALE_FALLBACK,
+} from '@/src/features/languageTranscript/locales';
 
 type Options = {
-  speechLocale: SpeechLocaleCode;
   /** Session is open (recording or paused). */
   enabled: boolean;
   /** When true, spoken words are added to the idea transcript. */
@@ -26,55 +40,37 @@ type Options = {
   onStopPhrase?: () => void;
   onPausePhrase?: () => void;
   onResumePhrase?: () => void;
-  /** The engine cannot run at all — the take must not stay open pretending to record. */
-  onUnavailable?: (message: string) => void;
-  /** Mic stolen (phone call / audio focus) — pause the take, do not restart STT. */
-  onInterrupted?: () => void;
-  /** Real words arrived — used to reset the 10s silence auto-pause. */
-  onSpeechActivity?: () => void;
-  /**
-   * STT error from the engine. Return true to swallow the error (no retry).
-   * Used to detect mic contention and fall back to audio-only.
-   */
-  onSttError?: (code: string) => boolean | void;
 };
 
-/**
- * WHY: only one instance may drive the recognizer. Screen remounts can leave an
- * old instance alive whose async cleanup has not finished. Newest mount wins.
- * No version check — this affects every Android version.
- */
-let recognizerOwner: symbol | null = null;
-
 function normalize(text: string): string {
-  return text.replace(/\s+/g, ' ').trim();
+  return normalizeTranscriptText(text);
+}
+
+function resolvePreferredSpeechLocale(
+  locales: (SpeechLocaleCode | 'en-US')[],
+): SpeechLocaleCode | 'en-US' {
+  const wakeLocale = useWakeWordStore.getState().lastWakeLocale;
+  const settingsLocale = useSettingsStore.getState().speechLocale;
+  const candidates = [wakeLocale, settingsLocale].filter(
+    (code): code is SpeechLocaleCode | 'en-US' => !!code,
+  );
+  for (const preferred of candidates) {
+    if (locales.includes(preferred)) return preferred;
+    return preferred;
+  }
+  return locales[0] ?? SAFE_SPEECH_LOCALE_FALLBACK[0] ?? 'en-IN';
 }
 
 /**
- * Tried in order when the chosen language has no speech model on the device.
- * Without this the engine rejects every start and the take records nothing.
- */
-const FALLBACK_LOCALES: Array<SpeechLocaleCode | 'en-US'> = ['en-IN', 'en-US'];
-
-const LANGUAGE_UNAVAILABLE_MESSAGE =
-  'Speech recognition is not available for this language on your device. ' +
-  'Pick another language in Settings, or turn on “Save audio recording”.';
-
-/**
  * Live OS speech-to-text for idea capture.
- * Session generation ignores stale abort/end events so take #2+ can start.
+ * Locale is auto-selected from installed device packs — not tied to Settings.
  */
 export function useLanguageTranscript({
-  speechLocale,
   enabled,
   capturing,
   onStopPhrase,
   onPausePhrase,
   onResumePhrase,
-  onUnavailable,
-  onInterrupted,
-  onSpeechActivity,
-  onSttError,
 }: Options) {
   const [transcript, setTranscript] = useState('');
   const [interim, setInterim] = useState('');
@@ -87,21 +83,11 @@ export function useLanguageTranscript({
   const onStopRef = useRef(onStopPhrase);
   const onPauseRef = useRef(onPausePhrase);
   const onResumeRef = useRef(onResumePhrase);
-  const onUnavailableRef = useRef(onUnavailable);
-  const onInterruptedRef = useRef(onInterrupted);
-  const onSpeechActivityRef = useRef(onSpeechActivity);
-  const onSttErrorRef = useRef(onSttError);
   onStopRef.current = onStopPhrase;
   onPauseRef.current = onPausePhrase;
   onResumeRef.current = onResumePhrase;
-  onUnavailableRef.current = onUnavailable;
-  onInterruptedRef.current = onInterrupted;
-  onSpeechActivityRef.current = onSpeechActivity;
-  onSttErrorRef.current = onSttError;
 
   const genRef = useRef(0);
-  const ownerRef = useRef<symbol>(Symbol('stt'));
-  const mountedRef = useRef(true);
   const nativeGenRef = useRef(0);
   const nativeActiveRef = useRef(false);
   const stopFiredRef = useRef(false);
@@ -113,13 +99,11 @@ export function useLanguageTranscript({
   enabledRef.current = enabled;
   const capturingRef = useRef(capturing);
   capturingRef.current = capturing;
-  const localeRef = useRef(speechLocale);
-  localeRef.current = speechLocale;
-  /** Locale actually handed to the engine — may be downgraded to a fallback. */
-  const activeLocaleRef = useRef<SpeechLocaleCode | 'en-US'>(speechLocale);
-  const fallbackIndexRef = useRef(-1);
-  /** Set when no locale works: further restarts would just spin forever. */
-  const fatalRef = useRef(false);
+  const autoChainRef = useRef(autoSpeechLocaleFallbackChain());
+  const voiceLocalesRef = useRef<(SpeechLocaleCode | 'en-US')[]>(autoChainRef.current);
+  const voiceLocaleIndexRef = useRef(0);
+  const activeLocaleRef = useRef<SpeechLocaleCode | 'en-US'>('hi-IN');
+  const localeExhaustedRef = useRef(false);
   const fileSeq = useRef(0);
   const persistRef = useRef(true);
   const startAttempts = useRef(0);
@@ -146,9 +130,6 @@ export function useLanguageTranscript({
   const commitText = (incoming: string, asFinal: boolean) => {
     const text = normalize(incoming);
     if (!text) {
-      // A spoken command strips down to nothing. Finalising that empty string
-      // must not discard words the engine is still holding as interim — those
-      // words are the idea the user just dictated.
       if (asFinal) {
         const pending = stripTrailingStopCommand(interimRef.current);
         interimRef.current = '';
@@ -161,38 +142,26 @@ export function useLanguageTranscript({
       return;
     }
 
-    const committed = normalize(finalsRef.current.join(' '));
-
-    if (!asFinal) {
-      if (committed && text.startsWith(committed)) {
-        interimRef.current = text.slice(committed.length).trim();
-      } else {
-        interimRef.current = text;
-      }
-      publish();
-      return;
-    }
-
-    if (!committed) {
-      finalsRef.current = [text];
-    } else if (text.startsWith(committed)) {
-      const rest = text.slice(committed.length).trim();
-      if (rest) finalsRef.current.push(rest);
-    } else if (committed.endsWith(text) || text === committed) {
-      // duplicate final from the engine — ignore
-    } else {
-      finalsRef.current.push(text);
-    }
-    interimRef.current = '';
+    const merged = mergeTranscriptSegment(
+      { finals: finalsRef.current, interim: interimRef.current },
+      text,
+      asFinal,
+    );
+    finalsRef.current = merged.finals;
+    interimRef.current = merged.interim;
     publish();
   };
 
   const commitInterimRef = useRef(() => {});
 
   const commitInterim = () => {
-    if (interimRef.current.trim()) {
-      commitText(interimRef.current, true);
-    }
+    const flushed = flushInterimToFinals({
+      finals: finalsRef.current,
+      interim: interimRef.current,
+    });
+    finalsRef.current = flushed.finals;
+    interimRef.current = flushed.interim;
+    publish();
   };
   commitInterimRef.current = commitInterim;
 
@@ -203,6 +172,10 @@ export function useLanguageTranscript({
   }, []);
 
   const getAudioUri = useCallback(() => audioUriRef.current, []);
+
+  const getDetectedSpeechLocale = useCallback((): SpeechLocaleCode | 'en-US' => {
+    return detectSpeechLocaleFromText(getFullTranscript(), activeLocaleRef.current);
+  }, [getFullTranscript]);
 
   const waitForIdle = useCallback((timeoutMs = 2000) => {
     if (!nativeActiveRef.current) return Promise.resolve();
@@ -221,10 +194,6 @@ export function useLanguageTranscript({
     commitInterimRef.current();
     clearRestart();
     setListening(false);
-    if (recognizerOwner !== ownerRef.current) {
-      notifyEnded();
-      return;
-    }
     if (abort) {
       nativeActiveRef.current = false;
       genRef.current += 1;
@@ -237,20 +206,12 @@ export function useLanguageTranscript({
   }, []);
 
   const startListening = useCallback(async (fromRestart = false) => {
-    if (!mountedRef.current || !enabledRef.current || stopFiredRef.current || fatalRef.current) {
-      return;
-    }
-    // WHY: claim the recognizer so a stale instance cannot restart underneath us.
-    recognizerOwner = ownerRef.current;
+    if (!enabledRef.current || stopFiredRef.current || localeExhaustedRef.current) return;
     startingRef.current = true;
     const gen = fromRestart ? genRef.current : ++genRef.current;
 
     try {
       const granted = await requestSpeechPermissions();
-      if (recognizerOwner !== ownerRef.current || !mountedRef.current) {
-        startingRef.current = false;
-        return;
-      }
       if (!granted) {
         startingRef.current = false;
         setError('Speech recognition permission is required to transcribe.');
@@ -262,18 +223,24 @@ export function useLanguageTranscript({
         return;
       }
 
-      // Android ends a session on every silence gap. Aborting a session that is
-      // already torn down only adds deaf time, so settle just long enough for the
-      // engine to release the mic when one is actually running.
+      if (!fromRestart) {
+        localeExhaustedRef.current = false;
+        let locales = await listVoiceCommandLocales();
+        const preferred = resolvePreferredSpeechLocale(locales);
+        if (!locales.includes(preferred)) {
+          locales = [preferred, ...locales];
+        }
+        voiceLocalesRef.current = locales;
+        voiceLocaleIndexRef.current = Math.max(0, locales.indexOf(preferred));
+        activeLocaleRef.current = preferred;
+        useWakeWordStore.getState().clearLastWakeLocale();
+      }
+      // Routine restarts keep the same locale — only rotate on language-not-supported.
+
       const settleMs = nativeActiveRef.current ? 450 : fromRestart ? 120 : 250;
       if (nativeActiveRef.current) abortLiveRecognition();
       await new Promise((r) => setTimeout(r, settleMs));
-      if (
-        gen !== genRef.current ||
-        !enabledRef.current ||
-        stopFiredRef.current ||
-        recognizerOwner !== ownerRef.current
-      ) {
+      if (gen !== genRef.current || !enabledRef.current || stopFiredRef.current) {
         startingRef.current = false;
         return;
       }
@@ -282,26 +249,25 @@ export function useLanguageTranscript({
       fileSeq.current += 1;
       nativeGenRef.current = gen;
       nativeActiveRef.current = true;
+      console.log(
+        'LIVE_TRANSLATION: speech recognition started',
+        `locale=${activeLocaleRef.current}`,
+        `capturing=${capturingRef.current}`,
+      );
       await startLiveRecognition({
         lang: activeLocaleRef.current,
+        contextualStrings: allVoiceCommandContextualStrings(),
         outputFileName: `idea-${Date.now()}-${fileSeq.current}.wav`,
         persist: persistRef.current,
       });
-      if (
-        gen !== genRef.current ||
-        !enabledRef.current ||
-        recognizerOwner !== ownerRef.current
-      ) {
+      if (gen !== genRef.current || !enabledRef.current) {
         nativeActiveRef.current = false;
         startingRef.current = false;
-        if (recognizerOwner === ownerRef.current) abortLiveRecognition();
+        abortLiveRecognition();
         return;
       }
       setListening(true);
       startingRef.current = false;
-      if (__DEV__) {
-        console.log('[STT] listening', { at: Date.now(), gen });
-      }
     } catch (e) {
       console.warn('Language transcript failed to start', e);
       nativeActiveRef.current = false;
@@ -319,79 +285,31 @@ export function useLanguageTranscript({
   const scheduleRestart = (ms: number) => {
     clearRestart();
     restartTimer.current = setTimeout(() => {
-      if (
-        mountedRef.current &&
-        enabledRef.current &&
-        !stopFiredRef.current &&
-        !fatalRef.current
-      ) {
-        void startListening(true);
-      }
+      if (enabledRef.current && !stopFiredRef.current) void startListening(true);
     }, ms);
   };
 
-  /** Abort a deaf session and restart soon (e.g. after freeing the mic from MediaRecorder). */
-  const nudgeListening = useCallback(() => {
-    if (
-      !mountedRef.current ||
-      !enabledRef.current ||
-      stopFiredRef.current ||
-      fatalRef.current
-    ) {
-      return;
+  const finalizeSession = (commitInterimOnEnd: boolean) => {
+    if (commitInterimOnEnd && capturingRef.current) {
+      commitInterim();
     }
-    clearRestart();
-    // Bump gen so the aborted session's end/error cannot schedule a slower restart.
-    genRef.current += 1;
     nativeActiveRef.current = false;
-    startingRef.current = false;
-    abortLiveRecognition();
-    scheduleRestart(Platform.OS === 'android' ? 450 : 300);
-  }, []);
-
-  /**
-   * The device has no speech model for this language. Step down to English
-   * before giving up — retrying the rejected locale would loop forever while
-   * the UI shows a recording that captures nothing.
-   */
-  const handleLanguageUnavailable = () => {
-    const nextIndex = FALLBACK_LOCALES.findIndex(
-      (loc, i) => i > fallbackIndexRef.current && loc !== activeLocaleRef.current,
-    );
-    if (nextIndex >= 0) {
-      fallbackIndexRef.current = nextIndex;
-      activeLocaleRef.current = FALLBACK_LOCALES[nextIndex];
-      scheduleRestart(400);
-      return;
-    }
-    fatalRef.current = true;
-    clearRestart();
     setListening(false);
-    setError(LANGUAGE_UNAVAILABLE_MESSAGE);
-    onUnavailableRef.current?.(LANGUAGE_UNAVAILABLE_MESSAGE);
+    notifyEnded();
+  };
+
+  const maybeRestartSession = (restartMs: number) => {
+    if (!enabledRef.current || stopFiredRef.current) return;
+    scheduleRestart(restartMs);
   };
 
   useSpeechRecognitionEvent('result', (event) => {
-    if (recognizerOwner !== ownerRef.current) return;
     if (nativeGenRef.current !== genRef.current) return;
 
     const results = event.results ?? [];
     const top = results[0]?.transcript?.trim() ?? '';
     if (!top) return;
 
-    const heardStop =
-      results.some((item) => matchesStopPhrase(item?.transcript?.trim() ?? '')) ||
-      matchesStopPhrase(top) ||
-      matchesStopPhrase([finalsRef.current.join(' '), top].join(' '));
-    if (heardStop && !stopFiredRef.current) {
-      stopFiredRef.current = true;
-      commitText(stripTrailingStopCommand(top), true);
-      stopListening(false);
-      onStopRef.current?.();
-      return;
-    }
-
-    // After Stop, still accept the engine's final flush so the last words are kept.
     if (stopFiredRef.current) {
       commitText(stripTrailingStopCommand(top), true);
       return;
@@ -399,10 +317,19 @@ export function useLanguageTranscript({
 
     if (!enabledRef.current) return;
 
+    if (matchesStopPhrase(top)) {
+      stopFiredRef.current = true;
+      commitText(stripTrailingStopCommand(top), true);
+      stopListening(false);
+      onStopRef.current?.();
+      return;
+    }
+
     if (capturingRef.current && matchesPausePhrase(top)) {
       if (pauseFiredRef.current) return;
       pauseFiredRef.current = true;
       resumeFiredRef.current = false;
+      commitInterimRef.current();
       commitText(stripTrailingStopCommand(top), true);
       onPauseRef.current?.();
       return;
@@ -417,8 +344,13 @@ export function useLanguageTranscript({
     }
 
     if (!capturingRef.current) return;
-    onSpeechActivityRef.current?.();
+    if (event.isFinal) {
+      console.log('LIVE_TRANSLATION: final result received');
+    } else {
+      console.log('LIVE_TRANSLATION: partial result received');
+    }
     commitText(top, Boolean(event.isFinal));
+    console.log('LIVE_TRANSLATION: UI transcription updated while recording=true');
   });
 
   useSpeechRecognitionEvent('audioend', (event) => {
@@ -429,18 +361,6 @@ export function useLanguageTranscript({
   });
 
   useSpeechRecognitionEvent('end', () => {
-    if (recognizerOwner !== ownerRef.current) {
-      notifyEnded();
-      return;
-    }
-    if (__DEV__) {
-      console.log('[STT] end', {
-        at: Date.now(),
-        starting: startingRef.current,
-        gen: genRef.current,
-        nativeGen: nativeGenRef.current,
-      });
-    }
     if (startingRef.current) {
       notifyEnded();
       return;
@@ -450,35 +370,11 @@ export function useLanguageTranscript({
       notifyEnded();
       return;
     }
-    commitInterim();
-    nativeActiveRef.current = false;
-    setListening(false);
-    notifyEnded();
-    if (!enabledRef.current || stopFiredRef.current) return;
-    // Same restart policy on every Android version. Short gaps cause OEM
-    // start-chime loops (OPPO 12, ColorOS, OxygenOS 15, etc.).
-    scheduleRestart(Platform.OS === 'android' ? (capturingRef.current ? 2500 : 1000) : 400);
+    finalizeSession(true);
+    maybeRestartSession(capturingRef.current ? 1000 : 2500);
   });
 
   useSpeechRecognitionEvent('error', (event) => {
-    if (recognizerOwner !== ownerRef.current) {
-      notifyEnded();
-      return;
-    }
-    if (__DEV__) {
-      console.log('[STT] error', event?.error, {
-        at: Date.now(),
-        starting: startingRef.current,
-      });
-    }
-    const code = event?.error ?? '';
-    if (onSttErrorRef.current?.(code)) {
-      nativeActiveRef.current = false;
-      startingRef.current = false;
-      setListening(false);
-      notifyEnded();
-      return;
-    }
     if (startingRef.current) {
       notifyEnded();
       return;
@@ -488,48 +384,42 @@ export function useLanguageTranscript({
       notifyEnded();
       return;
     }
-    commitInterim();
-    nativeActiveRef.current = false;
-    setListening(false);
-    notifyEnded();
-    if (!enabledRef.current || stopFiredRef.current) return;
-    if (code === 'aborted') return;
-    if (code === 'language-not-supported' || code === 'service-not-allowed') {
-      handleLanguageUnavailable();
+    const code = event?.error ?? '';
+    if (code === 'aborted') {
+      finalizeSession(false);
       return;
     }
-    if (code === 'audio-capture') {
-      persistRef.current = false;
-      // Phone calls steal the mic. App-switch also kills STT after we already
-      // paused — do not mark that as a call or returning to the app stays paused.
-      if (AppState.currentState !== 'active' && capturingRef.current) {
-        onInterruptedRef.current?.();
+    finalizeSession(true);
+    if (!enabledRef.current || stopFiredRef.current) return;
+    if (code === 'language-not-supported') {
+      const locales = voiceLocalesRef.current;
+      const next = voiceLocaleIndexRef.current + 1;
+      if (next < locales.length) {
+        voiceLocaleIndexRef.current = next;
+        activeLocaleRef.current = locales[next]!;
+        clearSpeechLocaleCache();
+        maybeRestartSession(800);
         return;
       }
-      if (AppState.currentState !== 'active') return;
-      scheduleRestart(Platform.OS === 'android' ? 2500 : 600);
+      localeExhaustedRef.current = true;
+      setError(
+        'No speech language pack is installed. Install Hindi or English in your phone speech settings.',
+      );
       return;
     }
-    if (code === 'client' || code === 'busy' || code === 'network') {
+    if (code === 'client' || code === 'busy' || code === 'audio-capture' || code === 'network') {
       persistRef.current = false;
-      scheduleRestart(Platform.OS === 'android' ? 2500 : 600);
+      maybeRestartSession(Platform.OS === 'android' ? 800 : 600);
       return;
     }
     if (code !== 'no-speech' && code !== 'speech-timeout') {
       console.warn('Language transcript error', code);
     }
-    scheduleRestart(Platform.OS === 'android' ? (capturingRef.current ? 2500 : 1000) : 400);
+    maybeRestartSession(code === 'no-speech' ? 1200 : 800);
   });
 
-  useEffect(() => {
-    mountedRef.current = true;
-    recognizerOwner = ownerRef.current;
-    return () => {
-      mountedRef.current = false;
-      if (recognizerOwner === ownerRef.current) {
-        recognizerOwner = null;
-      }
-    };
+  const commitPendingTranscript = useCallback(() => {
+    commitInterimRef.current();
   }, []);
 
   useEffect(() => {
@@ -538,12 +428,11 @@ export function useLanguageTranscript({
     resumeFiredRef.current = false;
     persistRef.current = true;
     startAttempts.current = 0;
-    fatalRef.current = false;
-    fallbackIndexRef.current = -1;
-    activeLocaleRef.current = speechLocale;
+    localeExhaustedRef.current = false;
+    voiceLocaleIndexRef.current = 0;
 
     if (enabled) {
-      const t = setTimeout(() => void startListening(false), 450);
+      const t = setTimeout(() => void startListening(false), 200);
       return () => {
         clearTimeout(t);
         stopListening(true);
@@ -554,47 +443,7 @@ export function useLanguageTranscript({
     setListening(false);
     notifyEnded();
     return undefined;
-  }, [enabled, speechLocale, startListening, stopListening]);
-
-  const wasCapturingRef = useRef(capturing);
-  useEffect(() => {
-    const was = wasCapturingRef.current;
-    wasCapturingRef.current = capturing;
-    if (
-      !was &&
-      capturing &&
-      enabled &&
-      !nativeActiveRef.current &&
-      !startingRef.current &&
-      !stopFiredRef.current &&
-      !fatalRef.current
-    ) {
-      scheduleRestart(300);
-    }
-  }, [capturing, enabled]);
-
-  // While minimized the native service owns the mic. When we return, start
-  // live transcription again so spoken stop and the transcript keep working.
-  useEffect(() => {
-    const sub = AppState.addEventListener('change', (state) => {
-      if (state === 'background') {
-        clearRestart();
-        return;
-      }
-      if (
-        state === 'active' &&
-        enabledRef.current &&
-        capturingRef.current &&
-        !stopFiredRef.current &&
-        !fatalRef.current &&
-        !nativeActiveRef.current &&
-        !startingRef.current
-      ) {
-        scheduleRestart(700);
-      }
-    });
-    return () => sub.remove();
-  }, []);
+  }, [enabled, startListening, stopListening]);
 
   const reset = useCallback(() => {
     finalsRef.current = [];
@@ -605,9 +454,8 @@ export function useLanguageTranscript({
     resumeFiredRef.current = false;
     persistRef.current = true;
     startAttempts.current = 0;
-    fatalRef.current = false;
-    fallbackIndexRef.current = -1;
-    activeLocaleRef.current = localeRef.current;
+    localeExhaustedRef.current = false;
+    voiceLocaleIndexRef.current = 0;
     setTranscript('');
     setInterim('');
     setError(null);
@@ -620,10 +468,11 @@ export function useLanguageTranscript({
     listening,
     error,
     getFullTranscript,
+    getDetectedSpeechLocale,
     getAudioUri,
     waitForIdle,
     stopListening,
-    nudgeListening,
     reset,
+    commitPendingTranscript,
   };
 }

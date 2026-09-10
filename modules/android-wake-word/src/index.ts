@@ -8,40 +8,29 @@ export type WakePayload = { transcript: string };
 export type PartialPayload = { transcript: string; isFinal: boolean };
 export type ErrorPayload = { code: string; message: string };
 export type ListeningPayload = { listening: boolean; paused: boolean };
-export type CallStatePayload = { active: boolean };
 export type PendingWake = { transcript: string; at: number } | null;
 
 type WakeEventMap = {
   onWakeDetected: WakePayload;
-  onStopDetected: WakePayload;
   onPartialResult: PartialPayload;
   onError: ErrorPayload;
   onListeningChange: ListeningPayload;
-  onCallState: CallStatePayload;
 };
 
 type AndroidWakeWordNativeModule = {
   isSupported(): boolean;
   isRunning(): boolean;
   isPaused(): boolean;
-  isCallActive(): boolean;
-  startCallWatch(): Promise<boolean>;
-  stopCallWatch(): Promise<boolean>;
+  setSpeechLocale?(speechLocale?: string | null): void;
   startService(): Promise<boolean>;
   stopService(): Promise<boolean>;
   stopServiceSilent(): Promise<boolean>;
   pauseService(): Promise<boolean>;
   resumeService(): Promise<boolean>;
-  listenForStop(): Promise<boolean>;
   consumePendingWake(): Promise<PendingWake>;
-  consumePendingStop(): Promise<PendingWake>;
   silenceRecognitionUi(): void;
-  holdCaptureMute(): void;
-  releaseCaptureMute(): void;
   restoreRecognitionUi(): void;
-  cancelRecognizerHaptic(): void;
   playRecordingStartCue(): Promise<boolean>;
-  playRecordingStopCue(): Promise<boolean>;
   addListener(
     eventName: string,
     listener: (event: Record<string, unknown>) => void,
@@ -64,6 +53,11 @@ function addListener<E extends keyof WakeEventMap>(
 }
 
 export const AndroidWakeWord = {
+  /** True when the installed APK includes the fixed wake FGS (setSpeechLocale). */
+  hasUpdatedNativeModule(): boolean {
+    return !!Native?.setSpeechLocale;
+  },
+
   isSupported(): boolean {
     if (!Native) return false;
     try {
@@ -91,35 +85,18 @@ export const AndroidWakeWord = {
     }
   },
 
-  isCallActive(): boolean {
-    if (!Native) return false;
+  setSpeechLocale(speechLocale?: string): void {
+    if (!Native?.setSpeechLocale) return;
     try {
-      return Native.isCallActive();
+      Native.setSpeechLocale(speechLocale ?? 'en-US');
     } catch {
-      return false;
+      // Older native builds omit setSpeechLocale — default locale is used.
     }
   },
 
-  async startCallWatch(): Promise<boolean> {
+  async startService(speechLocale?: string): Promise<boolean> {
     if (!Native) return false;
-    try {
-      return Native.startCallWatch();
-    } catch {
-      return false;
-    }
-  },
-
-  async stopCallWatch(): Promise<boolean> {
-    if (!Native) return false;
-    try {
-      return Native.stopCallWatch();
-    } catch {
-      return false;
-    }
-  },
-
-  async startService(): Promise<boolean> {
-    if (!Native) return false;
+    AndroidWakeWord.setSpeechLocale(speechLocale ?? 'en-US');
     return Native.startService();
   },
 
@@ -147,51 +124,15 @@ export const AndroidWakeWord = {
     return Native.resumeService();
   },
 
-  async listenForStop(): Promise<boolean> {
-    if (!Native) return false;
-    try {
-      return Native.listenForStop();
-    } catch {
-      return false;
-    }
-  },
-
   async consumePendingWake(): Promise<PendingWake> {
     if (!Native) return null;
     return Native.consumePendingWake();
-  },
-
-  async consumePendingStop(): Promise<PendingWake> {
-    if (!Native) return null;
-    try {
-      return Native.consumePendingStop();
-    } catch {
-      return null;
-    }
   },
 
   silenceRecognitionUi(): void {
     if (!Native) return;
     try {
       Native.silenceRecognitionUi();
-    } catch {
-      // ignore
-    }
-  },
-
-  holdCaptureMute(): void {
-    if (!Native) return;
-    try {
-      Native.holdCaptureMute();
-    } catch {
-      // ignore
-    }
-  },
-
-  releaseCaptureMute(): void {
-    if (!Native) return;
-    try {
-      Native.releaseCaptureMute();
     } catch {
       // ignore
     }
@@ -206,28 +147,10 @@ export const AndroidWakeWord = {
     }
   },
 
-  cancelRecognizerHaptic(): void {
-    if (!Native) return;
-    try {
-      Native.cancelRecognizerHaptic();
-    } catch {
-      // ignore
-    }
-  },
-
   async playRecordingStartCue(): Promise<boolean> {
     if (!Native) return false;
     try {
       return Native.playRecordingStartCue();
-    } catch {
-      return false;
-    }
-  },
-
-  async playRecordingStopCue(): Promise<boolean> {
-    if (!Native) return false;
-    try {
-      return Native.playRecordingStopCue();
     } catch {
       return false;
     }

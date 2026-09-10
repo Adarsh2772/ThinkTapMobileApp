@@ -16,6 +16,7 @@ import {
   type AppLanguage,
   type AppLanguageCode,
 } from '@/src/i18n/languages';
+import { defaultSaveAudioRecording } from '@/src/features/capture/captureMode';
 import { t } from '@/src/i18n/translations';
 
 const LANGUAGE_KEY = '@thinktap/app_language';
@@ -25,7 +26,10 @@ const SAVE_AUDIO_KEY = '@thinktap/save_audio';
 type SettingsState = {
   languageCode: AppLanguageCode;
   speechLocale: SpeechLocaleCode;
-  /** Persist the take as a file so cloud STT can auto-detect language. */
+  /**
+   * Android API < 33 only: when true, expo-audio owns the mic (no live text).
+   * Default is false so live transcription works on Android 11 devices.
+   */
   saveAudioRecording: boolean;
   hydrated: boolean;
   hydrate: () => Promise<void>;
@@ -40,13 +44,14 @@ type SettingsState = {
 export const useSettingsStore = create<SettingsState>((set, get) => ({
   languageCode: DEFAULT_LANGUAGE,
   speechLocale: DEFAULT_SPEECH_LOCALE,
-  saveAudioRecording: true,
+  // Prefer live STT on Android < 33; ignored for capture mode on API 33+.
+  saveAudioRecording: defaultSaveAudioRecording(),
   hydrated: false,
 
   hydrate: async () => {
     let languageCode: AppLanguageCode = DEFAULT_LANGUAGE;
     let speechLocale: SpeechLocaleCode = DEFAULT_SPEECH_LOCALE;
-    let saveAudioRecording = true;
+    let saveAudioRecording = defaultSaveAudioRecording();
 
     try {
       const raw = await AsyncStorage.getItem(LANGUAGE_KEY);
@@ -70,7 +75,9 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
 
     try {
       const rawSave = await AsyncStorage.getItem(SAVE_AUDIO_KEY);
-      saveAudioRecording = rawSave === null ? true : rawSave === 'true';
+      // null = never set → use live-first default (critical for Android 11 / OPPO).
+      saveAudioRecording =
+        rawSave === null ? defaultSaveAudioRecording() : rawSave === 'true';
     } catch {
       // ignore
     }

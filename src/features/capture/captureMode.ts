@@ -1,28 +1,40 @@
 import { Platform } from 'react-native';
 
-export type CaptureMode = 'audio-file' | 'device';
+import {
+  defaultSaveAudioRecordingForApi,
+  resolveCaptureModeFor,
+  supportsAudioWithLiveTranscriptForApi,
+  type CaptureMode,
+} from './captureModeLogic';
+
+export type { CaptureMode };
+export {
+  ANDROID_LIVE_TRANSCRIPT_WITH_AUDIO_API,
+  defaultSaveAudioRecordingForApi,
+  resolveCaptureModeFor,
+  supportsAudioWithLiveTranscriptForApi,
+} from './captureModeLogic';
 
 /**
- * Live transcript is attempted on every device. If the mic cannot be shared,
- * useIdeaCapture detects that at runtime and falls back to audio-file mode.
- * Do not branch on Platform.Version — OEM mic arbitration does not follow
- * the API-level rules.
+ * Android 13+ (API 33+) can persist audio from the speech recognizer while
+ * showing a live transcript. Older Android cannot share the mic between
+ * expo-audio and speech recognition, so Settings offers a choice.
  */
 export function supportsAudioWithLiveTranscript(): boolean {
-  return true;
+  return supportsAudioWithLiveTranscriptForApi(
+    Platform.OS,
+    Number(Platform.Version),
+  );
 }
 
-/**
- * - `device`: try live speech recognition alongside expo-audio.
- * - `audio-file`: expo-audio owns the mic; transcript comes after Stop.
- *
- * Android always attempts `device`. Failure to share the mic is detected at
- * runtime in useIdeaCapture, not guessed from a version number.
- * iOS / other platforms honor the save-audio setting.
- */
 export function resolveCaptureMode(preferSavedAudio: boolean): CaptureMode {
-  if (Platform.OS === 'android') {
-    return 'device';
-  }
-  return preferSavedAudio ? 'audio-file' : 'device';
+  return resolveCaptureModeFor(
+    preferSavedAudio,
+    Platform.OS,
+    Number(Platform.Version),
+  );
+}
+
+export function defaultSaveAudioRecording(): boolean {
+  return defaultSaveAudioRecordingForApi(Platform.OS, Number(Platform.Version));
 }

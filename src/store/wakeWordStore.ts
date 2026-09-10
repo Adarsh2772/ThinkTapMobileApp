@@ -1,59 +1,54 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { create } from 'zustand';
 
+import type { SpeechLocaleCode } from '@/src/features/languageTranscript/locales';
+import { inferSpeechLocaleFromWakeText } from '@/src/features/wakeWord/phrases';
+
 const WAKE_KEY = '@thinktap/wake_word_enabled';
 const WAKE_ONBOARDING_KEY = '@thinktap/wake_word_onboarding_done';
 let lastFireAt = 0;
-let lastStopAt = 0;
 
 type WakeWordState = {
+  /** User preference — persisted. Does NOT start the mic by itself. */
   enabled: boolean;
+  /**
+   * Mic / SpeechRecognizer may run only after an explicit user action
+   * (toggle ON, onboarding Enable). Always false on cold launch.
+   */
+  listeningArmed: boolean;
   listening: boolean;
-  /** True while the app is recording — wake listener must not hold the mic. */
   pausedForRecording: boolean;
-  /** True while a take is open, wherever the user navigates. */
   captureActive: boolean;
-  /** True while a take is requested until it is open or has failed. */
-  captureStarting: boolean;
-  /** True while the in-app player is playing a saved take — wake STT must release the speaker. */
-  playbackActive: boolean;
   available: boolean | null;
   lastHeard: string;
-  /** Incremented when wake phrase is detected — Home consumes this to start recording. */
+  lastWakeLocale: SpeechLocaleCode | 'en-US' | null;
   triggerToken: number;
-  /** Incremented when a spoken stop is heard while capturing in the background. */
-  stopToken: number;
-  /** Epoch ms of the last wake trigger — Home ignores stale tokens after 30s. */
-  triggerAt: number;
-  /** False until the first-launch Hey Think Tap permission prompt is answered. */
   onboardingDone: boolean;
   hydrated: boolean;
   hydrate: () => Promise<void>;
   setEnabled: (enabled: boolean) => Promise<void>;
+  armListening: () => void;
+  disarmListening: () => void;
   setOnboardingDone: (done?: boolean) => Promise<void>;
   setListening: (listening: boolean) => void;
   setPausedForRecording: (paused: boolean) => void;
   setCaptureActive: (active: boolean) => void;
-  setCaptureStarting: (starting: boolean) => void;
-  setPlaybackActive: (active: boolean) => void;
   setAvailable: (available: boolean) => void;
   setLastHeard: (text: string) => void;
+  clearLastWakeLocale: () => void;
   fireWakeTrigger: () => void;
-  fireStopTrigger: () => void;
 };
 
 export const useWakeWordStore = create<WakeWordState>((set, get) => ({
   enabled: false,
+  listeningArmed: false,
   listening: false,
   pausedForRecording: false,
   captureActive: false,
-  captureStarting: false,
-  playbackActive: false,
   available: null,
   lastHeard: '',
+  lastWakeLocale: null,
   triggerToken: 0,
-  stopToken: 0,
-  triggerAt: 0,
   onboardingDone: false,
   hydrated: false,
 
@@ -65,18 +60,30 @@ export const useWakeWordStore = create<WakeWordState>((set, get) => ({
       ]);
       set({
         enabled: enabledRaw === 'true',
+        // Preference restored; mic stays off until user explicitly arms listening.
+        listeningArmed: false,
         onboardingDone: onboardingRaw === 'true',
         hydrated: true,
       });
     } catch {
-      set({ enabled: false, onboardingDone: false, hydrated: true });
+      set({ enabled: false, listeningArmed: false, onboardingDone: false, hydrated: true });
     }
   },
 
   setEnabled: async (enabled) => {
-    set({ enabled });
+    if (enabled) {
+      set({ enabled: true, listeningArmed: true });
+    } else {
+      set({ enabled: false, listeningArmed: false, listening: false });
+    }
     await AsyncStorage.setItem(WAKE_KEY, enabled ? 'true' : 'false');
   },
+
+  armListening: () => {
+    if (get().enabled) set({ listeningArmed: true });
+  },
+
+  disarmListening: () => set({ listeningArmed: false, listening: false }),
 
   setOnboardingDone: async (done = true) => {
     set({ onboardingDone: done });
@@ -86,27 +93,31 @@ export const useWakeWordStore = create<WakeWordState>((set, get) => ({
   setListening: (listening) => set({ listening }),
   setPausedForRecording: (pausedForRecording) => set({ pausedForRecording }),
   setCaptureActive: (captureActive) => set({ captureActive }),
-  setCaptureStarting: (captureStarting) => set({ captureStarting }),
-  setPlaybackActive: (playbackActive) => set({ playbackActive }),
   setAvailable: (available) => set({ available }),
   setLastHeard: (text) => set({ lastHeard: text }),
+  clearLastWakeLocale: () => set({ lastWakeLocale: null }),
 
   fireWakeTrigger: () => {
     const now = Date.now();
-    if (now - lastFireAt < 1800) return;
+    if (now - lastFireAt < 3000) return;
     lastFireAt = now;
+    const lastWakeLocale = inferSpeechLocaleFromWakeText(get().lastHeard);
+    console.log('[VOICE] wake word detected transcript=', get().lastHeard);
     set({
       triggerToken: get().triggerToken + 1,
       pausedForRecording: true,
-      captureStarting: true,
-      triggerAt: now,
+      lastWakeLocale,
     });
   },
-
-  fireStopTrigger: () => {
-    const now = Date.now();
-    if (now - lastStopAt < 2000) return;
-    lastStopAt = now;
-    set({ stopToken: get().stopToken + 1 });
-  },
 }));
+
+/** True when wake mic / SpeechRecognizer is allowed to run. */
+export function shouldRunWakeListening(): boolean {
+  const s = useWakeWordStore.getState();
+  return (
+    s.enabled &&
+    s.listeningArmed &&
+    !s.pausedForRecording &&
+    !s.captureActive
+  );
+}

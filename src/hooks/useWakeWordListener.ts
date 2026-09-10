@@ -3,27 +3,24 @@ import {
   ExpoSpeechRecognitionModule,
   useSpeechRecognitionEvent,
 } from 'expo-speech-recognition';
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { AppState, PermissionsAndroid, Platform } from 'react-native';
 
-import { matchesWakePhrase } from '@/src/features/wakeWord/phrases';
-import { abortLiveRecognition } from '@/src/services/languageTranscriptService';
-import { useWakeWordStore } from '@/src/store/wakeWordStore';
+import type { SpeechLocaleCode } from '@/src/features/languageTranscript/locales';
+import { allVoiceCommandContextualStrings, matchesWakePhrase } from '@/src/features/wakeWord/phrases';
+import { listVoiceCommandLocales } from '@/src/services/languageTranscriptService';
+import { shouldRunWakeListening, useWakeWordStore } from '@/src/store/wakeWordStore';
 
 /**
  * Wake-word orchestration:
- * - Android: Foreground Service (works minimized — start opens the app, stop
- *   is heard by the native service even when the activity is not visible)
+ * - Android: Foreground Service (works minimized → opens app → record)
  * - iOS / fallback: in-app expo-speech-recognition (foreground only)
+ *
+ * SpeechRecognizer is NEVER started on cold launch — only after the user
+ * explicitly enables Hey Think Tap (toggle / onboarding).
  */
 function canListenInApp(): boolean {
-  const s = useWakeWordStore.getState();
-  return (
-    s.enabled &&
-    !s.pausedForRecording &&
-    !s.playbackActive &&
-    AppState.currentState === 'active'
-  );
+  return shouldRunWakeListening() && AppState.currentState === 'active';
 }
 
 function delay(ms: number) {
@@ -56,23 +53,43 @@ async function ensureAndroidMicPermission(): Promise<boolean> {
 
 export function useWakeWordListener() {
   const enabled = useWakeWordStore((s) => s.enabled);
+  const listeningArmed = useWakeWordStore((s) => s.listeningArmed);
   const hydrated = useWakeWordStore((s) => s.hydrated);
   const pausedForRecording = useWakeWordStore((s) => s.pausedForRecording);
-  const playbackActive = useWakeWordStore((s) => s.playbackActive);
   const captureActive = useWakeWordStore((s) => s.captureActive);
   const setListening = useWakeWordStore((s) => s.setListening);
   const setAvailable = useWakeWordStore((s) => s.setAvailable);
   const setLastHeard = useWakeWordStore((s) => s.setLastHeard);
   const fireWakeTrigger = useWakeWordStore((s) => s.fireWakeTrigger);
-  const fireStopTrigger = useWakeWordStore((s) => s.fireStopTrigger);
 
-  const useNativeFgs = Platform.OS === 'android' && AndroidWakeWord.isSupported();
+  const useNativeFgs =
+    Platform.OS === 'android' &&
+    AndroidWakeWord.isSupported() &&
+    AndroidWakeWord.hasUpdatedNativeModule();
+  const [fgsRuntimeFailed, setFgsRuntimeFailed] = useState(false);
+  const fgsFailedRef = useRef(false);
+  const effectiveUseFgs = useNativeFgs && !fgsRuntimeFailed;
+  const syncInFlightRef = useRef(false);
+  const fgsStartingRef = useRef(false);
+
+  /** FGS is the source of truth only while it is actually running. */
+  const isFgsListening = () =>
+    effectiveUseFgs && AndroidWakeWord.isSupported() && AndroidWakeWord.isRunning();
 
   const restartTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const startingRef = useRef(false);
   const intentionalStopRef = useRef(false);
   const mountedRef = useRef(true);
   const clientFailCount = useRef(0);
+  const wakeLocaleRef = useRef<SpeechLocaleCode | 'en-US'>('hi-IN');
+  const voiceLocalesRef = useRef<(SpeechLocaleCode | 'en-US')[]>([
+    'hi-IN',
+    'mr-IN',
+    'en-IN',
+    'en-US',
+  ]);
+  const voiceLocaleIndexRef = useRef(0);
+  const wakeLocaleExhaustedRef = useRef(false);
 
   const clearRestart = () => {
     if (restartTimer.current) {
@@ -86,7 +103,7 @@ export function useWakeWordListener() {
     restartTimer.current = setTimeout(() => {
       restartTimer.current = null;
       if (mountedRef.current && canListenInApp()) {
-        void startInAppListening();
+        void startInAppListening(true);
       }
     }, ms);
   };
@@ -107,12 +124,15 @@ export function useWakeWordListener() {
         // ignore
       }
     }
-    if (!useNativeFgs) setListening(false);
+    if (!effectiveUseFgs) setListening(false);
   };
 
-  const startInAppListening = async () => {
-    if (useNativeFgs) return;
+  const startInAppListening = async (fromScheduledRestart = false) => {
+    if (isFgsListening() || fgsStartingRef.current) return;
     if (!canListenInApp() || startingRef.current) return;
+    if (wakeLocaleExhaustedRef.current) {
+      wakeLocaleExhaustedRef.current = false;
+    }
     startingRef.current = true;
     clearRestart();
 
@@ -144,23 +164,28 @@ export function useWakeWordListener() {
 
       if (!canListenInApp() || !mountedRef.current) return;
 
+      const locales = await listVoiceCommandLocales();
+      voiceLocalesRef.current = locales;
+      if (!fromScheduledRestart) {
+        voiceLocaleIndexRef.current = 0;
+      }
+      wakeLocaleRef.current = locales[voiceLocaleIndexRef.current] ?? 'hi-IN';
+
+      if (Platform.OS === 'android') {
+        AndroidWakeWord.silenceRecognitionUi();
+      }
+
       ExpoSpeechRecognitionModule.start({
-        lang: 'en-US',
+        lang: wakeLocaleRef.current,
         interimResults: true,
-        continuous: false,
+        continuous: true,
         addsPunctuation: false,
-        contextualStrings: [
-          'Hey Think Tap',
-          'Think Tap',
-          'start recording',
-          'stop recording',
-          'ThinkTap',
-        ],
+        contextualStrings: allVoiceCommandContextualStrings(),
         androidIntentOptions: {
           EXTRA_LANGUAGE_MODEL: 'free_form',
-          EXTRA_SPEECH_INPUT_COMPLETE_SILENCE_LENGTH_MILLIS: 8000,
-          EXTRA_SPEECH_INPUT_POSSIBLY_COMPLETE_SILENCE_LENGTH_MILLIS: 8000,
-          EXTRA_SPEECH_INPUT_MINIMUM_LENGTH_MILLIS: 1200,
+          EXTRA_SPEECH_INPUT_COMPLETE_SILENCE_LENGTH_MILLIS: 12000,
+          EXTRA_SPEECH_INPUT_POSSIBLY_COMPLETE_SILENCE_LENGTH_MILLIS: 12000,
+          EXTRA_SPEECH_INPUT_MINIMUM_LENGTH_MILLIS: 1500,
         },
       });
       setListening(true);
@@ -177,7 +202,7 @@ export function useWakeWordListener() {
 
   // ——— In-app recognition events (iOS / non-FGS fallback) ———
   useSpeechRecognitionEvent('result', (event) => {
-    if (useNativeFgs) return;
+    if (isFgsListening()) return;
     const results = event.results ?? [];
     for (const item of results) {
       const transcript = item?.transcript?.trim() ?? '';
@@ -192,7 +217,7 @@ export function useWakeWordListener() {
   });
 
   useSpeechRecognitionEvent('end', () => {
-    if (useNativeFgs) return;
+    if (isFgsListening()) return;
     setListening(false);
     if (intentionalStopRef.current) {
       intentionalStopRef.current = false;
@@ -200,61 +225,54 @@ export function useWakeWordListener() {
     }
     if (!canListenInApp()) return;
     // Longer gap = less beep spam / battery drain on non-FGS Android fallback.
-    scheduleRestart(3000);
+    scheduleRestart(6000);
   });
 
   useSpeechRecognitionEvent('error', (event) => {
-    if (useNativeFgs) return;
+    if (isFgsListening()) return;
     setListening(false);
     if (intentionalStopRef.current || event.error === 'aborted') {
       intentionalStopRef.current = false;
       return;
     }
     if (!canListenInApp()) return;
+    if (event.error === 'language-not-supported') {
+      const locales = voiceLocalesRef.current;
+      if (locales.length <= 1) {
+        wakeLocaleExhaustedRef.current = true;
+        setAvailable(false);
+        return;
+      }
+      voiceLocaleIndexRef.current =
+        (voiceLocaleIndexRef.current + 1) % locales.length;
+      wakeLocaleRef.current = locales[voiceLocaleIndexRef.current] ?? 'en-US';
+      scheduleRestart(1200);
+      return;
+    }
     if (event.error === 'no-speech') {
-      scheduleRestart(2800);
+      scheduleRestart(5000);
       return;
     }
     if (event.error === 'client') {
       clientFailCount.current += 1;
-      scheduleRestart(Math.min(12000, 2500 * clientFailCount.current));
+      scheduleRestart(Math.min(15000, 4000 * clientFailCount.current));
       return;
     }
     console.warn('Wake word error', event.error, event.message);
-    scheduleRestart(4000);
+    scheduleRestart(6000);
   });
 
   // ——— Android Foreground Service ———
   useEffect(() => {
-    if (!useNativeFgs || !hydrated) return;
+    if (!effectiveUseFgs || !hydrated) return;
 
     const subs = [
       AndroidWakeWord.addListener('onWakeDetected', (event) => {
-        if (__DEV__) {
-          console.log('[WAKE] WAKE FIRED:', JSON.stringify(event.transcript));
-        }
         setLastHeard(event.transcript);
         fireWakeTrigger();
-        // The service also persists the wake so a cold start can pick it up.
-        // JS handled it live, so drop it — otherwise the next service start
-        // replays it and opens a phantom take the user never asked for.
-        void AndroidWakeWord.consumePendingWake();
-      }),
-      AndroidWakeWord.addListener('onStopDetected', (event) => {
-        if (__DEV__) {
-          console.log('[WAKE] STOP FIRED:', JSON.stringify(event.transcript));
-        }
-        setLastHeard(event.transcript);
-        fireStopTrigger();
-        void AndroidWakeWord.consumePendingStop();
       }),
       AndroidWakeWord.addListener('onPartialResult', (event) => {
-        if (event.transcript) {
-          if (__DEV__) {
-            console.log('[WAKE] heard:', JSON.stringify(event.transcript));
-          }
-          setLastHeard(event.transcript);
-        }
+        if (event.transcript) setLastHeard(event.transcript);
       }),
       AndroidWakeWord.addListener('onListeningChange', (event) => {
         setListening(event.listening && !event.paused);
@@ -270,7 +288,7 @@ export function useWakeWordListener() {
     return () => {
       subs.forEach((s) => s.remove());
     };
-  }, [useNativeFgs, hydrated, setLastHeard, fireWakeTrigger, fireStopTrigger, setListening, setAvailable]);
+  }, [effectiveUseFgs, hydrated, setLastHeard, fireWakeTrigger, setListening, setAvailable]);
 
   // Sync service lifecycle with enabled / recording pause
   useEffect(() => {
@@ -278,23 +296,28 @@ export function useWakeWordListener() {
     if (!hydrated) return;
 
     const sync = async () => {
-      if (useNativeFgs) {
-        const capturingNow =
-          useWakeWordStore.getState().captureActive ||
-          useWakeWordStore.getState().captureStarting ||
-          useWakeWordStore.getState().pausedForRecording;
+      if (syncInFlightRef.current) return;
+      syncInFlightRef.current = true;
+      try {
+      const runWakeMic = shouldRunWakeListening();
 
-        // WHY: restoring volume while the FGS is still restarting SpeechRecognizer
-        // lets ColorOS play its start chime on every cycle ("tik-tik"). Stay muted
-        // whenever wake is enabled; unmute only when disabled or Ideas playback.
-        if (!enabled) {
+      // Always tear down wake mic when capture owns the session or user disarmed.
+      if (!runWakeMic) {
+        stopInAppListening('pause');
+        if (useNativeFgs) {
           await AndroidWakeWord.stopService();
           AndroidWakeWord.restoreRecognitionUi();
-          setListening(false);
-          return;
         }
+        setListening(false);
+        if (!enabled || !listeningArmed) {
+          setFgsRuntimeFailed(false);
+          fgsFailedRef.current = false;
+        }
+        return;
+      }
 
-        AndroidWakeWord.silenceRecognitionUi();
+      if (useNativeFgs) {
+        wakeLocaleExhaustedRef.current = false;
 
         const micOk = await ensureAndroidMicPermission();
         const notifOk = await ensureAndroidNotificationPermission();
@@ -308,116 +331,79 @@ export function useWakeWordListener() {
           console.warn('Notification permission denied — wake service may be limited on Android 13+');
         }
 
-        // Playback needs the speaker — pause the recognizer.
-        if (playbackActive || useWakeWordStore.getState().playbackActive) {
-          if (AndroidWakeWord.isRunning() && !AndroidWakeWord.isPaused()) {
-            await AndroidWakeWord.pauseService();
-          }
-          if (!capturingNow) {
-            AndroidWakeWord.restoreRecognitionUi();
-          }
-          setListening(false);
-          return;
-        }
-
-        // Foreground: pause so live STT can hear speech + “stop recording”.
-        // Background: the activity STT dies, so this service listens for stop.
-        const capturing = useWakeWordStore.getState().captureActive;
-        if (capturing) {
-          if (AppState.currentState !== 'active') {
-            abortLiveRecognition();
+        if (!fgsFailedRef.current) {
+          if (!AndroidWakeWord.isRunning()) {
+            fgsStartingRef.current = true;
             try {
-              await AndroidWakeWord.listenForStop();
+              const wakeLocale = useWakeWordStore.getState().lastWakeLocale;
+              const locales = await listVoiceCommandLocales();
+              const preferred =
+                wakeLocale ??
+                locales[voiceLocaleIndexRef.current] ??
+                locales[0] ??
+                'hi-IN';
+              const locale = locales.includes(preferred)
+                ? preferred
+                : wakeLocale ?? preferred;
+              await AndroidWakeWord.startService(locale);
+              setFgsRuntimeFailed(false);
+              fgsFailedRef.current = false;
             } catch (e) {
-              console.warn('listenForStop failed', e);
+              console.warn('Failed to start wake FGS; using in-app listener', e);
+              fgsFailedRef.current = true;
+              setFgsRuntimeFailed(true);
+              void startInAppListening();
+              return;
+            } finally {
+              fgsStartingRef.current = false;
+            }
+          } else if (AndroidWakeWord.isPaused()) {
+            await AndroidWakeWord.resumeService();
+          }
+
+          if (AndroidWakeWord.isRunning()) {
+            const pending = await AndroidWakeWord.consumePendingWake();
+            if (pending?.transcript) {
+              setLastHeard(pending.transcript);
+              fireWakeTrigger();
             }
             return;
           }
-          if (AndroidWakeWord.isRunning() && !AndroidWakeWord.isPaused()) {
-            await AndroidWakeWord.pauseService();
-          }
-          AndroidWakeWord.silenceRecognitionUi();
-          setListening(false);
-          return;
         }
-
-        // Handoff before the recorder exists — free the mic briefly.
-        if (pausedForRecording || useWakeWordStore.getState().pausedForRecording) {
-          if (AndroidWakeWord.isRunning() && !AndroidWakeWord.isPaused()) {
-            await AndroidWakeWord.pauseService();
-          }
-          AndroidWakeWord.silenceRecognitionUi();
-          setListening(false);
-          return;
-        }
-
-        if (!AndroidWakeWord.isRunning()) {
-          // Avoid starting SpeechRecognizer in the same tick as a permission
-          // grant — OEM recognizer beeps sound like tik-tik-tik.
-          await delay(600);
-          if (!mountedRef.current) return;
-          const latest = useWakeWordStore.getState();
-          if (
-            !latest.enabled ||
-            latest.pausedForRecording ||
-            latest.playbackActive ||
-            latest.captureActive ||
-            latest.captureStarting
-          ) {
-            return;
-          }
-          try {
-            await AndroidWakeWord.startService();
-          } catch (e) {
-            console.warn('Failed to start wake FGS', e);
-            setAvailable(false);
-            return;
-          }
-        } else if (AndroidWakeWord.isPaused()) {
-          await AndroidWakeWord.resumeService();
-        }
-
-        const pending = await AndroidWakeWord.consumePendingWake();
-        if (pending?.transcript) {
-          setLastHeard(pending.transcript);
-          fireWakeTrigger();
-        }
-        return;
       }
 
-      // iOS / fallback path
-      if (enabled && !pausedForRecording && !playbackActive) {
+      // iOS / fallback path (including Android when FGS is not actually running)
+      if (
+        !isFgsListening() &&
+        !fgsStartingRef.current &&
+        (!useNativeFgs || fgsFailedRef.current)
+      ) {
         void startInAppListening();
-      } else {
-        stopInAppListening('pause');
-        if (!enabled) AndroidWakeWord.restoreRecognitionUi();
+      }
+      } finally {
+        syncInFlightRef.current = false;
       }
     };
 
     void sync();
 
     const sub = AppState.addEventListener('change', (state) => {
-      if (!useWakeWordStore.getState().enabled) return;
+      const wake = useWakeWordStore.getState();
+      if (!wake.enabled || !wake.listeningArmed) return;
       if (useNativeFgs) {
-        const capturing = useWakeWordStore.getState().captureActive;
-        if (state === 'background' && capturing) {
-          // Activity-bound JS STT dies when minimized. Native FGS hears stop.
-          abortLiveRecognition();
-          void AndroidWakeWord.listenForStop();
+        // Stop the FGS when the app leaves the foreground so SpeechRecognizer
+        // cannot keep restarting (and beeping) after the user closes Think Tap.
+        if (state !== 'active') {
+          void AndroidWakeWord.stopService().then(() => {
+            AndroidWakeWord.restoreRecognitionUi();
+            setListening(false);
+          });
           return;
         }
-        if (state === 'active') {
-          if (capturing) {
-            if (AndroidWakeWord.isRunning() && !AndroidWakeWord.isPaused()) {
-              void AndroidWakeWord.pauseService();
-            }
-          }
-          void AndroidWakeWord.consumePendingStop().then((pending) => {
-            if (pending?.transcript) {
-              setLastHeard(pending.transcript);
-              fireStopTrigger();
-            }
-          });
+        if (!useWakeWordStore.getState().pausedForRecording && !useWakeWordStore.getState().captureActive) {
+          void sync();
+        }
+        if (!fgsFailedRef.current && AndroidWakeWord.isRunning()) {
           void AndroidWakeWord.consumePendingWake().then((pending) => {
             if (pending?.transcript) {
               setLastHeard(pending.transcript);
@@ -427,11 +413,7 @@ export function useWakeWordListener() {
         }
         return;
       }
-      if (
-        state === 'active' &&
-        !useWakeWordStore.getState().pausedForRecording &&
-        !useWakeWordStore.getState().playbackActive
-      ) {
+      if (state === 'active' && shouldRunWakeListening()) {
         void startInAppListening();
       } else {
         stopInAppListening('pause');
@@ -441,11 +423,12 @@ export function useWakeWordListener() {
     return () => {
       mountedRef.current = false;
       sub.remove();
-      if (!useNativeFgs) {
+      if (!effectiveUseFgs) {
         stopInAppListening('unmount');
+      } else if (AndroidWakeWord.isRunning()) {
+        void AndroidWakeWord.stopService().then(() => AndroidWakeWord.restoreRecognitionUi());
       }
-      // Do not stop FGS on unmount of provider remount — only when disabled.
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [enabled, hydrated, pausedForRecording, playbackActive, captureActive, useNativeFgs]);
+  }, [enabled, listeningArmed, hydrated, pausedForRecording, captureActive, useNativeFgs, fgsRuntimeFailed]);
 }

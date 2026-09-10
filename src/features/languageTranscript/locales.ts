@@ -43,6 +43,14 @@ export const INDIAN_SPEECH_LOCALES: SpeechLocale[] = [
 
 export const DEFAULT_SPEECH_LOCALE: SpeechLocaleCode = 'hi-IN';
 
+/** When the OS cannot report installed packs, try these in order (not all 13). */
+export const SAFE_SPEECH_LOCALE_FALLBACK: (SpeechLocaleCode | 'en-US')[] = [
+  'hi-IN',
+  'mr-IN',
+  'en-IN',
+  'en-US',
+];
+
 export type LocaleAvailability = {
   code: SpeechLocaleCode;
   /** Installed for on-device use, or reported as online-capable */
@@ -61,6 +69,98 @@ export function getSpeechLocale(code: string | null | undefined): SpeechLocale {
 
 export function isSpeechLocaleCode(code: string | null | undefined): code is SpeechLocaleCode {
   return INDIAN_SPEECH_LOCALES.some((l) => l.code === code);
+}
+
+/** Ordered fallbacks when the device does not support the chosen locale. */
+export function speechLocaleFallbackChain(
+  primary: SpeechLocaleCode,
+): (SpeechLocaleCode | 'en-US')[] {
+  const chain: (SpeechLocaleCode | 'en-US')[] = [primary];
+  const lang = primary.split('-')[0] ?? '';
+  if (lang === 'mr' && !chain.includes('hi-IN')) chain.push('hi-IN');
+  if (!chain.includes('en-IN')) chain.push('en-IN');
+  if (!chain.includes('en-US')) chain.push('en-US');
+  return chain;
+}
+
+/**
+ * Priority order for auto speech recognition — independent of Settings.
+ * Hindi + English are most commonly installed on Indian Android devices.
+ */
+export const AUTO_RECOGNIZER_LOCALE_PRIORITY: (SpeechLocaleCode | 'en-US')[] = [
+  'hi-IN',
+  'mr-IN',
+  'en-IN',
+  'en-US',
+  'bn-IN',
+  'ta-IN',
+  'te-IN',
+  'gu-IN',
+  'kn-IN',
+  'ml-IN',
+  'pa-IN',
+  'or-IN',
+  'as-IN',
+  'ur-IN',
+];
+
+export function autoSpeechLocaleFallbackChain(): (SpeechLocaleCode | 'en-US')[] {
+  return [...AUTO_RECOGNIZER_LOCALE_PRIORITY];
+}
+
+/** Best installed locale for multilingual auto-detect (ignores user Settings). */
+export function pickBestInstalledSpeechLocale(
+  availability: LocaleAvailability[],
+): SpeechLocaleCode | 'en-US' {
+  const installed = new Set(
+    availability
+      .filter((row) => row.installedOnDevice || row.supportedOnDevice)
+      .map((row) => row.code),
+  );
+  for (const code of AUTO_RECOGNIZER_LOCALE_PRIORITY) {
+    if (code !== 'en-US' && installed.has(code)) return code;
+  }
+  for (const code of AUTO_RECOGNIZER_LOCALE_PRIORITY) {
+    if (code === 'en-US') continue;
+    const row = availability.find((r) => r.code === code);
+    if (row?.available) return code;
+  }
+  return 'en-US';
+}
+
+/**
+ * All locales to rotate for voice commands (wake / stop / pause).
+ * Cycling locales lets Marathi work even when English is selected in Settings.
+ */
+export function listInstalledVoiceLocales(
+  availability: LocaleAvailability[],
+): (SpeechLocaleCode | 'en-US')[] {
+  const locales: (SpeechLocaleCode | 'en-US')[] = [];
+  for (const code of AUTO_RECOGNIZER_LOCALE_PRIORITY) {
+    if (code === 'en-US') continue;
+    const row = availability.find((r) => r.code === code);
+    if (row?.installedOnDevice || row?.supportedOnDevice || row?.available) {
+      locales.push(code);
+    }
+  }
+  if (!locales.includes('en-IN')) locales.push('en-IN');
+  if (!locales.includes('en-US')) locales.push('en-US');
+  return locales.length ? locales : ['hi-IN', 'mr-IN', 'en-IN', 'en-US'];
+}
+
+/** Pick the first locale in the fallback chain that the device reports as available. */
+export function pickAvailableSpeechLocale(
+  preferred: SpeechLocaleCode,
+  availability: LocaleAvailability[],
+): SpeechLocaleCode | 'en-US' {
+  const available = new Set(
+    availability.filter((row) => row.available).map((row) => row.code),
+  );
+  const chain = speechLocaleFallbackChain(preferred);
+  for (const code of chain) {
+    if (code === 'en-US' || available.has(code)) return code;
+  }
+  return 'en-US';
 }
 
 /** Map UI app language → default Indian speech locale. */
