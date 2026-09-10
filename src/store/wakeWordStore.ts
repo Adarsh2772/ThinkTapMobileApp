@@ -9,23 +9,26 @@ const WAKE_ONBOARDING_KEY = '@thinktap/wake_word_onboarding_done';
 let lastFireAt = 0;
 
 type WakeWordState = {
+  /** User preference — persisted. Does NOT start the mic by itself. */
   enabled: boolean;
+  /**
+   * Mic / SpeechRecognizer may run only after an explicit user action
+   * (toggle ON, onboarding Enable). Always false on cold launch.
+   */
+  listeningArmed: boolean;
   listening: boolean;
-  /** True while the app is recording — wake listener must not hold the mic. */
   pausedForRecording: boolean;
-  /** True while a take is open, wherever the user navigates. */
   captureActive: boolean;
   available: boolean | null;
   lastHeard: string;
-  /** Locale inferred from the last wake phrase (e.g. Marathi command → mr-IN). */
   lastWakeLocale: SpeechLocaleCode | 'en-US' | null;
-  /** Incremented when wake phrase is detected — Home consumes this to start recording. */
   triggerToken: number;
-  /** False until the first-launch Hey Think Tap permission prompt is answered. */
   onboardingDone: boolean;
   hydrated: boolean;
   hydrate: () => Promise<void>;
   setEnabled: (enabled: boolean) => Promise<void>;
+  armListening: () => void;
+  disarmListening: () => void;
   setOnboardingDone: (done?: boolean) => Promise<void>;
   setListening: (listening: boolean) => void;
   setPausedForRecording: (paused: boolean) => void;
@@ -38,6 +41,7 @@ type WakeWordState = {
 
 export const useWakeWordStore = create<WakeWordState>((set, get) => ({
   enabled: false,
+  listeningArmed: false,
   listening: false,
   pausedForRecording: false,
   captureActive: false,
@@ -56,18 +60,30 @@ export const useWakeWordStore = create<WakeWordState>((set, get) => ({
       ]);
       set({
         enabled: enabledRaw === 'true',
+        // Preference restored; mic stays off until user explicitly arms listening.
+        listeningArmed: false,
         onboardingDone: onboardingRaw === 'true',
         hydrated: true,
       });
     } catch {
-      set({ enabled: false, onboardingDone: false, hydrated: true });
+      set({ enabled: false, listeningArmed: false, onboardingDone: false, hydrated: true });
     }
   },
 
   setEnabled: async (enabled) => {
-    set({ enabled });
+    if (enabled) {
+      set({ enabled: true, listeningArmed: true });
+    } else {
+      set({ enabled: false, listeningArmed: false, listening: false });
+    }
     await AsyncStorage.setItem(WAKE_KEY, enabled ? 'true' : 'false');
   },
+
+  armListening: () => {
+    if (get().enabled) set({ listeningArmed: true });
+  },
+
+  disarmListening: () => set({ listeningArmed: false, listening: false }),
 
   setOnboardingDone: async (done = true) => {
     set({ onboardingDone: done });
@@ -86,6 +102,7 @@ export const useWakeWordStore = create<WakeWordState>((set, get) => ({
     if (now - lastFireAt < 3000) return;
     lastFireAt = now;
     const lastWakeLocale = inferSpeechLocaleFromWakeText(get().lastHeard);
+    console.log('[VOICE] wake word detected transcript=', get().lastHeard);
     set({
       triggerToken: get().triggerToken + 1,
       pausedForRecording: true,
@@ -93,3 +110,14 @@ export const useWakeWordStore = create<WakeWordState>((set, get) => ({
     });
   },
 }));
+
+/** True when wake mic / SpeechRecognizer is allowed to run. */
+export function shouldRunWakeListening(): boolean {
+  const s = useWakeWordStore.getState();
+  return (
+    s.enabled &&
+    s.listeningArmed &&
+    !s.pausedForRecording &&
+    !s.captureActive
+  );
+}

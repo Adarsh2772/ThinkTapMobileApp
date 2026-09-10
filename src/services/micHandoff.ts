@@ -14,6 +14,7 @@ function delay(ms: number) {
  * Does not change the phone's Silent / ringer / notification volume settings.
  */
 export async function releaseWakeMicForCapture(): Promise<void> {
+  console.log('[AUDIO] releasing wake mic for capture');
   useWakeWordStore.getState().setPausedForRecording(true);
   abortLiveRecognition();
 
@@ -36,4 +37,5 @@ export async function releaseWakeMicForCapture(): Promise<void> {
   abortLiveRecognition();
   AndroidWakeWord.restoreRecognitionUi();
   await delay(500);
+  console.log('[AUDIO] wake mic release complete');
 }

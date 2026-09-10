@@ -5,6 +5,11 @@ import { Platform } from 'react-native';
 import { detectSpeechLocaleFromText } from '@/src/features/languageTranscript/detectLanguage';
 import type { SpeechLocaleCode } from '@/src/features/languageTranscript/locales';
 import {
+  flushInterimToFinals,
+  mergeTranscriptSegment,
+  normalizeTranscriptText,
+} from '@/src/features/languageTranscript/transcriptMerge';
+import {
   matchesPausePhrase,
   matchesResumePhrase,
   matchesStopPhrase,
@@ -38,7 +43,7 @@ type Options = {
 };
 
 function normalize(text: string): string {
-  return text.replace(/\s+/g, ' ').trim();
+  return normalizeTranscriptText(text);
 }
 
 function resolvePreferredSpeechLocale(
@@ -137,38 +142,26 @@ export function useLanguageTranscript({
       return;
     }
 
-    const committed = normalize(finalsRef.current.join(' '));
-
-    if (!asFinal) {
-      if (committed && text.startsWith(committed)) {
-        interimRef.current = text.slice(committed.length).trim();
-      } else {
-        interimRef.current = text;
-      }
-      publish();
-      return;
-    }
-
-    if (!committed) {
-      finalsRef.current = [text];
-    } else if (text.startsWith(committed)) {
-      const rest = text.slice(committed.length).trim();
-      if (rest) finalsRef.current.push(rest);
-    } else if (committed.endsWith(text) || text === committed) {
-      // duplicate final from the engine — ignore
-    } else {
-      finalsRef.current.push(text);
-    }
-    interimRef.current = '';
+    const merged = mergeTranscriptSegment(
+      { finals: finalsRef.current, interim: interimRef.current },
+      text,
+      asFinal,
+    );
+    finalsRef.current = merged.finals;
+    interimRef.current = merged.interim;
     publish();
   };
 
   const commitInterimRef = useRef(() => {});
 
   const commitInterim = () => {
-    if (interimRef.current.trim()) {
-      commitText(interimRef.current, true);
-    }
+    const flushed = flushInterimToFinals({
+      finals: finalsRef.current,
+      interim: interimRef.current,
+    });
+    finalsRef.current = flushed.finals;
+    interimRef.current = flushed.interim;
+    publish();
   };
   commitInterimRef.current = commitInterim;
 
@@ -241,12 +234,8 @@ export function useLanguageTranscript({
         voiceLocaleIndexRef.current = Math.max(0, locales.indexOf(preferred));
         activeLocaleRef.current = preferred;
         useWakeWordStore.getState().clearLastWakeLocale();
-      } else {
-        const locales = voiceLocalesRef.current;
-        voiceLocaleIndexRef.current =
-          (voiceLocaleIndexRef.current + 1) % Math.max(1, locales.length);
-        activeLocaleRef.current = locales[voiceLocaleIndexRef.current] ?? activeLocaleRef.current;
       }
+      // Routine restarts keep the same locale — only rotate on language-not-supported.
 
       const settleMs = nativeActiveRef.current ? 450 : fromRestart ? 120 : 250;
       if (nativeActiveRef.current) abortLiveRecognition();
@@ -266,6 +255,7 @@ export function useLanguageTranscript({
         outputFileName: `idea-${Date.now()}-${fileSeq.current}.wav`,
         persist: persistRef.current,
       });
+      console.log('[SPEECH] recognition started locale=', activeLocaleRef.current);
       if (gen !== genRef.current || !enabledRef.current) {
         nativeActiveRef.current = false;
         startingRef.current = false;
@@ -295,6 +285,20 @@ export function useLanguageTranscript({
     }, ms);
   };
 
+  const finalizeSession = (commitInterimOnEnd: boolean) => {
+    if (commitInterimOnEnd && capturingRef.current) {
+      commitInterim();
+    }
+    nativeActiveRef.current = false;
+    setListening(false);
+    notifyEnded();
+  };
+
+  const maybeRestartSession = (restartMs: number) => {
+    if (!enabledRef.current || stopFiredRef.current) return;
+    scheduleRestart(restartMs);
+  };
+
   useSpeechRecognitionEvent('result', (event) => {
     if (nativeGenRef.current !== genRef.current) return;
 
@@ -321,6 +325,7 @@ export function useLanguageTranscript({
       if (pauseFiredRef.current) return;
       pauseFiredRef.current = true;
       resumeFiredRef.current = false;
+      commitInterimRef.current();
       commitText(stripTrailingStopCommand(top), true);
       onPauseRef.current?.();
       return;
@@ -355,12 +360,8 @@ export function useLanguageTranscript({
       notifyEnded();
       return;
     }
-    commitInterim();
-    nativeActiveRef.current = false;
-    setListening(false);
-    notifyEnded();
-    if (!enabledRef.current || stopFiredRef.current) return;
-    scheduleRestart(150);
+    finalizeSession(true);
+    maybeRestartSession(capturingRef.current ? 1000 : 2500);
   });
 
   useSpeechRecognitionEvent('error', (event) => {
@@ -373,13 +374,13 @@ export function useLanguageTranscript({
       notifyEnded();
       return;
     }
-    commitInterim();
-    nativeActiveRef.current = false;
-    setListening(false);
-    notifyEnded();
-    if (!enabledRef.current || stopFiredRef.current) return;
     const code = event?.error ?? '';
-    if (code === 'aborted') return;
+    if (code === 'aborted') {
+      finalizeSession(false);
+      return;
+    }
+    finalizeSession(true);
+    if (!enabledRef.current || stopFiredRef.current) return;
     if (code === 'language-not-supported') {
       const locales = voiceLocalesRef.current;
       const next = voiceLocaleIndexRef.current + 1;
@@ -387,7 +388,7 @@ export function useLanguageTranscript({
         voiceLocaleIndexRef.current = next;
         activeLocaleRef.current = locales[next]!;
         clearSpeechLocaleCache();
-        scheduleRestart(800);
+        maybeRestartSession(800);
         return;
       }
       localeExhaustedRef.current = true;
@@ -398,14 +399,18 @@ export function useLanguageTranscript({
     }
     if (code === 'client' || code === 'busy' || code === 'audio-capture' || code === 'network') {
       persistRef.current = false;
-      scheduleRestart(Platform.OS === 'android' ? 800 : 600);
+      maybeRestartSession(Platform.OS === 'android' ? 800 : 600);
       return;
     }
     if (code !== 'no-speech' && code !== 'speech-timeout') {
       console.warn('Language transcript error', code);
     }
-    scheduleRestart(code === 'no-speech' ? 1200 : 800);
+    maybeRestartSession(code === 'no-speech' ? 1200 : 800);
   });
+
+  const commitPendingTranscript = useCallback(() => {
+    commitInterimRef.current();
+  }, []);
 
   useEffect(() => {
     stopFiredRef.current = false;
@@ -458,5 +463,6 @@ export function useLanguageTranscript({
     waitForIdle,
     stopListening,
     reset,
+    commitPendingTranscript,
   };
 }

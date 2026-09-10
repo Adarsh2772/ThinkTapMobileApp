@@ -79,6 +79,8 @@ class WakeWordForegroundService : Service() {
       "start recording",
       "start record",
       "start recoding",
+      "tap start recording",
+      "tap start record",
       "hey think tap start",
       // Marathi
       "रेकॉर्डिंग सुरू करा",
@@ -249,7 +251,8 @@ class WakeWordForegroundService : Service() {
           "onListeningChange",
           mapOf("listening" to true, "paused" to false),
         )
-        scheduleRestart(800)
+        // First session after explicit user enable — one hard reset start only.
+        mainHandler.postDelayed({ startRecognition(hardReset = true) }, MIN_START_INTERVAL_MS)
         // START_NOT_STICKY: closing/force-stopping the app must end listening.
         // START_STICKY was restarting SpeechRecognizer in the background (continuous beeps).
         return START_NOT_STICKY
@@ -328,7 +331,7 @@ class WakeWordForegroundService : Service() {
   private fun scheduleRestart(delayMs: Long) {
     cancelRestart()
     if (!isRunning || isPaused) return
-    val r = Runnable { startRecognition() }
+    val r = Runnable { startRecognition(hardReset = false) }
     restartRunnable = r
     mainHandler.postDelayed(r, delayMs.coerceAtLeast(MIN_START_INTERVAL_MS))
   }
@@ -366,7 +369,7 @@ class WakeWordForegroundService : Service() {
     RecognitionAudioGuard.cancelVibrator(this)
   }
 
-  private fun startRecognition() {
+  private fun startRecognition(hardReset: Boolean = false) {
     if (!isRunning || isPaused) return
     if (listeningActive) return
 
@@ -386,6 +389,10 @@ class WakeWordForegroundService : Service() {
       return
     }
 
+    if (hardReset) {
+      destroyRecognizer()
+    }
+
     val recognizer = ensureRecognizer()
     if (recognizer == null) {
       AndroidWakeWordModule.emit(
@@ -397,10 +404,14 @@ class WakeWordForegroundService : Service() {
     }
 
     try {
-      try {
-        recognizer.cancel()
-      } catch (_: Exception) {
-        // ignore
+      // Only cancel on hard reset — routine restarts re-use the same recognizer
+      // without cancel()+startListening() which triggers OEM beep spam.
+      if (hardReset) {
+        try {
+          recognizer.cancel()
+        } catch (_: Exception) {
+          // ignore
+        }
       }
 
       lastStartAt = System.currentTimeMillis()
@@ -413,14 +424,11 @@ class WakeWordForegroundService : Service() {
         putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 3)
         putExtra(RecognizerIntent.EXTRA_CALLING_PACKAGE, packageName)
         putExtra("android.speech.extra.DICTATION_MODE", true)
-        putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_COMPLETE_SILENCE_LENGTH_MILLIS, 8000L)
-        putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_POSSIBLY_COMPLETE_SILENCE_LENGTH_MILLIS, 8000L)
+        putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_COMPLETE_SILENCE_LENGTH_MILLIS, 20000L)
+        putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_POSSIBLY_COMPLETE_SILENCE_LENGTH_MILLIS, 20000L)
         putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_MINIMUM_LENGTH_MILLIS, 1500L)
       }
-      // Brief chime suppress only around startListening — volumes always restored after.
-      RecognitionAudioGuard.runWithChimesSuppressed(this) {
-        recognizer.startListening(intent)
-      }
+      recognizer.startListening(intent)
     } catch (e: Exception) {
       listeningActive = false
       Log.e(TAG, "startRecognition failed", e)
@@ -519,17 +527,13 @@ class WakeWordForegroundService : Service() {
   private fun onWakeDetected(transcript: String) {
     val now = System.currentTimeMillis()
     if (now - lastTriggerAt < 3500) {
-      scheduleRestart(RESTART_IDLE_MS)
       return
     }
     lastTriggerAt = now
 
     Log.i(TAG, "Wake phrase detected: $transcript")
-    isPaused = true
+    cancelRestart()
     listeningActive = false
-    stopRecognitionOnly()
-    RecognitionAudioGuard.cancelVibrator(this)
-    updateNotification("Wake word heard — opening Think Tap…")
 
     getSharedPreferences("thinktap_wake", Context.MODE_PRIVATE)
       .edit()
@@ -544,6 +548,9 @@ class WakeWordForegroundService : Service() {
     )
 
     bringAppToForeground(transcript)
+
+    // Fully stop — do not leave SpeechRecognizer restarting while JS starts capture.
+    stopInternal(restoreAudio = true)
   }
 
   private fun bringAppToForeground(transcript: String) {

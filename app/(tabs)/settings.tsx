@@ -37,6 +37,7 @@ export default function SettingsScreen() {
   const speechLang = getSpeechLocale(speechLocale);
   const subscription = useSubscriptionStore((s) => s.profile);
   const wakeEnabled = useWakeWordStore((s) => s.enabled);
+  const wakeListeningArmed = useWakeWordStore((s) => s.listeningArmed);
   const wakeAvailable = useWakeWordStore((s) => s.available);
   const wakeListening = useWakeWordStore((s) => s.listening);
   const wakeLastHeard = useWakeWordStore((s) => s.lastHeard);
@@ -136,11 +137,13 @@ export default function SettingsScreen() {
               ? 'While Think Tap is open, say “Hey Think Tap”, “start recording”, or Marathi “रेकॉर्डिंग सुरू करा”. Closing the app or turning this off stops listening.'
               : 'When on (app open in the foreground), say “Hey Think Tap”, “start recording”, or “रेकॉर्डिंग सुरू करा” to begin a capture.'}
             {wakeEnabled
-              ? wakeAvailable === false
-                ? ' Speech recognition is unavailable on this device/build.'
-                : wakeListening
-                  ? ' Listening…'
-                  : ' Enabled.'
+              ? !wakeListeningArmed
+                ? ' Enabled — toggle off and on to start listening after opening the app.'
+                : wakeAvailable === false
+                  ? ' Speech recognition is unavailable on this device/build.'
+                  : wakeListening
+                    ? ' Listening…'
+                    : ' Starting…'
               : ''}
           </Text>
           {wakeEnabled && wakeLastHeard ? (

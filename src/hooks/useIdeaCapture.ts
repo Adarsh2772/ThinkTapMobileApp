@@ -77,6 +77,7 @@ export function useIdeaCapture() {
     waitForIdle,
     stopListening,
     reset,
+    commitPendingTranscript,
   } = useLanguageTranscript({
     enabled: active && !audioOnly,
     capturing: active && !paused && !audioOnly,
@@ -139,12 +140,13 @@ export function useIdeaCapture() {
 
   const pause = useCallback(async () => {
     if (!activeRef.current || pausedRef.current) return false;
+    commitPendingTranscript();
     pausedAccumMsRef.current += Date.now() - startedAtRef.current;
     pausedRef.current = true;
     setPaused(true);
     if (fileRecorder) void audio.pause();
     return true;
-  }, [audio, fileRecorder]);
+  }, [audio, fileRecorder, commitPendingTranscript]);
 
   const resume = useCallback(async () => {
     if (!activeRef.current || !pausedRef.current) return false;

@@ -1,4 +1,3 @@
-import { useRouter } from 'expo-router';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Alert, Pressable, StyleSheet, Text, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
@@ -6,14 +5,14 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { AudioSavedModal } from '@/src/components/AudioSavedModal';
 import { MicButton } from '@/src/components/MicButton';
 import { ScreenHeader } from '@/src/components/ScreenHeader';
-import { useIdeaCapture } from '@/src/hooks/useIdeaCapture';
+import { useIdeaCaptureContext } from '@/src/features/capture/IdeaCaptureProvider';
 import { useDrawerOptional } from '@/src/navigation/DrawerContext';
-import { releaseWakeMicForCapture } from '@/src/services/micHandoff';
 import { processPendingRecording } from '@/src/services/processRecording';
 import {
   announceRecordingStarted,
   announceRecordingStopped,
 } from '@/src/services/recordingFeedback';
+import { beginRecordingSession } from '@/src/services/recordingSession';
 import { useAuthStore } from '@/src/store/authStore';
 import { useIdeasStore } from '@/src/store/ideasStore';
 import { usePendingRecordingStore } from '@/src/store/pendingRecordingStore';
@@ -23,7 +22,6 @@ import { useWakeWordStore } from '@/src/store/wakeWordStore';
 import { colors, fonts, spacing, typography } from '@/src/theme/tokens';
 
 export default function HomeScreen() {
-  const router = useRouter();
   const user = useAuthStore((s) => s.session?.user);
   const setPending = usePendingRecordingStore((s) => s.setPending);
   const clearPending = usePendingRecordingStore((s) => s.clearPending);
@@ -31,9 +29,7 @@ export default function HomeScreen() {
   const languageCode = useSettingsStore((s) => s.languageCode);
   const tx = useSettingsStore((s) => s.tx);
   const drawer = useDrawerOptional();
-  const triggerToken = useWakeWordStore((s) => s.triggerToken);
   const setPausedForRecording = useWakeWordStore((s) => s.setPausedForRecording);
-  const lastTrigger = useRef(0);
 
   const [saveModalVisible, setSaveModalVisible] = useState(false);
   const [organizing, setOrganizing] = useState(false);
@@ -56,7 +52,8 @@ export default function HomeScreen() {
     setVoiceResumeHandler,
     supportsVoiceStop,
     liveTranscript,
-  } = useIdeaCapture();
+  } = useIdeaCaptureContext();
+
   const stoppingRef = useRef(false);
   const finishLockRef = useRef(false);
   const pauseBusyRef = useRef(false);
@@ -154,7 +151,6 @@ export default function HomeScreen() {
     }
   }, [resume, error]);
 
-  // OS STT session: spoken Stop / Pause / Resume.
   useEffect(() => {
     setVoiceStopHandler(() => {
       showToast('Heard “Stop” — finishing recording');
@@ -182,28 +178,6 @@ export default function HomeScreen() {
     onResumePress,
   ]);
 
-  // "Hey Think Tap" / "start recording" → Home → start capture after the wake mic is free.
-  useEffect(() => {
-    if (!triggerToken || triggerToken === lastTrigger.current) return;
-    lastTrigger.current = triggerToken;
-    if (isRecording || status === 'stopping' || stoppingRef.current) return;
-
-    router.replace('/(tabs)');
-
-    void (async () => {
-      await releaseWakeMicForCapture();
-      const ok = await start();
-      if (!ok) {
-        setPausedForRecording(false);
-        showToast('Could not start recording', 'error');
-        Alert.alert('Hey Think Tap', 'Heard the wake phrase, but recording could not start.');
-        return;
-      }
-      showToast('Recording started');
-      await announceRecordingStarted();
-    })();
-  }, [triggerToken, isRecording, status, start, setPausedForRecording, router]);
-
   const onMicPress = async () => {
     if (stoppingRef.current || status === 'stopping') return;
 
@@ -212,10 +186,8 @@ export default function HomeScreen() {
       return;
     }
 
-    await releaseWakeMicForCapture();
-    const ok = await start();
+    const ok = await beginRecordingSession(start);
     if (!ok) {
-      setPausedForRecording(false);
       showToast(error ?? 'Microphone permission required', 'error');
       if (error) Alert.alert('Microphone', error);
       return;

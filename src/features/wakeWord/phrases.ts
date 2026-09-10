@@ -98,8 +98,11 @@ const WAKE_PHRASES = [
   'start recording',
   'start record',
   'start recoding',
+  'tap start recording',
+  'tap start record',
   'hey think tap start',
   'hey think tap start recording',
+  'hey think start recording',
   ...INDIAN_START_PHRASES,
   ...ROMANIZED_START_PHRASES,
 ];

@@ -8,16 +8,11 @@ import { Platform, Vibration } from 'react-native';
 export async function announceRecordingStarted(): Promise<void> {
   if (Platform.OS === 'android' && AndroidWakeWord.isSupported()) {
     try {
-      const played = await AndroidWakeWord.playRecordingStartCue();
-      if (played) return;
+      await AndroidWakeWord.playRecordingStartCue();
+      return;
     } catch {
-      // fall through to JS haptic
+      // ignore — no fallback vibration on start
     }
-  }
-  try {
-    Vibration.vibrate(80);
-  } catch {
-    // ignore
   }
 }
 

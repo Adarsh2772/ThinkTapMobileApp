@@ -14,6 +14,9 @@ describe('wake phrase matching (language-independent)', () => {
   it('matches English start commands', () => {
     assert.equal(matchesWakePhrase('start recording'), true);
     assert.equal(matchesWakePhrase('hey think tap'), true);
+    assert.equal(matchesWakePhrase('hey think tap start recording'), true);
+    assert.equal(matchesWakePhrase('hey think tap start recording please'), true);
+    assert.equal(matchesWakePhrase('tap start recording'), true);
   });
 
   it('matches Marathi Devanagari start commands', () => {
