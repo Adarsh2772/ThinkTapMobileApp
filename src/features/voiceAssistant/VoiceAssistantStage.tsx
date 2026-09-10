@@ -59,7 +59,7 @@ export function VoiceAssistantStage({
           ? 'Stopping…'
           : 'ThinkTap is listening…'
         : wakeEnabled
-          ? 'Say “Hey ThinkTap”'
+          ? 'Say “Hey Think” or “Hey ThinkTap”'
           : labelIdle;
 
   const statusHint = isStarting
@@ -70,8 +70,8 @@ export function VoiceAssistantStage({
         : 'Tap Resume to continue'
       : isRecording
         ? supportsVoiceStop
-          ? 'Say “Hey ThinkTap, stop” or tap Stop'
-          : 'Tap Stop to finish'
+          ? 'Pause, then say “Stop recording” — or tap the red Stop'
+          : 'Tap the red Stop to finish'
         : wakeEnabled
           ? 'Or tap the mic to record'
           : '';
@@ -118,7 +118,7 @@ export function VoiceAssistantStage({
           {liveTranscript}
         </Text>
       ) : isRecording && !isPaused && transcribingPlaceholder ? (
-        <Text style={styles.transcript}>Transcribing…</Text>
+        <Text style={styles.transcript}>Transcript will appear after you stop</Text>
       ) : null}
     </View>
   );

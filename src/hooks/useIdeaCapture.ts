@@ -4,17 +4,21 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import Constants from 'expo-constants';
 
 import { resolveCaptureMode } from '@/src/features/capture/captureMode';
+import { matchesStopPhrase } from '@/src/features/wakeWord/phrases';
 import { AndroidWakeWord } from 'android-wake-word';
 import { useLanguageTranscript } from '@/src/hooks/useLanguageTranscript';
 import { useRecording } from '@/src/hooks/useRecording';
 import { useVoiceStopListener } from '@/src/hooks/useVoiceStopListener';
-import { persistRecording, probeAudioDurationSec } from '@/src/services/audioStorage';
+import { persistRecording } from '@/src/services/audioStorage';
 import { looksLikeWhisperHallucination } from '@/src/services/aiService';
 import {
   abortLiveRecognition,
   isSpeechRecognitionAvailable,
   requestSpeechPermissions,
+  stripTrailingStopCommand,
 } from '@/src/services/languageTranscriptService';
+import { listenOnceForStopPhrase } from '@/src/services/voiceStopOnce';
+import { setAudioModeAsync } from 'expo-audio';
 import { useSettingsStore } from '@/src/store/settingsStore';
 import { useWakeWordStore } from '@/src/store/wakeWordStore';
 
@@ -28,10 +32,37 @@ type CaptureResult = {
 export type RecordingStatus = 'idle' | 'recording' | 'paused' | 'stopping';
 
 const SILENCE_PAUSE_MS = 10_000;
-const INACTIVE_PAUSE_MS = 450;
+/** Android often flickers `inactive` on tap / toast / FGS pause — wait before treating it as leave. */
+const INACTIVE_PAUSE_MS = 1200;
+/**
+ * After Start, ignore `inactive` lifecycle pauses so the take does not
+ * pause→resume during mic handoff + STT settle (felt like a 2s false pause).
+ */
+const START_LIFECYCLE_GRACE_MS = 2800;
 const SPEECH_METER_THRESHOLD = -42;
-const PARALLEL_GRACE_MS = 2500;
 const MIC_SHARE_KEY = '@thinktap/mic_share_supported';
+const MIC_SHARE_FAIL_THRESHOLD = 3;
+
+function delay(ms: number) {
+  return new Promise<void>((resolve) => setTimeout(resolve, ms));
+}
+
+/** Prefer wall-clock length; ignore a 1–2s probe on an unflushed file. */
+function resolveCaptureDurationSec(
+  wallClockSec: number,
+  probed: number | null,
+  recorderSec?: number,
+): number {
+  const wall = Math.max(1, Math.round(wallClockSec));
+  const usable = (candidate: number) => candidate >= wall * 0.8;
+  if (probed && probed > 0 && usable(probed)) {
+    return probed;
+  }
+  if (recorderSec && recorderSec > 0 && usable(recorderSec)) {
+    return Math.min(recorderSec, wall);
+  }
+  return wall;
+}
 
 type MicShareCache = {
   supported: boolean;
@@ -47,21 +78,6 @@ function currentOsVersion(): string {
   return `${Platform.OS}-${String(Platform.Version)}`;
 }
 
-async function readMicShareCache(): Promise<boolean | null> {
-  try {
-    const raw = await AsyncStorage.getItem(MIC_SHARE_KEY);
-    if (!raw) return null;
-    const parsed = JSON.parse(raw) as MicShareCache;
-    if (parsed.appVersion !== currentAppVersion() || parsed.osVersion !== currentOsVersion()) {
-      await AsyncStorage.removeItem(MIC_SHARE_KEY);
-      return null;
-    }
-    return parsed.supported;
-  } catch {
-    return null;
-  }
-}
-
 async function writeMicShareCache(supported: boolean): Promise<void> {
   const payload: MicShareCache = {
     supported,
@@ -72,6 +88,23 @@ async function writeMicShareCache(supported: boolean): Promise<void> {
     await AsyncStorage.setItem(MIC_SHARE_KEY, JSON.stringify(payload));
   } catch {
     // ignore
+  }
+}
+
+async function readMicShareCache(): Promise<boolean | null> {
+  try {
+    const raw = await AsyncStorage.getItem(MIC_SHARE_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as MicShareCache;
+    if (
+      parsed.appVersion !== currentAppVersion() ||
+      parsed.osVersion !== currentOsVersion()
+    ) {
+      return null;
+    }
+    return parsed.supported;
+  } catch {
+    return null;
   }
 }
 
@@ -96,6 +129,9 @@ export function useIdeaCapture(
   onSilencePauseRef.current = options.onSilencePause;
   const speechLocale = useSettingsStore((s) => s.speechLocale);
   const preferSavedAudio = useSettingsStore((s) => s.saveAudioRecording);
+  const wakeEnabled = useWakeWordStore((s) => s.enabled);
+  const androidFgsStop =
+    Platform.OS === 'android' && AndroidWakeWord.isSupported() && wakeEnabled;
 
   const [active, setActive] = useState(false);
   const [paused, setPaused] = useState(false);
@@ -125,8 +161,16 @@ export function useIdeaCapture(
   const onVoicePauseRef = useRef<(() => void) | null>(null);
   const onVoiceResumeRef = useRef<(() => void) | null>(null);
   const micShareFailedRef = useRef(false);
-  const parallelStartedAtRef = useRef(0);
+  const consecutiveMicShareFailsRef = useRef(0);
   const [micShareFailed, setMicShareFailed] = useState(false);
+  const commandListenRef = useRef(false);
+  const sawSpeechRef = useRef(false);
+  /** STT committed at least one result this take — rules out silent mic starvation. */
+  const sttHeardSpeechRef = useRef(false);
+  /** When metering first heard speech this take while STT still had no results. */
+  const meterSpeechSinceRef = useRef(0);
+  const lastCommandListenAtRef = useRef(0);
+  const spokenStopGuardRef = useRef(false);
 
   const notifyInterrupted = () => {
     if (stoppingNowRef.current) return;
@@ -159,6 +203,29 @@ export function useIdeaCapture(
   const meteringRef = useRef(-160);
   meteringRef.current = audio.metering;
 
+  /**
+   * WHY: some OEMs (ColorOS / older Android) let MediaRecorder and
+   * SpeechRecognizer "start" together, but only the recorder gets samples.
+   * STT then loops on no-speech instead of audio-capture. Free the mic so
+   * live captions in the selected language can continue.
+   */
+  const nudgeListeningRef = useRef<() => void>(() => {});
+  const preferLiveCaptionsOverFile = useCallback(() => {
+    if (!fileRecorder || !activeRef.current) return;
+    consecutiveMicShareFailsRef.current += 1;
+    micShareFailedRef.current = true;
+    setMicShareFailed(true);
+    if (consecutiveMicShareFailsRef.current >= MIC_SHARE_FAIL_THRESHOLD) {
+      void writeMicShareCache(false);
+    }
+    if (__DEV__) {
+      console.log('[CAPTURE] mic sharing unsupported — prefer live STT captions');
+    }
+    void audio.suspendMic();
+    // Restart STT on the freed mic — the old session was listening to silence.
+    nudgeListeningRef.current();
+  }, [audio, fileRecorder]);
+
   const fail = useCallback((message: string) => {
     lastErrorRef.current = message;
     setError(message);
@@ -176,18 +243,6 @@ export function useIdeaCapture(
     onVoiceResumeRef.current = handler;
   }, []);
 
-  useEffect(() => {
-    let cancelled = false;
-    void readMicShareCache().then((supported) => {
-      if (cancelled || supported !== false) return;
-      micShareFailedRef.current = true;
-      setMicShareFailed(true);
-    });
-    return () => {
-      cancelled = true;
-    };
-  }, []);
-
   const {
     displayText,
     error: sttError,
@@ -196,11 +251,14 @@ export function useIdeaCapture(
     getAudioUri,
     waitForIdle,
     stopListening,
+    nudgeListening,
     reset,
   } = useLanguageTranscript({
     speechLocale,
-    enabled: active && !audioOnly && !callHold && !micShareFailed,
-    capturing: active && !paused && !audioOnly && !micShareFailed,
+    // Live captions in the selected speech locale. Wake FGS is paused during a
+    // take, so this no longer stays off whenever Hey Think Tap is enabled.
+    enabled: active && !audioOnly && !callHold,
+    capturing: active && !paused && !audioOnly && !callHold,
     onStopPhrase: () => {
       onVoiceStopRef.current?.();
     },
@@ -211,19 +269,25 @@ export function useIdeaCapture(
       onVoiceResumeRef.current?.();
     },
     onSttError: (code: string) => {
-      const withinGrace = Date.now() - parallelStartedAtRef.current < PARALLEL_GRACE_MS;
       const contention = code === 'audio-capture' || code === 'client' || code === 'busy';
-      if (withinGrace && contention && !micShareFailedRef.current && fileRecorder) {
-        // WHY: this device cannot share the mic. Stop retrying live transcription
-        // and let the take continue as audio-only — the file is already recording,
-        // so nothing is lost. Transcript comes from the file after Stop.
-        micShareFailedRef.current = true;
-        setMicShareFailed(true);
-        void writeMicShareCache(false);
-        if (__DEV__) {
-          console.log('[CAPTURE] mic sharing unsupported — falling back to audio-only');
+      // Meter heard speech but STT never did → recorder owns the mic exclusively.
+      const silentStarvation =
+        (code === 'no-speech' || code === 'speech-timeout') &&
+        fileRecorder &&
+        activeRef.current &&
+        !micShareFailedRef.current &&
+        sawSpeechRef.current &&
+        !sttHeardSpeechRef.current;
+      if ((contention || silentStarvation) && fileRecorder && activeRef.current) {
+        if (!micShareFailedRef.current) {
+          // Silent starvation is definitive (meter vs STT); cache immediately so
+          // the next take skips MediaRecorder and keeps live captions.
+          if (silentStarvation) {
+            consecutiveMicShareFailsRef.current = MIC_SHARE_FAIL_THRESHOLD;
+          }
+          preferLiveCaptionsOverFile();
         }
-        abortLiveRecognition();
+        // Swallow — preferLiveCaptionsOverFile already nudges STT on the freed mic.
         return true;
       }
       return false;
@@ -256,14 +320,21 @@ export function useIdeaCapture(
       notifyInterrupted();
     },
     onSpeechActivity: () => {
+      sttHeardSpeechRef.current = true;
+      meterSpeechSinceRef.current = 0;
       lastSpeechAtRef.current = Date.now();
+      if (consecutiveMicShareFailsRef.current > 0) {
+        consecutiveMicShareFailsRef.current = 0;
+        void writeMicShareCache(true);
+      }
     },
   });
+  nudgeListeningRef.current = nudgeListening;
 
-  // iOS audio-file takes still need a spoken Stop — the recorder owns the mic,
-  // so this listens in short bursts for the command only.
+  // Audio-only takes (no live STT): burst-listen for spoken stop when wake FGS
+  // is not handling it. Avoid restart loops while live STT owns the mic.
   useVoiceStopListener(
-    audioOnly && Platform.OS !== 'android' && active && !paused && !stopping,
+    Boolean(active && !paused && !stopping && audioOnly && !androidFgsStop),
     () => {
       onVoiceStopRef.current?.();
     },
@@ -285,8 +356,9 @@ export function useIdeaCapture(
   }, [active, paused, stopping]);
 
   // Time spent in another app or on the lock screen is not recorded audio.
-  // Android `inactive` is often an app-switch, but Stop tap is a brief blip —
-  // debounce it so Stop does not pause-then-resume the take.
+  // Android `inactive` is often an app-switch, but Start/Stop taps and OEM
+  // toasts are brief blips — debounce + ignore them during start grace so the
+  // take does not pause-then-resume in the first ~2s.
   useEffect(() => {
     const clearLeaveTimer = () => {
       if (leaveTimerRef.current) {
@@ -294,6 +366,8 @@ export function useIdeaCapture(
         leaveTimerRef.current = null;
       }
     };
+    const inStartGrace = () =>
+      activeRef.current && Date.now() - startedAtRef.current < START_LIFECYCLE_GRACE_MS;
     const pauseForLeave = () => {
       leaveTimerRef.current = null;
       if (!activeRef.current || stoppingNowRef.current || pausedRef.current) return;
@@ -308,11 +382,17 @@ export function useIdeaCapture(
       }
       if (state === 'background') {
         clearLeaveTimer();
+        // Real background still pauses even during grace — user left the app.
         pauseForLeave();
         return;
       }
       if (state === 'inactive') {
         if (pausedRef.current || interruptionPausedRef.current) {
+          clearLeaveTimer();
+          return;
+        }
+        // Start/Stop tap and ColorOS UI often emit inactive without leaving.
+        if (inStartGrace()) {
           clearLeaveTimer();
           return;
         }
@@ -338,12 +418,21 @@ export function useIdeaCapture(
     if (!active || paused || stopping) return;
     const id = setInterval(() => {
       if (stoppingNowRef.current || pausedRef.current || !activeRef.current) return;
-      if (fileRecorder) {
+      // When live STT owns the mic, metering from a suspended recorder is silent —
+      // rely on onSpeechActivity instead of auto-pausing the take.
+      if (micShareFailedRef.current) return;
+      // Do not treat spoken-stop mic handoff as speech — only real audio resets the clock.
+      if (!commandListenRef.current && fileRecorder) {
         const meter = meteringRef.current;
         if (typeof meter === 'number' && meter > SPEECH_METER_THRESHOLD) {
+          sawSpeechRef.current = true;
+          if (!sttHeardSpeechRef.current && meterSpeechSinceRef.current === 0) {
+            meterSpeechSinceRef.current = Date.now();
+          }
           lastSpeechAtRef.current = Date.now();
         }
       }
+      if (commandListenRef.current) return;
       if (Date.now() - lastSpeechAtRef.current < SILENCE_PAUSE_MS) return;
       silenceHoldRef.current = true;
       lifecyclePausedRef.current = false;
@@ -352,6 +441,24 @@ export function useIdeaCapture(
     }, 500);
     return () => clearInterval(id);
   }, [active, paused, stopping, fileRecorder]);
+
+  // ColorOS / older Android: MediaRecorder can starve STT without audio-capture
+  // errors. If the meter hears speech for a few seconds and captions stay empty,
+  // free the mic before the recognizer's ~10s no-speech timeout.
+  useEffect(() => {
+    if (!active || paused || stopping || audioOnly) return;
+    if (!fileRecorder) return;
+    const id = setInterval(() => {
+      if (stoppingNowRef.current || pausedRef.current || !activeRef.current) return;
+      if (micShareFailedRef.current || sttHeardSpeechRef.current) return;
+      if (!meterSpeechSinceRef.current) return;
+      // Wait long enough that a healthy Google STT would have produced interim text.
+      if (Date.now() - meterSpeechSinceRef.current < 2800) return;
+      consecutiveMicShareFailsRef.current = MIC_SHARE_FAIL_THRESHOLD;
+      preferLiveCaptionsOverFile();
+    }, 500);
+    return () => clearInterval(id);
+  }, [active, paused, stopping, audioOnly, fileRecorder, preferLiveCaptionsOverFile]);
 
   // Incoming / outgoing calls (cellular or VoIP) must pause the take and
   // must not auto-resume when the call ends.
@@ -392,27 +499,22 @@ export function useIdeaCapture(
   const start = useCallback(async () => {
     if (activeRef.current) return true;
 
-    const granted = await requestSpeechPermissions();
-    if (!granted) {
-      fail('Speech recognition permission is required to transcribe.');
-      return null;
+    // Mic is required to record. Speech permission is best-effort — a denied
+    // recognizer must not block saving the audio file.
+    const speechOk = await requestSpeechPermissions();
+    if (!speechOk) {
+      micShareFailedRef.current = true;
+      setMicShareFailed(true);
     }
 
     reset();
     abortLiveRecognition();
-    if (fileRecorder) {
-      const started = await audio.start();
-      // Without this the UI would show "Recording" while nothing is captured.
-      if (!started) {
-        fail(audio.error ?? 'Could not start the recorder. Try again.');
-        return null;
-      }
-      parallelStartedAtRef.current = Date.now();
+    spokenStopGuardRef.current = false;
+    if (speechOk) {
+      micShareFailedRef.current = false;
+      setMicShareFailed(false);
     }
-    if (!audioOnly && !isSpeechRecognitionAvailable()) {
-      micShareFailedRef.current = true;
-      setMicShareFailed(true);
-    }
+
     lastErrorRef.current = null;
     setError(null);
     pausedAccumMsRef.current = 0;
@@ -423,11 +525,61 @@ export function useIdeaCapture(
     lastSpeechAtRef.current = Date.now();
     setCallHold(false);
     startedAtRef.current = Date.now();
+    sawSpeechRef.current = false;
+    sttHeardSpeechRef.current = false;
+    meterSpeechSinceRef.current = 0;
+    lastCommandListenAtRef.current = 0;
+    commandListenRef.current = false;
     setDurationSec(0);
     pausedRef.current = false;
+
+    // Open the take first so live STT (selected speech locale) can claim the
+    // mic before MediaRecorder — otherwise OEM mic arbitration kills captions.
+    // Same order on every Android version (11–15+); capability is runtime-detected.
     activeRef.current = true;
     setPaused(false);
     setActive(true);
+
+    if (Platform.OS === 'android') {
+      AndroidWakeWord.holdCaptureMute();
+    }
+
+    if (!audioOnly && speechOk && isSpeechRecognitionAvailable()) {
+      if (Platform.OS === 'android') {
+        AndroidWakeWord.silenceRecognitionUi();
+      }
+      // Settle long enough for Google STT on Android 11–15 before file recorder.
+      await delay(650);
+    } else if (!audioOnly && !isSpeechRecognitionAvailable()) {
+      micShareFailedRef.current = true;
+      setMicShareFailed(true);
+    }
+
+    // On OEMs that cannot share the mic, skip starting MediaRecorder so live
+    // captions in the selected language keep the mic for the whole take.
+    const shareCached = Platform.OS === 'android' ? await readMicShareCache() : true;
+    const skipFileForLiveCaptions = shareCached === false && !audioOnly && speechOk;
+
+    if (fileRecorder && !skipFileForLiveCaptions) {
+      const started = await audio.start();
+      // Without this the UI would show "Recording" while nothing is captured.
+      if (!started) {
+        activeRef.current = false;
+        setActive(false);
+        stopListening(true);
+        if (Platform.OS === 'android') {
+          AndroidWakeWord.releaseCaptureMute();
+        }
+        fail(audio.error ?? 'Could not start the recorder. Try again.');
+        return null;
+      }
+      await audio.waitUntilRecording();
+      await delay(200);
+    } else if (skipFileForLiveCaptions) {
+      micShareFailedRef.current = true;
+      setMicShareFailed(true);
+    }
+
     if (__DEV__) {
       console.log('[CAPTURE] mode', {
         audioOnly,
@@ -436,7 +588,7 @@ export function useIdeaCapture(
       });
     }
     return true;
-  }, [reset, audio, audioOnly, fail, fileRecorder]);
+  }, [reset, audio, audioOnly, fail, fileRecorder, stopListening]);
 
   const pause = useCallback(async (_reason?: 'user' | 'lifecycle' | 'interruption' | 'silence') => {
     if (!activeRef.current || pausedRef.current) return false;
@@ -498,18 +650,15 @@ export function useIdeaCapture(
       const uri =
         audioResult?.uri || (speechUri ? await persistRecording(speechUri) : '');
       let transcript = audioOnly ? '' : getFullTranscript();
+      transcript = stripTrailingStopCommand(transcript);
       if (looksLikeWhisperHallucination(transcript)) {
         transcript = '';
       }
-      let durationSec = seconds;
-      if (uri) {
-        const probed = await probeAudioDurationSec(uri, 800);
-        if (probed && probed > 0) {
-          durationSec = probed;
-        } else if (audioResult?.durationSec && audioResult.durationSec > 0) {
-          durationSec = Math.min(audioResult.durationSec, seconds);
-        }
-      }
+      const durationSec = resolveCaptureDurationSec(
+        seconds,
+        null,
+        audioResult?.durationSec,
+      );
 
       if (!audioOnly) {
         abortLiveRecognition();
@@ -547,6 +696,9 @@ export function useIdeaCapture(
     } finally {
       stoppingNowRef.current = false;
       setStopping(false);
+      if (Platform.OS === 'android') {
+        AndroidWakeWord.releaseCaptureMute();
+      }
     }
   }, [
     audio,
@@ -579,6 +731,9 @@ export function useIdeaCapture(
     lastErrorRef.current = null;
     setError(null);
     stoppingNowRef.current = false;
+    if (Platform.OS === 'android') {
+      AndroidWakeWord.releaseCaptureMute();
+    }
   }, [reset, stopListening, audio, fileRecorder]);
 
   // Published globally so the wake listener stays paused for the whole take,
@@ -586,6 +741,130 @@ export function useIdeaCapture(
   useEffect(() => {
     useWakeWordStore.getState().setCaptureActive(active || stopping);
   }, [active, stopping]);
+
+  // Re-apply OEM mute while a take is open — ColorOS / OxygenOS / MIUI sometimes
+  // clear ADJUST_MUTE after a few seconds. Same interval on every Android version.
+  useEffect(() => {
+    if (Platform.OS !== 'android') return;
+    if (!active || stopping) return;
+    AndroidWakeWord.silenceRecognitionUi();
+    const id = setInterval(() => {
+      AndroidWakeWord.silenceRecognitionUi();
+    }, 4000);
+    return () => clearInterval(id);
+  }, [active, stopping]);
+
+  // Live captions already contain the command — stop as soon as it appears.
+  useEffect(() => {
+    if (!active || stopping) {
+      spokenStopGuardRef.current = false;
+      return;
+    }
+    if (spokenStopGuardRef.current) return;
+    if (!matchesStopPhrase(displayText)) return;
+    spokenStopGuardRef.current = true;
+    onVoiceStopRef.current?.();
+  }, [displayText, active, stopping]);
+
+  /**
+   * Spoken stop while live STT is off (audio-only takes): after a short quiet,
+   * suspend the file recorder and listen once. Kept rare + muted to avoid the
+   * OPPO “tik-tik” beep loop. Wake-enabled takes use live STT or FGS instead.
+   */
+  useEffect(() => {
+    if (Platform.OS !== 'android') return;
+    if (!audioOnly) return;
+    if (!active || paused || stopping) return;
+
+    let cancelled = false;
+    let quietSince: number | null = null;
+
+    const id = setInterval(() => {
+      void (async () => {
+        if (cancelled || commandListenRef.current || stoppingNowRef.current) return;
+        if (pausedRef.current) return;
+        const meter = meteringRef.current;
+        const speaking = typeof meter === 'number' && meter > SPEECH_METER_THRESHOLD;
+        if (speaking) {
+          sawSpeechRef.current = true;
+          quietSince = null;
+          return;
+        }
+        if (!sawSpeechRef.current && Date.now() - startedAtRef.current < 1800) return;
+        if (Date.now() - lastCommandListenAtRef.current < 3500) return;
+        if (quietSince == null) quietSince = Date.now();
+        if (Date.now() - quietSince < 900) return;
+
+        commandListenRef.current = true;
+        lastCommandListenAtRef.current = Date.now();
+        quietSince = null;
+        try {
+          const held = await audio.suspendMic();
+          if (!held || cancelled || stoppingNowRef.current) return;
+          await delay(350);
+          if (cancelled || stoppingNowRef.current) return;
+          try {
+            await setAudioModeAsync({
+              playsInSilentMode: true,
+              allowsRecording: true,
+              interruptionMode: 'mixWithOthers',
+            });
+          } catch {
+            // still try
+          }
+          if (Platform.OS === 'android') {
+            AndroidWakeWord.silenceRecognitionUi();
+          }
+          abortLiveRecognition();
+          const heard = await listenOnceForStopPhrase(2200);
+          if (cancelled || stoppingNowRef.current) return;
+          if (heard) {
+            if (__DEV__) console.log('[CAPTURE] heard spoken stop');
+            spokenStopGuardRef.current = true;
+            onVoiceStopRef.current?.();
+            return;
+          }
+          await delay(150);
+          if (cancelled || stoppingNowRef.current || pausedRef.current) return;
+          await audio.resumeMic();
+        } finally {
+          commandListenRef.current = false;
+        }
+      })();
+    }, 500);
+
+    return () => {
+      cancelled = true;
+      clearInterval(id);
+      if (commandListenRef.current && !stoppingNowRef.current && !pausedRef.current) {
+        void audio.resumeMic();
+      }
+      commandListenRef.current = false;
+    };
+  }, [active, paused, stopping, audio, audioOnly]);
+
+  // User/lifecycle pause on audio-only — mic is free; keep listening for stop.
+  useEffect(() => {
+    if (Platform.OS !== 'android') return;
+    if (!audioOnly) return;
+    if (!active || !paused || stopping) return;
+    if (commandListenRef.current) return;
+
+    let cancelled = false;
+    abortLiveRecognition();
+    AndroidWakeWord.silenceRecognitionUi();
+    void (async () => {
+      const heard = await listenOnceForStopPhrase(10_000);
+      if (!cancelled && heard) {
+        spokenStopGuardRef.current = true;
+        onVoiceStopRef.current?.();
+      }
+    })();
+    return () => {
+      cancelled = true;
+      abortLiveRecognition();
+    };
+  }, [active, paused, stopping, audioOnly]);
 
   useEffect(() => {
     return () => {
@@ -620,8 +899,8 @@ export function useIdeaCapture(
     setVoiceStopHandler,
     setVoicePauseHandler,
     setVoiceResumeHandler,
-    supportsVoiceStop: (!audioOnly && !micShareFailed) || Platform.OS !== 'android',
-    savesAudioFile: fileRecorder,
+    supportsVoiceStop: Platform.OS === 'android' || !(audioOnly || micShareFailed),
+    savesAudioFile: fileRecorder && !micShareFailed,
     captureMode: audioOnly || micShareFailed ? ('audio-file' as const) : ('device' as const),
     liveTranscript: displayText,
     listening,

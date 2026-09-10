@@ -11,9 +11,26 @@ const WAKE_PHRASES = [
   'hey think that',
   'hey think cap',
   'hey think top',
+  'hey think up',
+  'hey think type',
+  'hey think tape',
+  'hey tink tap',
+  'hey tin tap',
+  'hey sinking tap',
+  'hey thank tap',
+  'a think app',
   'think tap',
   'thinktap',
   'think app',
+  'hey think',
+  'hey thing',
+  'hey thin',
+  'hey tink',
+  'hey siri',
+  'hi think',
+  'hi siri',
+  'ok think',
+  'okay think',
   'start recording',
   'start record',
   'start the recording',
@@ -41,6 +58,9 @@ const STOP_COMMANDS = [
   'stop recording',
   'stop record',
   'stop the recording',
+  'stopped recording',
+  'stop according',
+  'please stop recording',
   'hey think tap stop',
   'hey thinktap stop',
   'hey think tap, stop',
@@ -48,6 +68,7 @@ const STOP_COMMANDS = [
   'think tap stop',
   'end recording',
   'finish recording',
+  'स्टॉप रिकॉर्डिंग',
   'रिकॉर्डिंग बंद करा',
   'रिकॉर्डिंग बंद करो',
 ];
@@ -96,7 +117,7 @@ const WAKE_SUFFIX_STOP = /\b(stop|end|finish|pause)\b\s*$/;
 
 /** Same shape as the Kotlin NAME_PATTERN — Google mangles the brand every time. */
 const NAME_PATTERN =
-  /\b(hey|hi|a|i|hitting|thinking)?\s*(think|thin|thing|sink|hitting|thinking)\s*(tap|tab|top|app|cap|that|taps|tabs|i have)\b/;
+  /\b(hey|hi|a|i|hitting|thinking)?\s*(think|thin|thing|sink|ting|tink|tin|thank|pink|hitting|thinking)\s*(tap|tab|top|app|cap|that|taps|tabs|up|pack|cat|type|tape|chat|stack|i have)\b/;
 const START_ONLY = /\b(start|begin|new)\s+(recording|record|note|idea)\b/;
 
 function isCommandUtterance(normalized: string): boolean {
@@ -113,6 +134,10 @@ export function matchesWakePhrase(text: string): boolean {
   if (isCommandUtterance(normalized)) return false;
   if (START_ONLY.test(normalized)) return true;
   if (NAME_PATTERN.test(normalized)) return true;
+  // Same SHORT_WAKE policy as Kotlin — Google often hears "Hey Think" as "hey Siri".
+  const shortWake =
+    /\b(hey|hi|ok|okay)\s+(think|thing|thin|tink|tin|thank|siri|syn|sink|ting)\b/;
+  if (shortWake.test(normalized) && normalized.split(' ').length <= 4) return true;
   return WAKE_PHRASES.some(
     (phrase) => normalized === phrase || normalized.includes(phrase),
   );
@@ -125,12 +150,17 @@ function matchesCommand(text: string, commands: string[], words: string[]): bool
   return words.some((phrase) => normalized === phrase);
 }
 
+const STOP_TAIL =
+  /\b((please\s+)?stop(\s+(the\s+)?record(ing)?)?|(end|finish)\s+(the\s+)?recording)\s*$/;
+
 export function matchesStopPhrase(text: string): boolean {
   const normalized = normalizeSpeech(text);
   if (!normalized) return false;
   if (/\bthink\s?(tap|app|tab|that|cap|top)\b/.test(normalized)) {
     if (WAKE_SUFFIX_STOP.test(normalized)) return true;
   }
+  if (STOP_COMMANDS.some((phrase) => normalized.includes(phrase))) return true;
+  if (STOP_TAIL.test(normalized)) return true;
   return matchesCommand(text, STOP_COMMANDS, STOP_WORDS);
 }
 

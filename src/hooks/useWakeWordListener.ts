@@ -59,6 +59,7 @@ export function useWakeWordListener() {
   const hydrated = useWakeWordStore((s) => s.hydrated);
   const pausedForRecording = useWakeWordStore((s) => s.pausedForRecording);
   const playbackActive = useWakeWordStore((s) => s.playbackActive);
+  const captureActive = useWakeWordStore((s) => s.captureActive);
   const setListening = useWakeWordStore((s) => s.setListening);
   const setAvailable = useWakeWordStore((s) => s.setAvailable);
   const setLastHeard = useWakeWordStore((s) => s.setLastHeard);
@@ -278,13 +279,22 @@ export function useWakeWordListener() {
 
     const sync = async () => {
       if (useNativeFgs) {
-        AndroidWakeWord.restoreRecognitionUi();
+        const capturingNow =
+          useWakeWordStore.getState().captureActive ||
+          useWakeWordStore.getState().captureStarting ||
+          useWakeWordStore.getState().pausedForRecording;
+
+        // WHY: restoring volume while the FGS is still restarting SpeechRecognizer
+        // lets ColorOS play its start chime on every cycle ("tik-tik"). Stay muted
+        // whenever wake is enabled; unmute only when disabled or Ideas playback.
         if (!enabled) {
           await AndroidWakeWord.stopService();
           AndroidWakeWord.restoreRecognitionUi();
           setListening(false);
           return;
         }
+
+        AndroidWakeWord.silenceRecognitionUi();
 
         const micOk = await ensureAndroidMicPermission();
         const notifOk = await ensureAndroidNotificationPermission();
@@ -298,19 +308,45 @@ export function useWakeWordListener() {
           console.warn('Notification permission denied — wake service may be limited on Android 13+');
         }
 
-        // While capturing or playing a take, pause the FGS (do not stop it).
-        // Stopping kills the process when the app is minimized, so spoken
-        // stop cannot run. Pause keeps the notification and frees the mic.
-        const holdMic =
-          pausedForRecording ||
-          playbackActive ||
-          useWakeWordStore.getState().pausedForRecording ||
-          useWakeWordStore.getState().playbackActive;
-        if (holdMic) {
+        // Playback needs the speaker — pause the recognizer.
+        if (playbackActive || useWakeWordStore.getState().playbackActive) {
           if (AndroidWakeWord.isRunning() && !AndroidWakeWord.isPaused()) {
             await AndroidWakeWord.pauseService();
           }
-          AndroidWakeWord.restoreRecognitionUi();
+          if (!capturingNow) {
+            AndroidWakeWord.restoreRecognitionUi();
+          }
+          setListening(false);
+          return;
+        }
+
+        // Foreground: pause so live STT can hear speech + “stop recording”.
+        // Background: the activity STT dies, so this service listens for stop.
+        const capturing = useWakeWordStore.getState().captureActive;
+        if (capturing) {
+          if (AppState.currentState !== 'active') {
+            abortLiveRecognition();
+            try {
+              await AndroidWakeWord.listenForStop();
+            } catch (e) {
+              console.warn('listenForStop failed', e);
+            }
+            return;
+          }
+          if (AndroidWakeWord.isRunning() && !AndroidWakeWord.isPaused()) {
+            await AndroidWakeWord.pauseService();
+          }
+          AndroidWakeWord.silenceRecognitionUi();
+          setListening(false);
+          return;
+        }
+
+        // Handoff before the recorder exists — free the mic briefly.
+        if (pausedForRecording || useWakeWordStore.getState().pausedForRecording) {
+          if (AndroidWakeWord.isRunning() && !AndroidWakeWord.isPaused()) {
+            await AndroidWakeWord.pauseService();
+          }
+          AndroidWakeWord.silenceRecognitionUi();
           setListening(false);
           return;
         }
@@ -372,8 +408,9 @@ export function useWakeWordListener() {
         }
         if (state === 'active') {
           if (capturing) {
-            // Give the mic back to live transcription.
-            void AndroidWakeWord.pauseService();
+            if (AndroidWakeWord.isRunning() && !AndroidWakeWord.isPaused()) {
+              void AndroidWakeWord.pauseService();
+            }
           }
           void AndroidWakeWord.consumePendingStop().then((pending) => {
             if (pending?.transcript) {
@@ -410,5 +447,5 @@ export function useWakeWordListener() {
       // Do not stop FGS on unmount of provider remount — only when disabled.
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [enabled, hydrated, pausedForRecording, playbackActive, useNativeFgs]);
+  }, [enabled, hydrated, pausedForRecording, playbackActive, captureActive, useNativeFgs]);
 }

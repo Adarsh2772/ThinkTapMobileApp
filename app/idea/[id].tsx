@@ -2,7 +2,6 @@ import { Ionicons } from '@expo/vector-icons';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useEffect, useState } from 'react';
 import {
-  ActivityIndicator,
   BackHandler,
   Pressable,
   ScrollView,
@@ -14,59 +13,10 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { AudioPlayer } from '@/src/components/AudioPlayer';
 import { DeleteThoughtDialog } from '@/src/components/DeleteThoughtDialog';
-import { hasIndicScript, findLanguageByWhisperCode, resolveSpokenLanguage } from '@/src/i18n/languages';
-import { analyzeTranscript, hasAnalysisContent } from '@/src/services/transcriptAnalysisService';
+import { findLanguageByWhisperCode, resolveSpokenLanguage } from '@/src/i18n/languages';
 import { useIdeasStore } from '@/src/store/ideasStore';
-import { showToast } from '@/src/store/toastStore';
 import { categoryColor, colors, fonts, radii, spacing, typography } from '@/src/theme/tokens';
-import type { TranscriptAnalysis } from '@/src/types';
 import { relativeDate } from '@/src/utils/format';
-
-type AnalysisField = {
-  key: keyof TranscriptAnalysis;
-  label: string;
-  icon: keyof typeof Ionicons.glyphMap;
-  accent: string;
-  soft: string;
-};
-
-const ANALYSIS_FIELDS: AnalysisField[] = [
-  {
-    key: 'expansionPaths',
-    label: 'Expansion paths',
-    icon: 'git-branch-outline',
-    accent: '#4F46E5',
-    soft: '#E0E7FF',
-  },
-  {
-    key: 'sourceOfInspiration',
-    label: 'Source of inspiration',
-    icon: 'sparkles-outline',
-    accent: '#0EA5E9',
-    soft: '#E0F2FE',
-  },
-  {
-    key: 'thought',
-    label: 'Thought',
-    icon: 'bulb-outline',
-    accent: colors.secondary,
-    soft: colors.secondarySoft,
-  },
-  {
-    key: 'potentialValue',
-    label: 'Potential value',
-    icon: 'diamond-outline',
-    accent: '#16A34A',
-    soft: colors.successSoft,
-  },
-  {
-    key: 'connectedThoughts',
-    label: 'Connected thoughts',
-    icon: 'link-outline',
-    accent: '#D97706',
-    soft: colors.warningSoft,
-  },
-];
 
 export default function IdeaDetailScreen() {
   const params = useLocalSearchParams<{ id: string | string[] }>();
@@ -77,7 +27,6 @@ export default function IdeaDetailScreen() {
   const deleteIdea = useIdeasStore((s) => s.deleteIdea);
   const touchIdea = useIdeasStore((s) => s.touchIdea);
   const [confirmDelete, setConfirmDelete] = useState(false);
-  const [analyzing, setAnalyzing] = useState(false);
   const knownLanguage = idea ? findLanguageByWhisperCode(idea.language) : undefined;
   const spoken = idea ? resolveSpokenLanguage(idea.language) : null;
   const isLive = idea?.transcriptSource === 'live';
@@ -119,37 +68,12 @@ export default function IdeaDetailScreen() {
     router.replace('/(tabs)/ideas');
   };
 
-  const onReanalyze = async () => {
-    const transcript = idea.transcript?.trim() ?? '';
-    if (!transcript || analyzing) return;
-    setAnalyzing(true);
-    try {
-      const next = await analyzeTranscript(transcript);
-      const analysisThought = next.thought?.trim() ?? '';
-      const keepAnalysisSummary =
-        Boolean(analysisThought) &&
-        !(hasIndicScript(transcript) && !hasIndicScript(analysisThought));
-      await updateIdea(idea.id, {
-        analysis: keepAnalysisSummary ? next : idea.analysis,
-        summary: keepAnalysisSummary ? analysisThought : idea.summary,
-      });
-      showToast(keepAnalysisSummary || hasAnalysisContent(next) ? 'Analysis updated' : 'Analysis returned empty');
-    } catch (e) {
-      const message = e instanceof Error ? e.message : 'Analysis failed. Try again.';
-      showToast(message, 'error');
-    } finally {
-      setAnalyzing(false);
-    }
-  };
-
   const sourceLabel = isDevice
-    ? 'Device transcript — analyzed into structured insights'
+    ? 'Device transcript — saved in the language you spoke'
     : isLive
       ? 'Live transcript — auto-detected language from your recording'
       : 'Demo transcript — sample text (legacy)';
   const tint = categoryColor(idea.category);
-  const analysis = idea.analysis ?? null;
-  const showAnalysis = analysis !== null;
 
   return (
     <SafeAreaView style={styles.safe} edges={['top']}>
@@ -227,70 +151,6 @@ export default function IdeaDetailScreen() {
                 : 'Recording is not clear. Please record properly.'}
             </Text>
           </View>
-        </View>
-
-        <View style={styles.section}>
-          <View style={styles.sectionHeader}>
-            <Ionicons name="sparkles-outline" size={18} color={colors.secondary} />
-            <Text style={[styles.sectionTitle, styles.sectionTitleInline]}>Analysis</Text>
-          </View>
-          <Text style={styles.sectionHint}>Response from analyzing the transcript above</Text>
-
-          {idea.transcript?.trim() ? (
-            <Pressable
-              onPress={() => void onReanalyze()}
-              disabled={analyzing}
-              style={({ pressed }) => [styles.reanalyzeBtn, pressed && { opacity: 0.85 }]}
-              accessibilityRole="button"
-              accessibilityLabel="Re-run analysis"
-            >
-              {analyzing ? (
-                <ActivityIndicator size="small" color={colors.secondary} />
-              ) : (
-                <Ionicons name="refresh" size={16} color={colors.secondary} />
-              )}
-              <Text style={styles.reanalyzeText}>
-                {analyzing ? 'Analyzing…' : 'Re-run analysis'}
-              </Text>
-            </Pressable>
-          ) : null}
-
-          {showAnalysis ? (
-            <View style={styles.analysisStack}>
-              {ANALYSIS_FIELDS.map((field) => {
-                const value = analysis?.[field.key]?.trim() ?? '';
-                return (
-                  <View
-                    key={field.key}
-                    style={[styles.analysisCard, { backgroundColor: field.soft }]}
-                  >
-                    <View style={[styles.analysisAccent, { backgroundColor: field.accent }]} />
-                    <View style={styles.analysisHeader}>
-                      <View
-                        style={[
-                          styles.analysisIcon,
-                          { backgroundColor: colors.surfaceContainerLowest },
-                        ]}
-                      >
-                        <Ionicons name={field.icon} size={16} color={field.accent} />
-                      </View>
-                      <Text style={[styles.analysisLabel, { color: field.accent }]}>
-                        {field.label}
-                      </Text>
-                    </View>
-                    <Text style={[styles.body, !value && styles.emptyValue]}>
-                      {value || '—'}
-                    </Text>
-                  </View>
-                );
-              })}
-            </View>
-          ) : (
-            <View style={styles.summaryCard}>
-              <View style={styles.summaryAccent} />
-              <Text style={styles.body}>{idea.summary}</Text>
-            </View>
-          )}
         </View>
       </ScrollView>
       <DeleteThoughtDialog

@@ -36,6 +36,8 @@ type AndroidWakeWordNativeModule = {
   consumePendingWake(): Promise<PendingWake>;
   consumePendingStop(): Promise<PendingWake>;
   silenceRecognitionUi(): void;
+  holdCaptureMute(): void;
+  releaseCaptureMute(): void;
   restoreRecognitionUi(): void;
   cancelRecognizerHaptic(): void;
   playRecordingStartCue(): Promise<boolean>;
@@ -147,8 +149,6 @@ export const AndroidWakeWord = {
 
   async listenForStop(): Promise<boolean> {
     if (!Native) return false;
-    // Never start a microphone FGS from the background (Android 14+ throws).
-    if (!Native.isRunning()) return false;
     try {
       return Native.listenForStop();
     } catch {
@@ -174,6 +174,24 @@ export const AndroidWakeWord = {
     if (!Native) return;
     try {
       Native.silenceRecognitionUi();
+    } catch {
+      // ignore
+    }
+  },
+
+  holdCaptureMute(): void {
+    if (!Native) return;
+    try {
+      Native.holdCaptureMute();
+    } catch {
+      // ignore
+    }
+  },
+
+  releaseCaptureMute(): void {
+    if (!Native) return;
+    try {
+      Native.releaseCaptureMute();
     } catch {
       // ignore
     }

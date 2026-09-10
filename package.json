@@ -1,7 +1,7 @@
 {
   "name": "think-tap",
   "main": "expo-router/entry",
-  "version": "1.0.0",
+  "version": "1.0.2",
   "dependencies": {
     "@expo-google-fonts/hanken-grotesk": "^0.4.3",
     "@expo-google-fonts/inter": "^0.4.2",

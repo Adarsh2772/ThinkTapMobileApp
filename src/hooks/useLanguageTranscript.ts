@@ -330,6 +330,25 @@ export function useLanguageTranscript({
     }, ms);
   };
 
+  /** Abort a deaf session and restart soon (e.g. after freeing the mic from MediaRecorder). */
+  const nudgeListening = useCallback(() => {
+    if (
+      !mountedRef.current ||
+      !enabledRef.current ||
+      stopFiredRef.current ||
+      fatalRef.current
+    ) {
+      return;
+    }
+    clearRestart();
+    // Bump gen so the aborted session's end/error cannot schedule a slower restart.
+    genRef.current += 1;
+    nativeActiveRef.current = false;
+    startingRef.current = false;
+    abortLiveRecognition();
+    scheduleRestart(Platform.OS === 'android' ? 450 : 300);
+  }, []);
+
   /**
    * The device has no speech model for this language. Step down to English
    * before giving up — retrying the rejected locale would loop forever while
@@ -360,6 +379,18 @@ export function useLanguageTranscript({
     const top = results[0]?.transcript?.trim() ?? '';
     if (!top) return;
 
+    const heardStop =
+      results.some((item) => matchesStopPhrase(item?.transcript?.trim() ?? '')) ||
+      matchesStopPhrase(top) ||
+      matchesStopPhrase([finalsRef.current.join(' '), top].join(' '));
+    if (heardStop && !stopFiredRef.current) {
+      stopFiredRef.current = true;
+      commitText(stripTrailingStopCommand(top), true);
+      stopListening(false);
+      onStopRef.current?.();
+      return;
+    }
+
     // After Stop, still accept the engine's final flush so the last words are kept.
     if (stopFiredRef.current) {
       commitText(stripTrailingStopCommand(top), true);
@@ -367,14 +398,6 @@ export function useLanguageTranscript({
     }
 
     if (!enabledRef.current) return;
-
-    if (matchesStopPhrase(top)) {
-      stopFiredRef.current = true;
-      commitText(stripTrailingStopCommand(top), true);
-      stopListening(false);
-      onStopRef.current?.();
-      return;
-    }
 
     if (capturingRef.current && matchesPausePhrase(top)) {
       if (pauseFiredRef.current) return;
@@ -432,7 +455,9 @@ export function useLanguageTranscript({
     setListening(false);
     notifyEnded();
     if (!enabledRef.current || stopFiredRef.current) return;
-    scheduleRestart(150);
+    // Same restart policy on every Android version. Short gaps cause OEM
+    // start-chime loops (OPPO 12, ColorOS, OxygenOS 15, etc.).
+    scheduleRestart(Platform.OS === 'android' ? (capturingRef.current ? 2500 : 1000) : 400);
   });
 
   useSpeechRecognitionEvent('error', (event) => {
@@ -482,18 +507,18 @@ export function useLanguageTranscript({
         return;
       }
       if (AppState.currentState !== 'active') return;
-      scheduleRestart(Platform.OS === 'android' ? 800 : 600);
+      scheduleRestart(Platform.OS === 'android' ? 2500 : 600);
       return;
     }
     if (code === 'client' || code === 'busy' || code === 'network') {
       persistRef.current = false;
-      scheduleRestart(Platform.OS === 'android' ? 800 : 600);
+      scheduleRestart(Platform.OS === 'android' ? 2500 : 600);
       return;
     }
     if (code !== 'no-speech' && code !== 'speech-timeout') {
       console.warn('Language transcript error', code);
     }
-    scheduleRestart(150);
+    scheduleRestart(Platform.OS === 'android' ? (capturingRef.current ? 2500 : 1000) : 400);
   });
 
   useEffect(() => {
@@ -518,7 +543,7 @@ export function useLanguageTranscript({
     activeLocaleRef.current = speechLocale;
 
     if (enabled) {
-      const t = setTimeout(() => void startListening(false), 200);
+      const t = setTimeout(() => void startListening(false), 450);
       return () => {
         clearTimeout(t);
         stopListening(true);
@@ -598,6 +623,7 @@ export function useLanguageTranscript({
     getAudioUri,
     waitForIdle,
     stopListening,
+    nudgeListening,
     reset,
   };
 }

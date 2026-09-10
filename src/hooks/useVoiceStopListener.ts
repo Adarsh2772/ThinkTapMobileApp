@@ -5,6 +5,7 @@ import {
 import { useEffect, useRef } from 'react';
 import { Platform } from 'react-native';
 
+import { AndroidWakeWord } from 'android-wake-word';
 import { matchesStopPhrase } from '@/src/features/wakeWord/phrases';
 import { useSettingsStore } from '@/src/store/settingsStore';
 import { getLanguage } from '@/src/i18n/languages';
@@ -58,6 +59,9 @@ export function useVoiceStopListener(enabled: boolean, onStop: () => void) {
       if (!ExpoSpeechRecognitionModule.isRecognitionAvailable()) return;
 
       intentionalRef.current = false;
+      if (Platform.OS === 'android') {
+        AndroidWakeWord.silenceRecognitionUi();
+      }
 
       // Alternate en-US (hears "stop") and app locale (hears थांबा) when Indic.
       const isIndic = languageCode === 'mr' || languageCode === 'hi';
@@ -69,14 +73,17 @@ export function useVoiceStopListener(enabled: boolean, onStop: () => void) {
       useEnglishPass.current = !useEnglishPass.current;
 
       ExpoSpeechRecognitionModule.start({
-        lang,
+        lang: Platform.OS === 'android' ? 'en-US' : lang,
         interimResults: true,
         continuous: false,
         addsPunctuation: false,
         contextualStrings: [
           'stop',
           'stop recording',
+          'stop the recording',
           'please stop',
+          'end recording',
+          'finish recording',
           'थांबा',
           'थांब',
           'बंद करा',
@@ -120,14 +127,14 @@ export function useVoiceStopListener(enabled: boolean, onStop: () => void) {
   useSpeechRecognitionEvent('end', () => {
     activeRef.current = false;
     if (!enabled || intentionalRef.current || firedRef.current) return;
-    scheduleRestart(400);
+    // Same slow restart on every Android version to avoid OEM beep loops.
+    scheduleRestart(Platform.OS === 'android' ? 2800 : 600);
   });
 
   useSpeechRecognitionEvent('error', () => {
     activeRef.current = false;
     if (!enabled || intentionalRef.current || firedRef.current) return;
-    // Mic may be busy with the recorder — keep retrying.
-    scheduleRestart(Platform.OS === 'android' ? 1200 : 800);
+    scheduleRestart(Platform.OS === 'android' ? 2800 : 800);
   });
 
   useEffect(() => {

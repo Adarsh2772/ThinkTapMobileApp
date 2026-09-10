@@ -93,7 +93,7 @@ export const useWakeWordStore = create<WakeWordState>((set, get) => ({
 
   fireWakeTrigger: () => {
     const now = Date.now();
-    if (now - lastFireAt < 3000) return;
+    if (now - lastFireAt < 1800) return;
     lastFireAt = now;
     set({
       triggerToken: get().triggerToken + 1,

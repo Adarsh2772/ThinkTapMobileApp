@@ -4,7 +4,10 @@ import {
   documentDirectory,
   getInfoAsync,
   makeDirectoryAsync,
+  moveAsync,
 } from 'expo-file-system/legacy';
+
+import { createId } from '@/src/utils/format';
 
 function normalizeFileUri(uri: string): string {
   if (!uri) return uri;
@@ -13,6 +16,36 @@ function normalizeFileUri(uri: string): string {
     return `file://${uri}`;
   }
   return uri;
+}
+
+function delay(ms: number) {
+  return new Promise<void>((resolve) => setTimeout(resolve, ms));
+}
+
+/** Wait until the recorder has flushed bytes so copy/probe see a complete file. */
+export async function waitForFileFlush(uri: string, timeoutMs = 1600): Promise<number> {
+  const source = normalizeFileUri(uri);
+  if (!source) return 0;
+  let lastSize = -1;
+  let stableHits = 0;
+  const deadline = Date.now() + Math.max(200, timeoutMs);
+  while (Date.now() < deadline) {
+    try {
+      const info = await getInfoAsync(source);
+      const size = info.exists && 'size' in info ? Number(info.size ?? 0) : 0;
+      if (size > 0 && size === lastSize) {
+        stableHits += 1;
+        if (stableHits >= 2) return size;
+      } else {
+        stableHits = 0;
+        lastSize = size;
+      }
+    } catch {
+      // keep waiting
+    }
+    await delay(80);
+  }
+  return lastSize > 0 ? lastSize : 0;
 }
 
 function extensionFor(uri: string): string {
@@ -30,7 +63,8 @@ export async function ensureRecordingsDirectory(): Promise<string> {
 }
 
 /**
- * Keep recordings in a stable app documents folder.
+ * Copy (then move) the take into app documents so the next recording cannot
+ * delete the cache file. Unique names so back-to-back takes never collide.
  */
 export async function persistRecording(tempUri: string): Promise<string> {
   const source = normalizeFileUri(tempUri);
@@ -43,19 +77,30 @@ export async function persistRecording(tempUri: string): Promise<string> {
     return source;
   }
 
+  await waitForFileFlush(source, 2200);
+
   const folder = await ensureRecordingsDirectory();
-  const dest = `${folder}idea-${Date.now()}${extensionFor(source)}`;
+  const dest = `${folder}idea-${Date.now()}-${createId()}${extensionFor(source)}`;
 
   try {
     await copyAsync({ from: source, to: dest });
-    const info = await getInfoAsync(dest);
-    if (info.exists && (!('size' in info) || (info.size ?? 0) > 0)) {
-      return dest;
-    }
+    const size = await waitForFileFlush(dest, 1000);
+    if (size > 0) return dest;
   } catch {
-    // Fall back to original URI if copy fails.
+    // try move below
   }
 
+  try {
+    await moveAsync({ from: source, to: dest });
+    const size = await waitForFileFlush(dest, 1000);
+    if (size > 0) return dest;
+  } catch {
+    // Fall back to original URI if copy/move fail.
+  }
+
+  if (__DEV__) {
+    console.warn('[AUDIO] persist fell back to temp URI', source);
+  }
   return source;
 }
 

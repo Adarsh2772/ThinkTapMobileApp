@@ -53,6 +53,8 @@ export function useRecording(options?: { onInterrupted?: () => void }) {
   const [active, setActive] = useState(false);
   const [paused, setPaused] = useState(false);
   const busyRef = useRef(false);
+  /** Mic released briefly so spoken “stop recording” can be heard — not a user pause. */
+  const suspendedRef = useRef(false);
 
   const recorder = useAudioRecorder(VOICE_RECORDING, (status) => {
     if (!activeRef.current || pausedRef.current || userStoppingRef.current) return;
@@ -82,19 +84,22 @@ export function useRecording(options?: { onInterrupted?: () => void }) {
       await setAudioModeAsync({
         playsInSilentMode: true,
         allowsRecording: true,
-        interruptionMode: 'doNotMix',
+        // Share the session so the same listener that heard start can hear stop.
+        interruptionMode: 'mixWithOthers',
       });
 
       await recorder.prepareToRecordAsync();
       recorder.record();
       activeRef.current = true;
       pausedRef.current = false;
+      suspendedRef.current = false;
       setActive(true);
       setPaused(false);
       return true;
     } catch (e) {
       activeRef.current = false;
       pausedRef.current = false;
+      suspendedRef.current = false;
       setActive(false);
       setPaused(false);
       setError(e instanceof Error ? e.message : 'Could not start recording');
@@ -112,6 +117,7 @@ export function useRecording(options?: { onInterrupted?: () => void }) {
     setError(null);
     try {
       recorder.pause();
+      suspendedRef.current = false;
       pausedRef.current = true;
       setPaused(true);
       return true;
@@ -133,15 +139,52 @@ export function useRecording(options?: { onInterrupted?: () => void }) {
       await setAudioModeAsync({
         playsInSilentMode: true,
         allowsRecording: true,
-        interruptionMode: 'doNotMix',
+        interruptionMode: 'mixWithOthers',
       });
       // Resume the same prepared recording session (do not re-prepare).
       recorder.record();
+      suspendedRef.current = false;
       pausedRef.current = false;
       setPaused(false);
       return true;
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Could not resume recording');
+      return false;
+    } finally {
+      busyRef.current = false;
+    }
+  }, [recorder]);
+
+  /** Pause MediaRecorder only — UI stays “Recording” while we listen for stop. */
+  const suspendMic = useCallback(async () => {
+    if (busyRef.current) return false;
+    if (!activeRef.current || pausedRef.current || suspendedRef.current) return false;
+    busyRef.current = true;
+    try {
+      recorder.pause();
+      suspendedRef.current = true;
+      return true;
+    } catch {
+      return false;
+    } finally {
+      busyRef.current = false;
+    }
+  }, [recorder]);
+
+  const resumeMic = useCallback(async () => {
+    if (busyRef.current) return false;
+    if (!activeRef.current || !suspendedRef.current || pausedRef.current) return false;
+    busyRef.current = true;
+    try {
+      await setAudioModeAsync({
+        playsInSilentMode: true,
+        allowsRecording: true,
+        interruptionMode: 'mixWithOthers',
+      });
+      recorder.record();
+      suspendedRef.current = false;
+      return true;
+    } catch {
       return false;
     } finally {
       busyRef.current = false;
@@ -161,8 +204,8 @@ export function useRecording(options?: { onInterrupted?: () => void }) {
     userStoppingRef.current = true;
     setStopping(true);
     try {
-      // If paused, resume briefly so stop can finalize the file on some platforms.
-      if (pausedRef.current) {
+      // If paused/suspended, resume briefly so stop can finalize the file on some platforms.
+      if (pausedRef.current || suspendedRef.current) {
         try {
           recorder.record();
         } catch {
@@ -178,6 +221,7 @@ export function useRecording(options?: { onInterrupted?: () => void }) {
 
       activeRef.current = false;
       pausedRef.current = false;
+      suspendedRef.current = false;
       setActive(false);
       setPaused(false);
 
@@ -188,8 +232,8 @@ export function useRecording(options?: { onInterrupted?: () => void }) {
 
       // expo-audio can take a tick to publish the file URI after stop().
       let tempUri = recorder.uri ?? recorder.getStatus().url ?? null;
-      if (!tempUri) {
-        await new Promise((r) => setTimeout(r, 350));
+      for (let i = 0; !tempUri && i < 6; i += 1) {
+        await new Promise((r) => setTimeout(r, 200));
         tempUri = recorder.uri ?? recorder.getStatus().url ?? null;
       }
       const status = recorder.getStatus();
@@ -217,6 +261,20 @@ export function useRecording(options?: { onInterrupted?: () => void }) {
     }
   }, [recorder, recorderState.durationMillis, recorderState.isRecording]);
 
+  const waitUntilRecording = useCallback(async (timeoutMs = 900) => {
+    const deadline = Date.now() + timeoutMs;
+    while (Date.now() < deadline) {
+      try {
+        if (recorder.isRecording) return true;
+        if (recorder.getStatus()?.isRecording) return true;
+      } catch {
+        // ignore
+      }
+      await new Promise((r) => setTimeout(r, 50));
+    }
+    return Boolean(recorder.isRecording);
+  }, [recorder]);
+
   const discard = useCallback(async () => {
     busyRef.current = true;
     userStoppingRef.current = true;
@@ -237,6 +295,7 @@ export function useRecording(options?: { onInterrupted?: () => void }) {
       }
       activeRef.current = false;
       pausedRef.current = false;
+      suspendedRef.current = false;
       setActive(false);
       setPaused(false);
       await setAudioModeAsync({
@@ -275,7 +334,10 @@ export function useRecording(options?: { onInterrupted?: () => void }) {
     start,
     pause,
     resume,
+    suspendMic,
+    resumeMic,
     stop,
     discard,
+    waitUntilRecording,
   };
 }

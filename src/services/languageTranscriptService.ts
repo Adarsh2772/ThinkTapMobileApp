@@ -1,5 +1,6 @@
 import { ExpoSpeechRecognitionModule } from 'expo-speech-recognition';
 import { Platform } from 'react-native';
+import { AndroidWakeWord } from 'android-wake-word';
 
 import { ensureRecordingsDirectory } from '@/src/services/audioStorage';
 
@@ -177,6 +178,7 @@ function canPersistRecognitionAudio(): boolean {
 export async function startLiveRecognition(options: LiveRecognitionOptions): Promise<void> {
   const lang = options.lang;
   const persist = (options.persist ?? true) && canPersistRecognitionAudio();
+  const androidPkg = resolveAndroidSpeechPackage();
 
   let recordingOptions: { persist: true; outputDirectory: string; outputFileName: string } | undefined;
   if (persist) {
@@ -194,6 +196,17 @@ export async function startLiveRecognition(options: LiveRecognitionOptions): Pro
     console.log('[STT] start', { lang, persist, at: Date.now() });
   }
 
+  // Mute OEM SpeechRecognizer start chimes before every session.
+  // Works on all Android versions where the native module is present
+  // (not gated on FGS / API 26+ isSupported).
+  if (Platform.OS === 'android') {
+    try {
+      AndroidWakeWord.silenceRecognitionUi();
+    } catch {
+      // ignore
+    }
+  }
+
   ExpoSpeechRecognitionModule.start({
     lang,
     interimResults: true,
@@ -206,9 +219,12 @@ export async function startLiveRecognition(options: LiveRecognitionOptions): Pro
     // Silence lengths are deliberately not set here: expo-speech-recognition
     // applies its own long continuous-mode values last, and overriding them
     // makes the engine close the session on every natural pause.
+    // Prefer free-form on every Android version; do not set API-specific extras.
     androidIntentOptions: {
       EXTRA_LANGUAGE_MODEL: 'free_form',
+      EXTRA_PARTIAL_RESULTS: true,
     },
+    ...(androidPkg ? { androidRecognitionServicePackage: androidPkg } : {}),
   });
 }
 
@@ -228,14 +244,38 @@ export function abortLiveRecognition(): void {
   }
 }
 
-/** Strip trailing stop-command words from a transcript. */
+/** Strip trailing / repeated stop-command words from a transcript. */
 export function stripTrailingStopCommand(transcript: string): string {
-  const cleaned = transcript.replace(/\s+/g, ' ').trim();
-  if (!cleaned) return '';
+  let result = transcript.replace(/\s+/g, ' ').trim();
+  if (!result) return '';
+
+  // Cut a trailing run of “stop recording” (user often repeats the command).
+  const cluster =
+    /\bstop\s+recording\b(?:[\s,.]*(?:hitting\s+that|please|stop|recording|the|end|finish))*\s*$/i;
+  if (cluster.test(result)) {
+    const cut = result.search(/\bstop\s+recording\b/i);
+    if (cut >= 0) {
+      const rest = result.slice(cut).toLowerCase();
+      const words = rest.replace(/[.,!]/g, ' ').split(/\s+/).filter(Boolean);
+      const cmd = new Set([
+        'stop',
+        'recording',
+        'hitting',
+        'that',
+        'please',
+        'the',
+        'end',
+        'finish',
+      ]);
+      if (words.length > 0 && words.filter((w) => cmd.has(w)).length >= words.length * 0.55) {
+        result = result.slice(0, cut).trim();
+      }
+    }
+  }
 
   const patterns = [
-    /\b(please\s+)?stop(\s+recording)?\s*$/i,
-    /\b(end|finish)\s+recording\s*$/i,
+    /\b(please\s+)?stop(\s+(the\s+)?recording)?\s*$/i,
+    /\b(end|finish)\s+(the\s+)?recording\s*$/i,
     /\b(please\s+)?pause(\s+(the\s+)?recording)?\s*$/i,
     /\b(resume|continue)(\s+recording)?\s*$/i,
     /(थांबा|थांब|थांबवा|बंद\s*करा?|बंद\s*करो|रोका|रुको|बस)\s*$/u,
@@ -249,9 +289,13 @@ export function stripTrailingStopCommand(transcript: string): string {
     /(بند\s*کرو|روکو)\s*$/u,
   ];
 
-  let result = cleaned;
-  for (const re of patterns) {
-    result = result.replace(re, '').trim();
+  for (let i = 0; i < 4; i += 1) {
+    let next = result;
+    for (const re of patterns) {
+      next = next.replace(re, '').trim();
+    }
+    if (next === result) break;
+    result = next;
   }
   return result;
 }

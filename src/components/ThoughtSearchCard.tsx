@@ -22,8 +22,6 @@ function Field({ label, value, maxChars }: { label: string; value: string; maxCh
 }
 
 export function ThoughtSearchCard({ idea, onPress }: Props) {
-  const source = idea.analysis?.sourceOfInspiration ?? '';
-  const insight = idea.analysis?.thought?.trim() ?? '';
   const thought = idea.transcript?.trim() ?? '';
 
   return (
@@ -34,8 +32,6 @@ export function ThoughtSearchCard({ idea, onPress }: Props) {
     >
       <Text style={styles.date}>{relativeDate(idea.createdAt)}</Text>
       <Field label="Thought" value={thought} maxChars={160} />
-      <Field label="Source" value={source} maxChars={90} />
-      <Field label="AI Core Insight" value={insight} maxChars={90} />
       {!thought ? (
         <Text style={styles.missing}>No raw transcript on this thought yet.</Text>
       ) : null}

@@ -1,9 +1,6 @@
 import { transcriptFromWhisperSegments } from './hallucination.js';
 import { buildLanguage } from './languages.js';
 
-/** Native-script seed. English instructions bias Whisper to English. */
-const AUTO_PROMPT = 'आज मौसम अच्छा है। आज मी ऑफिसला जाणार आहे. कल मुझे meeting के लिए जाना है।';
-
 export function whisperConfigFromEnv() {
   const groq = process.env.GROQ_API_KEY?.trim();
   const openai = process.env.OPENAI_API_KEY?.trim();
@@ -37,8 +34,8 @@ function httpError(message, status) {
 }
 
 /**
- * Groq / OpenAI Whisper — language is omitted so the model auto-detects.
- * preferredLanguage is accepted but never forced into the upstream request.
+ * Groq / OpenAI Whisper. When preferredLanguage is a BCP-47 / ISO code
+ * (mr-IN, hi, …) it is sent as a hint so Marathi/Hindi stay in the right script.
  */
 export async function transcribeWithWhisper(file, options = {}) {
   void options.preferredLanguage;
@@ -66,7 +63,6 @@ export async function transcribeWithWhisper(file, options = {}) {
   form.append('model', provider.sttModel);
   form.append('response_format', provider.responseFormat);
   form.append('temperature', '0');
-  form.append('prompt', AUTO_PROMPT);
 
   const response = await fetch(`${provider.baseUrl}/audio/transcriptions`, {
     method: 'POST',

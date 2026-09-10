@@ -43,8 +43,20 @@ const CATEGORY_HINTS: { category: string; keywords: string[] }[] = [
       'plot',
       'watching',
       'फिल्म',
+      'फिल्मे',
       'मूवी',
+      'सिनेमा',
+      'कहानी',
+      'अभिनेता',
+      'अभिनेत्री',
+      'निर्देशक',
       'चित्रपट',
+      'कथा',
+      'नायक',
+      'नायिका',
+      'दिग्दर्शक',
+      'बॉलिवूड',
+      'बॉलीवुड',
     ],
   },
   {
@@ -176,16 +188,16 @@ const MOCK_BY_LANGUAGE: Record<
 
 function guessCategory(text: string): string {
   const lower = text.toLowerCase();
-  let best = 'Business';
+  let best = '';
   let bestScore = 0;
   for (const hint of CATEGORY_HINTS) {
-    const score = hint.keywords.reduce((n, k) => n + (lower.includes(k) ? 1 : 0), 0);
+    const score = hint.keywords.reduce((n, k) => n + (lower.includes(k.toLowerCase()) ? 1 : 0), 0);
     if (score > bestScore) {
       bestScore = score;
       best = hint.category;
     }
   }
-  return normalizeCategory(bestScore > 0 ? best : 'Business');
+  return normalizeCategory(bestScore > 0 ? best : 'Scripts');
 }
 
 export type WhisperSegment = { no_speech_prob?: number; text?: string };
@@ -438,6 +450,8 @@ export async function enrichIdeaFromAudio(input: {
   durationSec: number;
   /** UI language only — used for demo mocks / fallback display, never forced into Whisper. */
   languageCode?: AppLanguageCode;
+  /** Selected live-STT locale (mr-IN, hi-IN, …) used as a Whisper language hint. */
+  speechLocale?: string;
   onStage?: (stage: 'transcribing' | 'extracting' | 'summarizing') => void;
 }): Promise<EnrichmentResult> {
   const uiLanguageCode = input.languageCode ?? 'en';
@@ -446,7 +460,12 @@ export async function enrichIdeaFromAudio(input: {
   const apiBase = backendBaseUrl();
   if (apiBase) {
     try {
-      const live = await enrichViaBackend(apiBase, input.audioUri, input.onStage);
+      const live = await enrichViaBackend(
+        apiBase,
+        input.audioUri,
+        input.onStage,
+        input.speechLocale,
+      );
       return { ...live, source: 'live' };
     } catch (error) {
       console.warn('Backend transcription failed', error);
@@ -457,7 +476,13 @@ export async function enrichIdeaFromAudio(input: {
   const apiKey = useAiConfigStore.getState().getApiKey();
   if (apiKey) {
     try {
-      const live = await enrichWithCloudStt(apiKey, input.audioUri, uiLanguageCode, input.onStage);
+      const live = await enrichWithCloudStt(
+        apiKey,
+        input.audioUri,
+        uiLanguageCode,
+        input.onStage,
+        input.speechLocale,
+      );
       return { ...live, source: 'live' };
     } catch (error) {
       console.warn('Live transcription failed', error);
@@ -595,9 +620,10 @@ async function whisperTranscribe(
   apiKey: string,
   audioUri: string,
   mime: string,
+  _speechLocale?: string,
 ): Promise<{ text: string; language?: string }> {
   const { name: fileName } = mimeAndName(audioUri);
-  // Omit `language` so the model auto-detects the spoken language.
+  // Omit `language` so Whisper auto-detects whatever the user spoke.
   const uploadResult = await uploadAudioMultipart({
     url: `${provider.baseUrl}/audio/transcriptions`,
     audioUri,
@@ -609,7 +635,6 @@ async function whisperTranscribe(
     fields: {
       model: provider.whisperModel,
       temperature: '0',
-      prompt: whisperPromptFor('auto'),
       response_format: provider.responseFormat,
     },
   });
@@ -649,6 +674,7 @@ async function enrichViaBackend(
   apiBase: string,
   audioUri: string,
   onStage?: (stage: 'transcribing' | 'extracting' | 'summarizing') => void,
+  _speechLocale?: string,
 ): Promise<AiEnrichment> {
   const info = await getInfoAsync(audioUri);
   if (!info.exists) {
@@ -710,6 +736,7 @@ async function enrichWithCloudStt(
   audioUri: string,
   uiLanguageCode: AppLanguageCode,
   onStage?: (stage: 'transcribing' | 'extracting' | 'summarizing') => void,
+  speechLocale?: string,
 ): Promise<AiEnrichment> {
   const info = await getInfoAsync(audioUri);
   if (!info.exists) {
@@ -724,7 +751,7 @@ async function enrichWithCloudStt(
   const provider = providerConfig(apiKey);
   const { mime } = mimeAndName(audioUri);
 
-  const whisper = await whisperTranscribe(provider, apiKey, audioUri, mime);
+  const whisper = await whisperTranscribe(provider, apiKey, audioUri, mime, speechLocale);
 
   let transcript = whisper.text;
   if (!transcript) {

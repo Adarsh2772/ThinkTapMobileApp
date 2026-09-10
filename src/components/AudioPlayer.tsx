@@ -1,10 +1,10 @@
 import { Ionicons } from '@expo/vector-icons';
-import { AndroidWakeWord } from 'android-wake-word';
 import { setAudioModeAsync, useAudioPlayer, useAudioPlayerStatus } from 'expo-audio';
 import { createElement, useEffect, useMemo, useState } from 'react';
 import { Platform, Pressable, StyleSheet, Text, View } from 'react-native';
 
 import { normalizeFileUri } from '@/src/services/audioStorage';
+import { releaseWakeMicForPlayback } from '@/src/services/micHandoff';
 import { useWakeWordStore } from '@/src/store/wakeWordStore';
 import { colors, fonts, radii, spacing, typography } from '@/src/theme/tokens';
 import { formatClock } from '@/src/utils/format';
@@ -13,10 +13,6 @@ type Props = {
   uri: string;
   durationSec: number;
 };
-
-function delay(ms: number) {
-  return new Promise<void>((resolve) => setTimeout(resolve, ms));
-}
 
 async function preparePlaybackAudioMode() {
   await setAudioModeAsync({
@@ -27,16 +23,7 @@ async function preparePlaybackAudioMode() {
 }
 
 async function releaseWakeForPlayback() {
-  useWakeWordStore.getState().setPlaybackActive(true);
-  try {
-    if (AndroidWakeWord.isSupported() && AndroidWakeWord.isRunning() && !AndroidWakeWord.isPaused()) {
-      await AndroidWakeWord.pauseService();
-    }
-  } catch {
-    // still restore volumes
-  }
-  AndroidWakeWord.restoreRecognitionUi();
-  await delay(400);
+  await releaseWakeMicForPlayback();
 }
 
 function endPlaybackHold() {

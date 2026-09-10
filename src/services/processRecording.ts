@@ -7,6 +7,7 @@ import {
   type EnrichmentResult,
 } from '@/src/services/aiService';
 import { analyzeTranscript } from '@/src/services/transcriptAnalysisService';
+import { stripTrailingStopCommand } from '@/src/services/languageTranscriptService';
 import { hasIndicScript, type AppLanguageCode } from '@/src/i18n/languages';
 import { normalizeCategory } from '@/src/theme/tokens';
 import type { Idea, TranscriptAnalysis } from '@/src/types';
@@ -96,6 +97,7 @@ export async function enrichPendingRecording(
         audioUri: pending.audioUri,
         durationSec: pending.durationSec,
         languageCode,
+        speechLocale: pending.speechLocale,
         onStage: reportStage,
       });
     } else if (deviceTranscript) {
@@ -109,6 +111,7 @@ export async function enrichPendingRecording(
         audioUri: pending.audioUri,
         durationSec: pending.durationSec,
         languageCode,
+        speechLocale: pending.speechLocale,
         onStage: reportStage,
       });
     }
@@ -123,7 +126,12 @@ export async function enrichPendingRecording(
       : emptySpeechEnrichment();
   }
 
-  if (looksLikeWhisperHallucination(enrichment.transcript, enrichment.detectedLanguage)) {
+  if (
+    looksLikeWhisperHallucination(enrichment.transcript, enrichment.detectedLanguage) ||
+    (deviceTranscript &&
+      enrichment.transcript.trim().length > 0 &&
+      enrichment.transcript.trim().length < deviceTranscript.length * 0.5)
+  ) {
     enrichment =
       deviceTranscript && !looksLikeWhisperHallucination(deviceTranscript)
         ? enrichIdeaFromDeviceTranscript({
@@ -135,6 +143,16 @@ export async function enrichPendingRecording(
 
   if (!enrichment.transcript.trim()) {
     enrichment = emptySpeechEnrichment();
+  } else {
+    enrichment = {
+      ...enrichment,
+      transcript: stripTrailingStopCommand(enrichment.transcript),
+      title: enrichment.title,
+      summary: enrichment.summary,
+    };
+    if (!enrichment.transcript.trim()) {
+      enrichment = emptySpeechEnrichment();
+    }
   }
 
   onStage?.('summarizing');

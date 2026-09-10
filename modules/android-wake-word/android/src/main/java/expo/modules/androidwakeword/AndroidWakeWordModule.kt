@@ -129,6 +129,14 @@ class AndroidWakeWordModule : Module() {
       RecognitionAudioGuard.swallowRecognizerCue(context)
     }
 
+    Function("holdCaptureMute") {
+      RecognitionAudioGuard.holdCaptureMute(context)
+    }
+
+    Function("releaseCaptureMute") {
+      RecognitionAudioGuard.releaseCaptureMute(context)
+    }
+
     Function("cancelRecognizerHaptic") {
       RecognitionAudioGuard.cancelRecognizerHaptic(context)
     }
@@ -166,11 +174,15 @@ class AndroidWakeWordModule : Module() {
     }
 
     AsyncFunction("listenForStop") {
-      if (!WakeWordForegroundService.isRunning) return@AsyncFunction false
+      if (ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO)
+        != PackageManager.PERMISSION_GRANTED
+      ) {
+        return@AsyncFunction false
+      }
       val intent = Intent(context, WakeWordForegroundService::class.java).apply {
         action = WakeWordForegroundService.ACTION_LISTEN_STOP
       }
-      context.startService(intent)
+      ContextCompat.startForegroundService(context, intent)
       return@AsyncFunction true
     }
 

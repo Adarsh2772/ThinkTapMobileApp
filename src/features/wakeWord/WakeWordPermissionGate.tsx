@@ -116,7 +116,8 @@ export function WakeWordPermissionGate() {
           <Text style={styles.title}>Enable Hey Think Tap?</Text>
           <Text style={styles.body}>
             Allow the microphone (and notifications on Android) so you can say “Hey Think Tap” to
-            open recording hands-free — even when the app is minimized.
+            open recording hands-free — even when the app is minimized. On some phones, also set
+            Battery to Unrestricted for Think Tap so listening is not killed in the background.
           </Text>
 
           <Pressable
