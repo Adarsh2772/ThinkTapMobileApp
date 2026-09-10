@@ -85,6 +85,7 @@ const WAKE_PHRASES = [
   'hey thinktap',
   'hey think app',
   'hey thinktab',
+  'hey think',
   'a think tap',
   'hey thin tap',
   'hey thing tap',

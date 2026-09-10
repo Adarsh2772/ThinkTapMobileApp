@@ -7,15 +7,18 @@ import { useWakeWordStore } from '@/src/store/wakeWordStore';
 export async function beginRecordingSession(
   start: () => Promise<true | null>,
 ): Promise<boolean> {
-  console.log('[RECORDING] start requested');
+  const pressedAt = Date.now();
+  console.log(`RECORDING: Start button pressed: ${pressedAt}`);
   await releaseWakeMicForCapture();
-  console.log('[RECORDING] wake mic released — starting recorder');
+  console.log(`RECORDING: permission/handoff done: ${Date.now()} (+${Date.now() - pressedAt}ms)`);
   const ok = await start();
   if (!ok) {
     useWakeWordStore.getState().setPausedForRecording(false);
-    console.log('[RECORDING] start failed');
+    console.log('RECORDING: start failed');
     return false;
   }
-  console.log('[RECORDING] recorder started isRecording=true');
+  console.log(
+    `RECORDING: recorder started isRecording=true: ${Date.now()} (+${Date.now() - pressedAt}ms)`,
+  );
   return true;
 }

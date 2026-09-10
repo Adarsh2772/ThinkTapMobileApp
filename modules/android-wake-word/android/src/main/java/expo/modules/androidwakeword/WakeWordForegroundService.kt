@@ -66,6 +66,7 @@ class WakeWordForegroundService : Service() {
       "hey thinktap",
       "hey think app",
       "hey thinktab",
+      "hey think",
       "a think tap",
       "hey thin tap",
       "hey thing tap",
@@ -429,6 +430,7 @@ class WakeWordForegroundService : Service() {
         putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_MINIMUM_LENGTH_MILLIS, 1500L)
       }
       recognizer.startListening(intent)
+      Log.i(TAG, "WAKE_WORD: startListening hardReset=$hardReset locale=$recognitionLocale")
     } catch (e: Exception) {
       listeningActive = false
       Log.e(TAG, "startRecognition failed", e)

@@ -134,11 +134,11 @@ export default function SettingsScreen() {
           </View>
           <Text style={styles.hint}>
             {Platform.OS === 'android'
-              ? 'While Think Tap is open, say “Hey Think Tap”, “start recording”, or Marathi “रेकॉर्डिंग सुरू करा”. Closing the app or turning this off stops listening.'
-              : 'When on (app open in the foreground), say “Hey Think Tap”, “start recording”, or “रेकॉर्डिंग सुरू करा” to begin a capture.'}
+              ? 'While Think Tap is open, say “Hey Think”, “Hey Think Tap”, or “start recording”. Closing the app stops listening.'
+              : 'When on (app open in the foreground), say “Hey Think”, “Hey Think Tap”, or “start recording” to begin a capture.'}
             {wakeEnabled
               ? !wakeListeningArmed
-                ? ' Enabled — toggle off and on to start listening after opening the app.'
+                ? ' Enabled — listening arms when the app is open.'
                 : wakeAvailable === false
                   ? ' Speech recognition is unavailable on this device/build.'
                   : wakeListening

@@ -268,6 +268,7 @@ export function useWakeWordListener() {
 
     const subs = [
       AndroidWakeWord.addListener('onWakeDetected', (event) => {
+        console.log('WAKE_WORD: wake word detected', event.transcript);
         setLastHeard(event.transcript);
         fireWakeTrigger();
       }),
@@ -294,6 +295,20 @@ export function useWakeWordListener() {
   useEffect(() => {
     mountedRef.current = true;
     if (!hydrated) return;
+
+    // Preference restored with listeningArmed=false (silent cold start).
+    // When Hey Think Tap is enabled and the app is foreground, arm listening so
+    // "Hey Think" can start recording without requiring a Settings toggle.
+    if (
+      enabled &&
+      !listeningArmed &&
+      !pausedForRecording &&
+      !captureActive &&
+      AppState.currentState === 'active'
+    ) {
+      console.log('WAKE_WORD: auto-arm listening (enabled + foreground)');
+      useWakeWordStore.getState().armListening();
+    }
 
     const sync = async () => {
       if (syncInFlightRef.current) return;
@@ -389,11 +404,21 @@ export function useWakeWordListener() {
 
     const sub = AppState.addEventListener('change', (state) => {
       const wake = useWakeWordStore.getState();
-      if (!wake.enabled || !wake.listeningArmed) return;
+      if (!wake.enabled) return;
+
+      if (state === 'active') {
+        if (!wake.listeningArmed && !wake.pausedForRecording && !wake.captureActive) {
+          console.log('WAKE_WORD: arm on AppState active');
+          useWakeWordStore.getState().armListening();
+        }
+      }
+
+      if (!useWakeWordStore.getState().listeningArmed) return;
       if (useNativeFgs) {
         // Stop the FGS when the app leaves the foreground so SpeechRecognizer
         // cannot keep restarting (and beeping) after the user closes Think Tap.
         if (state !== 'active') {
+          console.log('WAKE_WORD: app background — stop service');
           void AndroidWakeWord.stopService().then(() => {
             AndroidWakeWord.restoreRecognitionUi();
             setListening(false);

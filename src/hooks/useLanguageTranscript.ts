@@ -237,7 +237,7 @@ export function useLanguageTranscript({
       }
       // Routine restarts keep the same locale — only rotate on language-not-supported.
 
-      const settleMs = nativeActiveRef.current ? 450 : fromRestart ? 120 : 250;
+      const settleMs = nativeActiveRef.current ? 200 : fromRestart ? 80 : 80;
       if (nativeActiveRef.current) abortLiveRecognition();
       await new Promise((r) => setTimeout(r, settleMs));
       if (gen !== genRef.current || !enabledRef.current || stopFiredRef.current) {
@@ -432,7 +432,8 @@ export function useLanguageTranscript({
     voiceLocaleIndexRef.current = 0;
 
     if (enabled) {
-      const t = setTimeout(() => void startListening(false), 200);
+      // Short defer so React commit finishes; not a multi-second handoff delay.
+      const t = setTimeout(() => void startListening(false), 50);
       return () => {
         clearTimeout(t);
         stopListening(true);

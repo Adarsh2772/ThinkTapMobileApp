@@ -252,7 +252,9 @@ export default function HomeScreen() {
             </Text>
           ) : null}
           {isRecording && !isPaused && supportsVoiceStop && !liveTranscript ? (
-            <Text style={styles.modeHint}>Say “stop recording” or tap Stop</Text>
+            <Text style={styles.modeHint}>
+              Tap the red button to stop and save, or say “stop recording”
+            </Text>
           ) : null}
           {isRecording && !isPaused && liveTranscript ? (
             <Text style={styles.liveTranscript} numberOfLines={4}>
