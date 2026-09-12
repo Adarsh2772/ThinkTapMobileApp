@@ -15,6 +15,9 @@
       "distribution": "internal",
       "android": {
         "buildType": "apk"
+      },
+      "env": {
+        "EXPO_PUBLIC_GROQ_API_KEY": "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"
       }
     },
     "production": {

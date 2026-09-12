@@ -11,8 +11,8 @@
       "supportsTablet": true,
       "bundleIdentifier": "com.thinktap.app",
       "infoPlist": {
-        "NSMicrophoneUsageDescription": "Allow Think Tap to use the microphone to record ideas and for Hey Think Tap.",
-        "NSSpeechRecognitionUsageDescription": "Allow Think Tap to convert your spoken ideas to text in your chosen language, and to recognize Hey Think Tap."
+        "NSMicrophoneUsageDescription": "Allow Think Tap to use the microphone for speech transcription and Hey Think Tap.",
+        "NSSpeechRecognitionUsageDescription": "Allow Think Tap to convert your spoken ideas to text in your chosen language."
       }
     },
     "android": {
@@ -36,7 +36,8 @@
         "android.permission.POST_NOTIFICATIONS",
         "android.permission.FOREGROUND_SERVICE",
         "android.permission.FOREGROUND_SERVICE_MICROPHONE",
-        "android.permission.USE_FULL_SCREEN_INTENT"
+        "android.permission.USE_FULL_SCREEN_INTENT",
+        "android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK"
       ],
       "predictiveBackGestureEnabled": false
     },
@@ -84,9 +85,9 @@
     "extra": {
       "router": {},
       "eas": {
-        "projectId": "cd732775-e3c1-4d25-b564-a4e46e49d13b"
+        "projectId": "43016644-5f08-4d02-ad5d-e662ac9e9d64"
       }
     },
-    "owner": "adarsh1005"
+    "owner": "akshay141510"
   }
 }
