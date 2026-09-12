@@ -93,7 +93,9 @@ export const useWakeWordStore = create<WakeWordState>((set, get) => ({
 
   fireWakeTrigger: () => {
     const now = Date.now();
-    if (now - lastFireAt < 3000) return;
+    // Keep debounce short so a second clear "start recording" still works
+    // after a missed / partial recognition.
+    if (now - lastFireAt < 1800) return;
     lastFireAt = now;
     set({
       triggerToken: get().triggerToken + 1,

@@ -64,12 +64,12 @@ export function VoiceAssistantStage({
     ? 'Starting your thought…'
     : isPaused
       ? supportsVoiceStop
-        ? 'Say “Resume” or “Hey ThinkTap, stop”'
+        ? 'Say “Resume”, or tap Resume'
         : 'Tap Resume to continue'
       : isRecording
         ? supportsVoiceStop
-          ? 'Say “Hey ThinkTap, stop” or tap Stop'
-          : 'Tap Stop to finish'
+          ? 'Say “stop”, or tap the button to finish'
+          : 'Tap the button to finish'
         : wakeEnabled
           ? 'Or tap the mic to record'
           : '';
@@ -112,7 +112,7 @@ export function VoiceAssistantStage({
         <Text style={styles.hint}>Live preview: {speechLocaleName}</Text>
       ) : null}
       {isRecording && !isPaused && liveTranscript ? (
-        <Text style={styles.transcript} numberOfLines={4}>
+        <Text style={styles.transcript} numberOfLines={8}>
           {liveTranscript}
         </Text>
       ) : null}

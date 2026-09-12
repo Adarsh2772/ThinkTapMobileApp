@@ -267,13 +267,16 @@ export function useWakeWordListener() {
 
     const sync = async () => {
       if (useNativeFgs) {
-        AndroidWakeWord.restoreRecognitionUi();
         if (!enabled) {
           await AndroidWakeWord.stopService();
           AndroidWakeWord.restoreRecognitionUi();
           setListening(false);
           return;
         }
+
+        // Wake is on — keep OEM STT muted. Never restore/unmute here or
+        // ColorOS plays tik-tik on every SpeechRecognizer restart (Android 11).
+        AndroidWakeWord.silenceRecognitionUi();
 
         const micOk = await ensureAndroidMicPermission();
         const notifOk = await ensureAndroidNotificationPermission();
@@ -299,7 +302,9 @@ export function useWakeWordListener() {
           if (AndroidWakeWord.isRunning() && !AndroidWakeWord.isPaused()) {
             await AndroidWakeWord.pauseService();
           }
-          AndroidWakeWord.restoreRecognitionUi();
+          // Stay muted while a take / playback holds the mic — unmuting lets
+          // OEM listening chimes leak on the next recognizer start.
+          AndroidWakeWord.silenceRecognitionUi();
           setListening(false);
           return;
         }
@@ -319,6 +324,7 @@ export function useWakeWordListener() {
           ) {
             return;
           }
+          AndroidWakeWord.silenceRecognitionUi();
           try {
             await AndroidWakeWord.startService();
           } catch (e) {
@@ -327,7 +333,10 @@ export function useWakeWordListener() {
             return;
           }
         } else if (AndroidWakeWord.isPaused()) {
+          AndroidWakeWord.silenceRecognitionUi();
           await AndroidWakeWord.resumeService();
+        } else {
+          AndroidWakeWord.silenceRecognitionUi();
         }
 
         const pending = await AndroidWakeWord.consumePendingWake();

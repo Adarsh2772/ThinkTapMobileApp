@@ -1,9 +1,10 @@
-/** Canonical + phonetic variants for "Hey Think Tap" (like OneTap wake phrases). */
+/** Canonical + phonetic variants for "Hey Think Tap" (ASR often mangles words). */
 const WAKE_PHRASES = [
   'hey think tap',
   'hey thinktap',
   'hey think app',
   'hey thinktab',
+  'hey think tab',
   'a think tap',
   'hey thin tap',
   'hey thing tap',
@@ -11,6 +12,14 @@ const WAKE_PHRASES = [
   'hey think that',
   'hey think cap',
   'hey think top',
+  'hey think',
+  'hi think',
+  'hey siri',
+  'hey theory',
+  'hey sync tap',
+  'hey sink tap',
+  'hey thank tap',
+  'a think app',
   'think tap',
   'thinktap',
   'think app',
@@ -20,7 +29,17 @@ const WAKE_PHRASES = [
   'hey thinktap start',
   'hey think tap start',
   'begin recording',
+  'begin record',
 ];
+
+/**
+ * Loose ASR matches — Google often drops "tap" or hears "Siri" / "thing".
+ * Only used for wake (idle), never while dictating an idea.
+ */
+const SHORT_WAKE =
+  /\b(hey|hi|a|okay|ok)\s+(think|thing|sync|sink|thin|thank|siri|theory|thnk)\b/;
+const START_RECORDING =
+  /\b(start|begin)\s+(the\s+)?record(ing)?\b/;
 
 /**
  * Commands come in two strengths, because the recognizer reports a partial
@@ -100,9 +119,16 @@ export function normalizeSpeech(text: string): string {
 export function matchesWakePhrase(text: string): boolean {
   const normalized = normalizeSpeech(text);
   if (!normalized) return false;
-  return WAKE_PHRASES.some(
-    (phrase) => normalized === phrase || normalized.includes(phrase),
-  );
+  if (
+    WAKE_PHRASES.some(
+      (phrase) => normalized === phrase || normalized.includes(phrase),
+    )
+  ) {
+    return true;
+  }
+  if (SHORT_WAKE.test(normalized)) return true;
+  if (START_RECORDING.test(normalized)) return true;
+  return false;
 }
 
 function matchesCommand(text: string, commands: string[], words: string[]): boolean {

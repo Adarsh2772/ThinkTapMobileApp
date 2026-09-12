@@ -8,6 +8,7 @@ import { getSpeechLocale } from '@/src/features/languageTranscript/locales';
 import { useIdeaCapture } from '@/src/hooks/useIdeaCapture';
 import { useDrawerOptional } from '@/src/navigation/DrawerContext';
 import { releaseWakeMicForCapture } from '@/src/services/micHandoff';
+import { abortLiveRecognition } from '@/src/services/languageTranscriptService';
 import { resolveSpokenLanguage } from '@/src/i18n/languages';
 import {
   buildLocalIdea,
@@ -17,6 +18,7 @@ import type { ProcessingStage } from '@/src/types';
 import {
   announceRecordingStarted,
   announceRecordingStopped,
+  prefetchRecordingVoice,
 } from '@/src/services/recordingFeedback';
 import { useAuthStore } from '@/src/store/authStore';
 import { useIdeasStore } from '@/src/store/ideasStore';
@@ -49,6 +51,10 @@ export default function HomeScreen() {
   useEffect(() => {
     const sub = AppState.addEventListener('change', setAppState);
     return () => sub.remove();
+  }, []);
+
+  useEffect(() => {
+    prefetchRecordingVoice();
   }, []);
 
   const [organizing, setOrganizing] = useState(false);
@@ -150,8 +156,10 @@ export default function HomeScreen() {
         showToast(reason, 'error');
         return;
       }
-      showToast('Your idea has been saved successfully');
+      // Mic already closed — announce only after stop so TTS never enters the file.
       await announceRecordingStopped();
+      // Let wake listening resume quickly after stop (was ~4s dead zone).
+      setPausedForRecording(false);
       const pending = {
         audioUri: result.uri,
         durationSec: result.durationSec,
@@ -159,6 +167,7 @@ export default function HomeScreen() {
         speechLocale: result.speechLocale,
       };
       setPending(pending);
+      // Transcribe after the stop announcement so the file is already finalized.
       void runOrganizeInBackground(pending);
     } finally {
       stoppingRef.current = false;
@@ -199,15 +208,12 @@ export default function HomeScreen() {
   // OS STT session: spoken Stop / Pause / Resume.
   useEffect(() => {
     setVoiceStopHandler(() => {
-      showToast('Heard “Stop” — finishing recording');
       void finishRecording();
     });
     setVoicePauseHandler(() => {
-      showToast('Heard “Pause”');
       void onPausePress();
     });
     setVoiceResumeHandler(() => {
-      showToast('Heard “Resume”');
       void onResumePress();
     });
     return () => {
@@ -229,29 +235,38 @@ export default function HomeScreen() {
   // WakeWordProvider already routes to Home for this token.
   useEffect(() => {
     if (!triggerToken || triggerToken === lastTrigger.current) return;
+    // Wait until foreground — do not consume the token yet.
     if (appState !== 'active') return;
-    lastTrigger.current = triggerToken;
     if (Date.now() - triggerAt > 30_000) {
+      lastTrigger.current = triggerToken;
       setCaptureStarting(false);
       return;
     }
-    if (isRecording || status === 'stopping' || stoppingRef.current) return;
+    // While stopping, keep the token so we retry when idle (do not consume).
+    if (status === 'stopping' || stoppingRef.current) return;
+    // Already recording — ignore this wake.
+    if (isRecording) {
+      lastTrigger.current = triggerToken;
+      setCaptureStarting(false);
+      return;
+    }
 
+    lastTrigger.current = triggerToken;
     // Holds the wake listener off for the whole handoff. Releasing the mic
     // takes a few seconds, and without this the listener's resume timer can
     // grab the mic back before the recognizer has it.
     setCaptureStarting(true);
     void (async () => {
       try {
-        await releaseWakeMicForCapture();
+        // Overlap wake-mic release with instant vibrate/toast so start feels immediate.
+        await Promise.all([releaseWakeMicForCapture(), announceRecordingStarted()]);
+        abortLiveRecognition();
         const ok = await start();
         if (!ok) {
           showToast('Could not start recording', 'error');
           Alert.alert('Hey Think Tap', 'Heard the wake phrase, but recording could not start.');
           return;
         }
-        showToast('Recording started');
-        await announceRecordingStarted();
       } finally {
         setCaptureStarting(false);
       }
@@ -265,7 +280,6 @@ export default function HomeScreen() {
     lastStop.current = stopToken;
     if (!isRecording && status !== 'stopping') return;
     if (stoppingRef.current) return;
-    showToast('Heard “Stop” — finishing recording');
     void finishRecording();
   }, [stopToken, isRecording, status, finishRecording]);
 
@@ -279,15 +293,15 @@ export default function HomeScreen() {
 
     setCaptureStarting(true);
     try {
-      await releaseWakeMicForCapture();
+      // Overlap wake-mic release with instant vibrate/toast — do not wait for TTS.
+      await Promise.all([releaseWakeMicForCapture(), announceRecordingStarted()]);
+      abortLiveRecognition();
       const ok = await start();
       if (!ok) {
         showToast(error ?? 'Microphone permission required', 'error');
         if (error) Alert.alert('Microphone', error);
         return;
       }
-      showToast('Recording started');
-      await announceRecordingStarted();
     } finally {
       setCaptureStarting(false);
     }

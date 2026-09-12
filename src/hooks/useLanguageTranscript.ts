@@ -38,15 +38,78 @@ function normalize(text: string): string {
   return text.replace(/\s+/g, ' ').trim();
 }
 
+function isDevanagari(text: string): boolean {
+  return /[\u0900-\u097F]/.test(text);
+}
+
+function isIndicLocale(locale: string): boolean {
+  return /^(hi|mr|bn|te|ta|gu|kn|ml|pa|or|as|ur)-/i.test(locale);
+}
+
 /**
- * Tried in order when the chosen language has no speech model on the device.
- * Without this the engine rejects every start and the take records nothing.
+ * When the chosen Indian locale is missing a speech pack, try a sibling Indic
+ * locale — never silent-fallback to English (that produces "me office la jaat ahe").
  */
-const FALLBACK_LOCALES: Array<SpeechLocaleCode | 'en-US'> = ['en-IN', 'en-US'];
+function fallbackChainFor(primary: SpeechLocaleCode): Array<SpeechLocaleCode | 'en-US'> {
+  if (primary === 'en-IN' || primary === 'en-US') {
+    return (['en-IN', 'en-US'] as const).filter((l) => l !== primary);
+  }
+  if (primary === 'hi-IN') return ['mr-IN'];
+  if (primary === 'mr-IN') return ['hi-IN'];
+  if (isIndicLocale(primary)) return ['hi-IN'];
+  return [];
+}
+
+/** Prefer a Devanagari hypothesis when the user asked for Hindi/Marathi. */
+function pickBestTranscript(
+  results: Array<{ transcript?: string } | undefined>,
+  locale: string,
+): string {
+  const texts = results
+    .map((item) => item?.transcript?.trim() ?? '')
+    .filter(Boolean);
+  if (!texts.length) return '';
+  if (locale === 'hi-IN' || locale === 'mr-IN') {
+    const native = texts.find(isDevanagari);
+    if (native) return native;
+  }
+  return texts[0];
+}
+
+/**
+ * Merge overlapping STT finals. Google often re-emits the whole utterance with
+ * small edits — prefix-only merge drops Marathi/Hindi words.
+ */
+function mergeTranscript(committed: string, incoming: string): string {
+  const prev = normalize(committed);
+  const next = normalize(incoming);
+  if (!prev) return next;
+  if (!next) return prev;
+  if (next === prev) return prev;
+  if (prev.endsWith(next)) return prev;
+  if (next.startsWith(prev)) return next;
+
+  const prevCompact = prev.replace(/\s+/g, '');
+  const nextCompact = next.replace(/\s+/g, '');
+  if (nextCompact.startsWith(prevCompact)) return next;
+  if (prevCompact.startsWith(nextCompact)) return prev;
+  if (nextCompact.includes(prevCompact) && next.length >= prev.length) return next;
+  if (prevCompact.includes(nextCompact) && prev.length >= next.length) return prev;
+
+  const prevWords = prev.split(' ');
+  for (let n = Math.min(6, prevWords.length); n >= 1; n -= 1) {
+    const tail = prevWords.slice(-n).join(' ');
+    if (tail.length >= 2 && next.startsWith(tail)) {
+      return normalize(`${prevWords.slice(0, -n).join(' ')} ${next}`);
+    }
+  }
+
+  return normalize(`${prev} ${next}`);
+}
 
 const LANGUAGE_UNAVAILABLE_MESSAGE =
-  'Speech recognition is not available for this language on your device. ' +
-  'Pick another language in Settings, or turn on “Save audio recording”.';
+  'Speech recognition for this language is not installed on your device. ' +
+  'Open Settings → Transcription language and download Hindi/Marathi, or pick another language.';
 
 /**
  * Live OS speech-to-text for idea capture.
@@ -147,8 +210,13 @@ export function useLanguageTranscript({
     const committed = normalize(finalsRef.current.join(' '));
 
     if (!asFinal) {
+      // Prefer the longest evolving hypothesis (Indic engines rewrite often).
       if (committed && text.startsWith(committed)) {
         interimRef.current = text.slice(committed.length).trim();
+      } else if (committed && text.replace(/\s+/g, '').startsWith(committed.replace(/\s+/g, ''))) {
+        interimRef.current = text;
+        // Treat as a full rewrite of the open utterance.
+        finalsRef.current = [];
       } else {
         interimRef.current = text;
       }
@@ -158,13 +226,8 @@ export function useLanguageTranscript({
 
     if (!committed) {
       finalsRef.current = [text];
-    } else if (text.startsWith(committed)) {
-      const rest = text.slice(committed.length).trim();
-      if (rest) finalsRef.current.push(rest);
-    } else if (committed.endsWith(text) || text === committed) {
-      // duplicate final from the engine — ignore
     } else {
-      finalsRef.current.push(text);
+      finalsRef.current = [mergeTranscript(committed, text)];
     }
     interimRef.current = '';
     publish();
@@ -285,17 +348,20 @@ export function useLanguageTranscript({
   };
 
   /**
-   * The device has no speech model for this language. Step down to English
-   * before giving up — retrying the rejected locale would loop forever while
-   * the UI shows a recording that captures nothing.
+   * The device has no speech model for this language. Step to a sibling Indic
+   * locale — never English, which romanizes Hindi/Marathi speech.
    */
   const handleLanguageUnavailable = () => {
-    const nextIndex = FALLBACK_LOCALES.findIndex(
+    const chain = fallbackChainFor(localeRef.current);
+    const nextIndex = chain.findIndex(
       (loc, i) => i > fallbackIndexRef.current && loc !== activeLocaleRef.current,
     );
     if (nextIndex >= 0) {
       fallbackIndexRef.current = nextIndex;
-      activeLocaleRef.current = FALLBACK_LOCALES[nextIndex];
+      activeLocaleRef.current = chain[nextIndex];
+      if (__DEV__) {
+        console.log('[STT] locale fallback', localeRef.current, '→', activeLocaleRef.current);
+      }
       scheduleRestart(400);
       return;
     }
@@ -310,7 +376,7 @@ export function useLanguageTranscript({
     if (nativeGenRef.current !== genRef.current) return;
 
     const results = event.results ?? [];
-    const top = results[0]?.transcript?.trim() ?? '';
+    const top = pickBestTranscript(results, activeLocaleRef.current);
     if (!top) return;
 
     // After Stop, still accept the engine's final flush so the last words are kept.

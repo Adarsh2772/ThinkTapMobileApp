@@ -131,15 +131,6 @@ export function MicButton({
               <Text style={[styles.sideBtnText, styles.pauseBtnText]}>Pause</Text>
             </Pressable>
           )}
-          <Pressable
-            onPress={onPress}
-            style={({ pressed }) => [styles.sideBtn, styles.stopBtn, pressed && styles.pressed]}
-            accessibilityRole="button"
-            accessibilityLabel="Stop recording"
-          >
-            <Ionicons name="stop" size={20} color={colors.onPrimary} />
-            <Text style={styles.sideBtnText}>Stop</Text>
-          </Pressable>
         </View>
       ) : null}
     </View>
@@ -215,9 +206,6 @@ const styles = StyleSheet.create({
   },
   resumeBtn: {
     backgroundColor: colors.secondary,
-  },
-  stopBtn: {
-    backgroundColor: colors.accent,
   },
   sideBtnText: {
     fontFamily: fonts.bodySemi,
