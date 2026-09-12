@@ -1,0 +1,182 @@
+/** Canonical + phonetic variants for "Hey Think Tap" (ASR often mangles words). */
+const WAKE_PHRASES = [
+  'hey think tap',
+  'hey thinktap',
+  'hey think app',
+  'hey thinktab',
+  'hey think tab',
+  'a think tap',
+  'hey thin tap',
+  'hey thing tap',
+  'hi think tap',
+  'hey think that',
+  'hey think cap',
+  'hey think top',
+  'hey think',
+  'hi think',
+  'hey siri',
+  'hey theory',
+  'hey sync tap',
+  'hey sink tap',
+  'hey thank tap',
+  'a think app',
+  'think tap',
+  'thinktap',
+  'think app',
+  'start recording',
+  'start record',
+  'start the recording',
+  'hey thinktap start',
+  'hey think tap start',
+  'begin recording',
+  'begin record',
+];
+
+/**
+ * Loose ASR matches — Google often drops "tap" or hears "Siri" / "thing".
+ * Only used for wake (idle), never while dictating an idea.
+ */
+const SHORT_WAKE =
+  /\b(hey|hi|a|okay|ok)\s+(think|thing|sync|sink|thin|thank|siri|theory|thnk)\b/;
+const START_RECORDING =
+  /\b(start|begin)\s+(the\s+)?record(ing)?\b/;
+
+/**
+ * Commands come in two strengths, because the recognizer reports a partial
+ * hypothesis for every word you speak while dictating.
+ *
+ * COMMANDS are unambiguous enough to honour anywhere in a sentence. WORDS are
+ * everyday speech ("stop", "hold", "बस") and only count when they are the whole
+ * utterance — otherwise "we should stop doing that" ends the take mid-idea.
+ */
+const PAUSE_COMMANDS = ['pause recording', 'pause the recording', 'pause record'];
+const PAUSE_WORDS = ['pause', 'please pause', 'hold', 'hold on'];
+
+/**
+ * WHY 'start recording' was removed: it is also a WAKE phrase. Leaving it here
+ * made "start recording" ambiguous between beginning a new take and un-pausing
+ * the current one, so the wrong action fired roughly half the time.
+ */
+const RESUME_COMMANDS = [
+  'resume recording',
+  'continue recording',
+  'resume',
+];
+const RESUME_WORDS = ['resume', 'continue', 'start', 'go on', 'carry on'];
+
+/** Ends an active recording (English + Indian languages). */
+const STOP_COMMANDS = [
+  'stop recording',
+  'stop record',
+  'stop the recording',
+  'hey think tap stop',
+  'hey thinktap stop',
+  'hey think tap, stop',
+  'hey thinktap, stop',
+  'think tap stop',
+  'end recording',
+  'finish recording',
+  'रिकॉर्डिंग बंद करा',
+  'रिकॉर्डिंग बंद करो',
+];
+const STOP_WORDS = [
+  'stop',
+  'please stop',
+  'that is all',
+  "that's all",
+  'im done',
+  "i'm done",
+  'i am done',
+  // Marathi / Hindi
+  'थांब',
+  'थांबा',
+  'थांबवा',
+  'बंद',
+  'बंद करा',
+  'बंद कर',
+  'रोका',
+  'रुको',
+  'बस',
+  // Other Indian languages (common “stop” commands)
+  'நிறுத்து',
+  'বন্ধ কর',
+  'থামো',
+  'ఆపు',
+  'ನಿಲ್ಲಿಸಿ',
+  'നിർത്തുക',
+  'બંધ કરો',
+  'ਬੰਦ ਕਰੋ',
+];
+
+export function normalizeSpeech(text: string): string {
+  return text
+    .toLowerCase()
+    // Keep Latin + major Indic scripts and digits.
+    .replace(
+      /[^\w\u0900-\u097F\u0980-\u09FF\u0A00-\u0A7F\u0A80-\u0AFF\u0B00-\u0B7F\u0B80-\u0BFF\u0C00-\u0C7F\u0C80-\u0CFF\u0D00-\u0D7F\s']/gi,
+      ' ',
+    )
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+const WAKE_SUFFIX_STOP = /\b(stop|end|finish|pause)\b\s*$/;
+
+/**
+ * WHY: matchesWakePhrase matched on substrings including the bare token
+ * "thinktap". So "hey thinktap stop" also matched the WAKE phrase, and because
+ * wake is evaluated before stop, saying stop re-started a take instead of
+ * ending it. Any utterance that is a stop or pause command must never be read
+ * as a wake, whatever else it contains.
+ */
+function isCommandUtterance(normalized: string): boolean {
+  if (STOP_COMMANDS.some((p) => normalized.includes(p))) return true;
+  if (PAUSE_COMMANDS.some((p) => normalized.includes(p))) return true;
+  if (WAKE_SUFFIX_STOP.test(normalized)) return true;
+  return false;
+}
+
+export function matchesWakePhrase(text: string): boolean {
+  const normalized = normalizeSpeech(text);
+  if (!normalized) return false;
+  if (isCommandUtterance(normalized)) return false;
+  if (
+    WAKE_PHRASES.some(
+      (phrase) => normalized === phrase || normalized.includes(phrase),
+    )
+  ) {
+    return true;
+  }
+  if (SHORT_WAKE.test(normalized)) return true;
+  if (START_RECORDING.test(normalized)) return true;
+  return false;
+}
+
+function matchesCommand(text: string, commands: string[], words: string[]): boolean {
+  const normalized = normalizeSpeech(text);
+  if (!normalized) return false;
+  if (commands.some((phrase) => normalized.includes(phrase))) return true;
+  return words.some((phrase) => normalized === phrase);
+}
+
+export function matchesStopPhrase(text: string): boolean {
+  const normalized = normalizeSpeech(text);
+  if (!normalized) return false;
+  // "hey think tap stop" / "hey thinktap, stop" - name then a trailing stop.
+  if (/\bthink\s?(tap|app|tab|that|cap|top)\b/.test(normalized)) {
+    if (WAKE_SUFFIX_STOP.test(normalized)) return true;
+  }
+  return matchesCommand(text, STOP_COMMANDS, STOP_WORDS);
+}
+
+export function matchesPausePhrase(text: string): boolean {
+  return matchesCommand(text, PAUSE_COMMANDS, PAUSE_WORDS);
+}
+
+export function matchesResumePhrase(text: string): boolean {
+  return matchesCommand(text, RESUME_COMMANDS, RESUME_WORDS);
+}
+
+export function hasDevanagari(text: string): boolean {
+  return /[\u0900-\u097F]/.test(text);
+}

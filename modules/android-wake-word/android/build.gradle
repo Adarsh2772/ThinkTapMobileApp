@@ -1,0 +1,42 @@
+plugins {
+  id 'com.android.library'
+  id 'expo-module-gradle-plugin'
+}
+
+group = 'expo.modules.androidwakeword'
+version = '1.0.0'
+
+android {
+  namespace "expo.modules.androidwakeword"
+  defaultConfig {
+    versionCode 1
+    versionName "1.0.0"
+  }
+
+  // WHY: the Vosk model is already compressed. Letting AAPT compress it again
+  // makes the APK larger and slows the first unpack.
+  androidResources {
+    noCompress 'mdl', 'fst', 'conf', 'int', 'txt', 'dubm', 'mat', 'ie', 'carpa'
+  }
+
+  packagingOptions {
+    pickFirst '**/libvosk.so'
+  }
+}
+
+dependencies {
+  /**
+   * Vosk - Apache 2.0, offline speech recognition.
+   *
+   * WHY Vosk and not Picovoice Porcupine: Porcupine's free tier was
+   * discontinued on 30 June 2026 and existing free keys were disabled. Its
+   * lowest paid plan starts at $6000. Vosk is genuinely free with no account,
+   * no key, no usage limit and no licensing risk.
+   *
+   * Vosk detects COMMANDS only. The user's transcript comes from Whisper on
+   * the saved WAV, because the small offline model is not accurate enough to
+   * be the Human Signal.
+   */
+  implementation 'com.alphacephei:vosk-android:0.3.47@aar'
+  implementation 'net.java.dev.jna:jna:5.13.0@aar'
+}

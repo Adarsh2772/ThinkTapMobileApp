@@ -1,0 +1,21 @@
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+  <uses-permission android:name="android.permission.RECORD_AUDIO" />
+  <uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS" />
+  <uses-permission android:name="android.permission.VIBRATE" />
+  <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+  <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MICROPHONE" />
+  <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+
+  <application>
+    <!--
+      WHY foregroundServiceType="microphone": this service owns the one and only
+      AudioRecord for the whole app. Without the declared type, Android 10+
+      silences the microphone whenever the app is not visible.
+    -->
+    <service
+      android:name="expo.modules.androidwakeword.AudioCaptureService"
+      android:enabled="true"
+      android:exported="false"
+      android:foregroundServiceType="microphone" />
+  </application>
+</manifest>

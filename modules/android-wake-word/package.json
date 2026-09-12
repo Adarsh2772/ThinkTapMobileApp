@@ -1,0 +1,16 @@
+{
+  "name": "android-wake-word",
+  "version": "1.0.0",
+  "description": "Android foreground-service wake word for Hey Think Tap",
+  "main": "index.ts",
+  "types": "src/index.ts",
+  "scripts": {},
+  "keywords": ["expo", "android", "wake-word"],
+  "author": "",
+  "license": "MIT",
+  "peerDependencies": {
+    "expo": "*",
+    "react": "*",
+    "react-native": "*"
+  }
+}
