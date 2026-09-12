@@ -1,5 +1,6 @@
 import { ExpoSpeechRecognitionModule } from 'expo-speech-recognition';
 import { Platform } from 'react-native';
+import { AndroidWakeWord } from 'android-wake-word';
 
 import { ensureRecordingsDirectory } from '@/src/services/audioStorage';
 
@@ -53,9 +54,45 @@ function contextualStringsForLocale(lang: string): string[] {
   ];
   switch (lang) {
     case 'hi-IN':
-      return ['थांबा', 'थांब', 'बंद करो', 'बंद', 'रुको', 'बस', ...sharedEn];
+      return [
+        'थांबा',
+        'थांब',
+        'बंद करो',
+        'बंद',
+        'रुको',
+        'मुझे',
+        'मैं',
+        'ऑफिस',
+        'जा रहा हूँ',
+        'जा रही हूँ',
+        'आज',
+        'कल',
+        'मीटिंग',
+        'काम',
+        ...sharedEn,
+      ];
     case 'mr-IN':
-      return ['थांबा', 'थांब', 'थांबवा', 'बंद करा', 'बंद', 'बस', ...sharedEn];
+      return [
+        'थांबा',
+        'थांब',
+        'थांबवा',
+        'बंद करा',
+        'बंद',
+        'बस',
+        'मी',
+        'मला',
+        'आहे',
+        'आहोत',
+        'ऑफिस',
+        'जात आहे',
+        'जाणार आहे',
+        'आज',
+        'उद्या',
+        'मीटिंग',
+        'काम',
+        'काही',
+        ...sharedEn,
+      ];
     case 'bn-IN':
       return ['বন্ধ কর', 'থামো', 'থামুন', ...sharedEn];
     case 'te-IN':
@@ -176,6 +213,7 @@ function canPersistRecognitionAudio(): boolean {
 export async function startLiveRecognition(options: LiveRecognitionOptions): Promise<void> {
   const lang = options.lang;
   const persist = (options.persist ?? true) && canPersistRecognitionAudio();
+  const androidPkg = resolveAndroidSpeechPackage();
 
   let recordingOptions: { persist: true; outputDirectory: string; outputFileName: string } | undefined;
   if (persist) {
@@ -189,21 +227,30 @@ export async function startLiveRecognition(options: LiveRecognitionOptions): Pro
     }
   }
 
+  if (Platform.OS === 'android') {
+    try {
+      AndroidWakeWord.silenceRecognitionUi();
+    } catch {
+      // ignore
+    }
+  }
+
   ExpoSpeechRecognitionModule.start({
     lang,
     interimResults: true,
     continuous: true,
+    // Punctuation models are English-oriented and can push Latin output for HI/MR.
     addsPunctuation: lang === 'en-IN' || lang === 'en-US',
     requiresOnDeviceRecognition: options.requiresOnDeviceRecognition ?? false,
     iosTaskHint: 'dictation',
     contextualStrings: contextualStringsForLocale(lang),
     ...(recordingOptions ? { recordingOptions } : {}),
-    // Silence lengths are deliberately not set here: expo-speech-recognition
-    // applies its own long continuous-mode values last, and overriding them
-    // makes the engine close the session on every natural pause.
     androidIntentOptions: {
       EXTRA_LANGUAGE_MODEL: 'free_form',
+      EXTRA_LANGUAGE: lang,
+      EXTRA_PARTIAL_RESULTS: true,
     },
+    ...(androidPkg ? { androidRecognitionServicePackage: androidPkg } : {}),
   });
 }
 

@@ -21,7 +21,7 @@ export async function releaseWakeMicForCapture(): Promise<void> {
   const wakeRunning =
     AndroidWakeWord.isSupported() && AndroidWakeWord.isRunning();
   if (!wakeRunning) {
-    AndroidWakeWord.restoreRecognitionUi();
+    AndroidWakeWord.silenceRecognitionUi();
     return;
   }
 
@@ -29,15 +29,15 @@ export async function releaseWakeMicForCapture(): Promise<void> {
     if (!AndroidWakeWord.isPaused()) {
       await AndroidWakeWord.pauseService();
     }
-    const deadline = Date.now() + 700;
+    const deadline = Date.now() + 400;
     while (!AndroidWakeWord.isPaused() && Date.now() < deadline) {
-      await delay(60);
+      await delay(40);
     }
   } catch {
-    // still restore below
+    // still silence below
   }
 
   abortLiveRecognition();
-  AndroidWakeWord.restoreRecognitionUi();
-  await delay(200);
+  AndroidWakeWord.silenceRecognitionUi();
+  await delay(80);
 }

@@ -2,7 +2,7 @@
   "expo": {
     "name": "Think Tap",
     "slug": "think-tap",
-    "version": "1.0.0",
+    "version": "1.0.4",
     "orientation": "portrait",
     "icon": "./assets/images/icon.png",
     "scheme": "thinktap",
@@ -18,7 +18,7 @@
     "android": {
       "package": "com.thinktap.app",
       "adaptiveIcon": {
-        "backgroundColor": "#f9f9ff",
+        "backgroundColor": "#ffffff",
         "foregroundImage": "./assets/images/android-icon-foreground.png",
         "backgroundImage": "./assets/images/android-icon-background.png",
         "monochromeImage": "./assets/images/android-icon-monochrome.png"
@@ -55,7 +55,8 @@
         {
           "image": "./assets/images/splash-icon.png",
           "resizeMode": "contain",
-          "backgroundColor": "#f9f9ff"
+          "backgroundColor": "#ffffff",
+          "imageWidth": 240
         }
       ],
       [
