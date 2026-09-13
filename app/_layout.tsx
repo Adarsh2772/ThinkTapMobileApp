@@ -18,6 +18,7 @@ import 'react-native-reanimated';
 
 import { ToastHost } from '@/src/components/ToastHost';
 import { installLogCapture } from '@/src/services/diagnostics';
+import { SHOW_DIAGNOSTICS } from '@/src/config/features';
 import { WakeWordPermissionGate } from '@/src/features/wakeWord/WakeWordPermissionGate';
 import { WakeWordProvider } from '@/src/features/wakeWord/WakeWordProvider';
 import { DrawerLayout } from '@/src/navigation/DrawerLayout';
@@ -35,10 +36,15 @@ export { ErrorBoundary } from 'expo-router';
 SplashScreen.preventAutoHideAsync();
 
 /**
- * WHY at module scope: capture must be live before any other module logs, so
- * a warning during startup is not lost.
+ * WHY at module scope: capture must be live before any other module logs, so a
+ * warning during startup is not lost.
+ *
+ * WHY gated: with the diagnostics screen hidden there is no way to read the
+ * buffer, so collecting into it would just hold memory for nothing.
  */
-installLogCapture();
+if (SHOW_DIAGNOSTICS) {
+  installLogCapture();
+}
 
 
 export default function RootLayout() {

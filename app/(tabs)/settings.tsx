@@ -22,6 +22,7 @@ import { useSettingsStore } from '@/src/store/settingsStore';
 import { AndroidWakeWord } from 'android-wake-word';
 import { buildReport, clearLogs, logCount } from '@/src/services/diagnostics';
 import { queueSize } from '@/src/services/transcriptionQueue';
+import { SHOW_DIAGNOSTICS } from '@/src/config/features';
 import { useSubscriptionStore } from '@/src/store/subscriptionStore';
 import { useWakeWordStore } from '@/src/store/wakeWordStore';
 import { colors, fonts, radii, spacing, typography } from '@/src/theme/tokens';
@@ -195,6 +196,7 @@ export default function SettingsScreen() {
           <Text style={styles.meta}>Biometrics · iOS always-on wake word</Text>
         </View>
 
+        {SHOW_DIAGNOSTICS ? (
         <View style={styles.card}>
           <Text style={styles.label}>Diagnostics</Text>
           <Text style={styles.value}>Share a report with the developer</Text>
@@ -216,6 +218,7 @@ export default function SettingsScreen() {
             </Text>
           </Pressable>
         </View>
+        ) : null}
 
         <View style={styles.card}>
           <Text style={styles.label}>{tx('appVersion')}</Text>
