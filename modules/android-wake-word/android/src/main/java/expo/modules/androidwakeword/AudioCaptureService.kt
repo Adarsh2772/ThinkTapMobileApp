@@ -77,6 +77,11 @@ class AudioCaptureService : Service() {
     const val ACTION_RESUME_RECORDING = "expo.modules.androidwakeword.RESUME_RECORDING"
     const val ACTION_STOP_RECORDING = "expo.modules.androidwakeword.STOP_RECORDING"
     const val ACTION_DISCARD_RECORDING = "expo.modules.androidwakeword.DISCARD_RECORDING"
+    const val ACTION_SET_COMMANDS = "expo.modules.androidwakeword.SET_COMMANDS"
+    const val ACTION_SUSPEND_MIC = "expo.modules.androidwakeword.SUSPEND_MIC"
+    const val ACTION_RESUME_MIC = "expo.modules.androidwakeword.RESUME_MIC"
+
+    const val EXTRA_COMMANDS_ENABLED = "commandsEnabled"
 
     const val EXTRA_OUTPUT_PATH = "outputPath"
 
@@ -100,13 +105,15 @@ class AudioCaptureService : Service() {
      * Recording: commands MUST include the name. No bare "stop" or "pause",
      * because those are ordinary words that appear in normal speech.
      */
+    /**
+     * WHY the verb is mandatory: the bare name used to be a valid start
+     * command, so "think tap" mentioned in conversation began a recording. A
+     * take that starts on its own is worse than one that needs a clearer
+     * phrase, so every command now carries an explicit verb.
+     */
     private const val GRAMMAR_IDLE = """[
-      "hey think tap",
       "hey think tap start",
-      "think tap",
       "think tap start",
-      "start recording",
-      "begin recording",
       "[unk]"
     ]"""
 
@@ -120,10 +127,26 @@ class AudioCaptureService : Service() {
       "[unk]"
     ]"""
 
+    /**
+     * WHY a cooldown: without it the tail of a stop command, or the user
+     * speaking immediately afterwards, could trigger a fresh wake and open a
+     * take they never asked for.
+     */
+    private const val POST_STOP_COOLDOWN_MS = 4000L
+
     @Volatile var isRunning: Boolean = false; private set
     @Volatile var isRecording: Boolean = false; private set
     @Volatile var isPausedRecording: Boolean = false; private set
-    @Volatile var commandsEnabled: Boolean = true; private set
+    /**
+     * WHY this can be turned off: playing a recording back through the speaker
+     * feeds the app's own audio into its own microphone. A take that contained
+     * "hey think tap stop" then stopped a live recording, and one containing
+     * "hey think tap start" opened a take the user never asked for.
+     *
+     * The microphone keeps running - only command MATCHING is suspended - so
+     * the recording itself is unaffected.
+     */
+    @Volatile var commandsEnabled: Boolean = true
     @Volatile var currentPath: String? = null; private set
     /** Live audio written, in ms. Updated from the capture loop. */
     @Volatile var recordedMs: Long = 0
@@ -140,6 +163,8 @@ class AudioCaptureService : Service() {
   private var recognizerGrammar: String? = null
 
   private var lastCommandAt = 0L
+  private var lastStopAt = 0L
+  @Volatile private var micSuspended = false
   private val commandDebounceMs = 1500L
 
   override fun onBind(intent: Intent?): IBinder? = null
@@ -150,7 +175,6 @@ class AudioCaptureService : Service() {
     VoskModelProvider.loadAsync(this) { loaded, error ->
       if (loaded != null) {
         model = loaded
-        Log.i(TAG, "Vosk model ready")
       } else {
         Log.w(TAG, "Vosk model unavailable: $error")
         // WHY not fatal: recording must still work. Only voice commands are
@@ -186,6 +210,16 @@ class AudioCaptureService : Service() {
       ACTION_RESUME_RECORDING -> resumeRecording(fromVoice = false)
       ACTION_STOP_RECORDING -> stopRecording(fromVoice = false)
       ACTION_DISCARD_RECORDING -> discardRecording()
+      ACTION_SUSPEND_MIC -> suspendMic()
+      ACTION_RESUME_MIC -> resumeMic()
+      ACTION_SET_COMMANDS -> {
+        val enabled = intent.getBooleanExtra(EXTRA_COMMANDS_ENABLED, true)
+        if (commandsEnabled != enabled) {
+          commandsEnabled = enabled
+          // Drop buffered audio so speaker output cannot resolve after resuming.
+          try { recognizer?.reset() } catch (_: Exception) {}
+        }
+      }
       else -> Log.w(TAG, "unknown action ${intent.action}")
     }
     return START_STICKY
@@ -201,6 +235,16 @@ class AudioCaptureService : Service() {
   // ------------------------------------------------------------------
 
   private fun startListening() {
+    /**
+     * WHY ensureForeground() comes first: this service is launched with
+     * startForegroundService(), and Android requires startForeground() within
+     * ~5 seconds or it kills the process. The permission check used to return
+     * early before that call, so on a device where permission was missing the
+     * service died silently - the UI said "Recording started" and nothing
+     * happened. Claim the foreground slot first, then validate.
+     */
+    ensureForeground()
+
     if (capturing) {
       updateNotification()
       return
@@ -208,14 +252,15 @@ class AudioCaptureService : Service() {
     if (ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO)
       != PackageManager.PERMISSION_GRANTED
     ) {
+      Log.e(TAG, "RECORD_AUDIO not granted - cannot capture")
       AndroidWakeWordModule.emit(
         "onError",
         mapOf("code" to "permission", "message" to "Microphone permission required"),
       )
+      stopForeground(STOP_FOREGROUND_REMOVE)
+      stopSelf()
       return
     }
-
-    ensureForeground()
 
     val minBuf = AudioRecord.getMinBufferSize(
       SAMPLE_RATE,
@@ -297,7 +342,6 @@ class AudioCaptureService : Service() {
 
     emitListening()
     updateNotification()
-    Log.i(TAG, "capture started - single AudioRecord owner")
   }
 
   private fun feedRecognizer(frame: ShortArray, read: Int) {
@@ -317,7 +361,6 @@ class AudioCaptureService : Service() {
       }
       recognizer = fresh
       recognizerGrammar = wanted
-      Log.i(TAG, "recogniser grammar -> ${if (isRecording) "RECORDING" else "IDLE"}")
       fresh
     }
 
@@ -353,9 +396,13 @@ class AudioCaptureService : Service() {
 
     val cmd = CommandMatcher.match(text, isRecording, isPausedRecording)
     if (cmd == CommandMatcher.Command.NONE) return
+
+    // Ignore a wake that lands right after a take ended - see POST_STOP_COOLDOWN_MS.
+    if (cmd == CommandMatcher.Command.WAKE && now - lastStopAt < POST_STOP_COOLDOWN_MS) {
+      return
+    }
     lastCommandAt = now
 
-    Log.i(TAG, "command=$cmd from \"$text\"")
     when (cmd) {
       CommandMatcher.Command.WAKE ->
         AndroidWakeWordModule.emit("onWakeDetected", mapOf("transcript" to text))
@@ -374,10 +421,27 @@ class AudioCaptureService : Service() {
 
   private fun startRecording(outputPath: String?) {
     if (isRecording) return
+    ensureForeground()
     if (!capturing) startListening()
+    if (!capturing) {
+      // startListening bailed - permission or AudioRecord failure already emitted.
+      Log.e(TAG, "cannot record: capture loop not running")
+      AndroidWakeWordModule.emit(
+        "onError",
+        mapOf("code" to "start-failed", "message" to "Microphone is not available"),
+      )
+      return
+    }
 
+    /**
+     * WHY filesDir is the fallback: getExternalFilesDir can return null when
+     * external storage is unavailable, and some OEM builds restrict it further.
+     * Internal storage always exists, so a take is never lost to a missing
+     * directory.
+     */
+    val baseDir = getExternalFilesDir(null) ?: filesDir
     val path = outputPath ?: File(
-      getExternalFilesDir(null) ?: filesDir,
+      baseDir,
       "recordings/idea-${System.currentTimeMillis()}.wav",
     ).absolutePath
 
@@ -402,7 +466,6 @@ class AudioCaptureService : Service() {
     RecognitionAudioGuard.playStartCue(this)
     emitRecording("started", path)
     updateNotification()
-    Log.i(TAG, "recording -> $path")
   }
 
   private fun pauseRecording(fromVoice: Boolean, transcript: String = "") {
@@ -449,7 +512,7 @@ class AudioCaptureService : Service() {
     )
     currentPath = null
     updateNotification()
-    Log.i(TAG, "recording stopped saved=$saved ms=$recordedMs voice=$fromVoice")
+    lastStopAt = System.currentTimeMillis()
   }
 
   private fun discardRecording() {
@@ -461,6 +524,54 @@ class AudioCaptureService : Service() {
     recordedMs = 0
     emitRecording("discarded", null)
     updateNotification()
+  }
+
+  /**
+   * Releases the microphone while keeping any open take intact.
+   *
+   * WHY the WAV file stays open: the user's recording must survive the app
+   * being backgrounded. Closing the file would end the take; releasing only
+   * AudioRecord means the microphone indicator clears and nothing is heard,
+   * while the same file is appended to when capture resumes.
+   *
+   * The take is paused too, so no silent gap is written for the time away.
+   */
+  private fun suspendMic() {
+    if (!capturing) return
+
+    if (isRecording && !isPausedRecording) {
+      wavWriter?.pause()
+      isPausedRecording = true
+      emitRecording("paused", currentPath, fromVoice = false)
+    }
+
+    capturing = false
+    try { captureThread?.join(400) } catch (_: Exception) {}
+    captureThread = null
+
+    try {
+      audioRecord?.stop()
+      audioRecord?.release()
+    } catch (e: Exception) {
+      Log.w(TAG, "suspend release failed", e)
+    }
+    audioRecord = null
+
+    try { recognizer?.close() } catch (_: Exception) {}
+    recognizer = null
+    recognizerGrammar = null
+
+    isRunning = false
+    micSuspended = true
+    emitListening()
+    updateNotification()
+  }
+
+  /** Re-acquires the microphone. An open take stays paused until the user resumes. */
+  private fun resumeMic() {
+    if (!micSuspended) return
+    micSuspended = false
+    startListening()
   }
 
   private fun stopEverything() {
@@ -490,7 +601,6 @@ class AudioCaptureService : Service() {
     emitListening()
     stopForeground(STOP_FOREGROUND_REMOVE)
     stopSelf()
-    Log.i(TAG, "capture stopped - microphone released")
   }
 
   // ------------------------------------------------------------------
@@ -523,16 +633,43 @@ class AudioCaptureService : Service() {
   }
 
   private fun ensureForeground() {
+    /**
+     * WHY the try/catch: on Android 12+ a microphone foreground service started
+     * from the background throws ForegroundServiceStartNotAllowedException, and
+     * some OEM builds throw on the typed overload even when the type is
+     * declared. An uncaught throw here kills the service before it ever records,
+     * which showed up as "Recording started" with nothing happening.
+     */
     val n = buildNotification()
-    if (Build.VERSION.SDK_INT >= 29) {
-      startForeground(NOTIFICATION_ID, n, ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE)
-    } else {
-      @Suppress("DEPRECATION")
-      startForeground(NOTIFICATION_ID, n)
+    try {
+      if (Build.VERSION.SDK_INT >= 29) {
+        startForeground(NOTIFICATION_ID, n, ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE)
+      } else {
+        @Suppress("DEPRECATION")
+        startForeground(NOTIFICATION_ID, n)
+      }
+    } catch (e: Exception) {
+      Log.e(TAG, "startForeground failed", e)
+      try {
+        // Untyped fallback - better a plain foreground service than none.
+        @Suppress("DEPRECATION")
+        startForeground(NOTIFICATION_ID, n)
+      } catch (e2: Exception) {
+        Log.e(TAG, "startForeground fallback failed", e2)
+        AndroidWakeWordModule.emit(
+          "onError",
+          mapOf(
+            "code" to "foreground-failed",
+            "message" to (e.message ?: "Could not start the recording service"),
+          ),
+        )
+      }
     }
   }
 
   private fun statusText(): String = when {
+    micSuspended && isRecording -> "Paused - open Think Tap to continue"
+    micSuspended -> "Not listening"
     isRecording && isPausedRecording -> "Paused - say \"Hey ThinkTap resume\""
     isRecording -> "Recording - say \"Hey ThinkTap stop\" to finish"
     isRunning -> "Listening for \"Hey ThinkTap\""

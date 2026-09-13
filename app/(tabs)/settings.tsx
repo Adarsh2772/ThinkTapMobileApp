@@ -3,7 +3,9 @@ import {
   Alert,
   PermissionsAndroid,
   Platform,
+  Pressable,
   ScrollView,
+  Share,
   StyleSheet,
   Switch,
   Text,
@@ -17,6 +19,9 @@ import { Button } from '@/src/components/ui';
 import { supportsAudioWithLiveTranscript } from '@/src/features/capture/captureMode';
 import { useAuthStore } from '@/src/store/authStore';
 import { useSettingsStore } from '@/src/store/settingsStore';
+import { AndroidWakeWord } from 'android-wake-word';
+import { buildReport, clearLogs, logCount } from '@/src/services/diagnostics';
+import { queueSize } from '@/src/services/transcriptionQueue';
 import { useSubscriptionStore } from '@/src/store/subscriptionStore';
 import { useWakeWordStore } from '@/src/store/wakeWordStore';
 import { colors, fonts, radii, spacing, typography } from '@/src/theme/tokens';
@@ -31,6 +36,39 @@ export default function SettingsScreen() {
   const wakeLastHeard = useWakeWordStore((s) => s.lastHeard);
   const setWakeEnabled = useWakeWordStore((s) => s.setEnabled);
   const [subscribeOpen, setSubscribeOpen] = useState(false);
+
+  /**
+   * WHY this exists: issues are reported from devices the developer does not
+   * have, and a tester cannot run adb logcat. This puts the same detail into
+   * the share sheet so it can be sent from the phone itself.
+   */
+  const onShareDiagnostics = async () => {
+    let pending = 0;
+    try {
+      pending = await queueSize();
+    } catch {
+      // ignore
+    }
+    const report = buildReport({
+      wakeEnabled,
+      wakeAvailable,
+      wakeListening,
+      lastHeard: wakeLastHeard ?? '(none)',
+      serviceListening: AndroidWakeWord.isListening(),
+      serviceRecording: AndroidWakeWord.isRecording(),
+      modelReady: AndroidWakeWord.isModelReady(),
+      micPermission: AndroidWakeWord.hasMicPermission(),
+      commandsEnabled: AndroidWakeWord.areCommandsEnabled(),
+      pendingTranscriptions: pending,
+      appLanguage: useSettingsStore.getState().languageCode,
+      speechLocale: useSettingsStore.getState().speechLocale,
+    });
+    try {
+      await Share.share({ message: report, title: 'ThinkTap diagnostics' });
+    } catch (e) {
+      Alert.alert('Could not share', e instanceof Error ? e.message : 'Unknown error');
+    }
+  };
 
   const onToggleWake = async (enabled: boolean) => {
     if (!enabled) {
@@ -93,9 +131,10 @@ export default function SettingsScreen() {
             />
           </View>
           <Text style={styles.hint}>
-            {Platform.OS === 'android'
-              ? 'Say “Hey Think Tap” or “start recording” to begin, and “stop recording” to finish — including when the app is minimized. Listening stays quiet (no beep or vibration). You’ll see “Recording started” / “Recording stopped” on screen. Turn this off when you don’t need it to save battery.'
-              : 'When on (app open in the foreground), say “Hey Think Tap” or “start recording” to begin a capture. Confirmation is on-screen only — no sound or vibration.'}
+            Think Tap listens only while the app is open. Leaving the app
+            releases the microphone and pauses any recording — your audio is
+            kept, and you continue with Resume or by saying “Hey Think Tap
+            resume” when you come back.
             {wakeEnabled
               ? wakeAvailable === false
                 ? ' Speech recognition is unavailable on this device/build.'
@@ -107,6 +146,36 @@ export default function SettingsScreen() {
           {wakeEnabled && wakeLastHeard ? (
             <Text style={styles.hint}>Last heard: “{wakeLastHeard}”</Text>
           ) : null}
+        </View>
+
+        <View style={styles.card}>
+          <Text style={styles.label}>Voice commands</Text>
+          <Text style={styles.hint}>
+            Every command needs the action word. Saying only “Hey Think Tap”
+            does nothing.
+          </Text>
+          <View style={styles.cmdList}>
+            <Text style={styles.cmdRow}>
+              <Text style={styles.cmd}>“Hey Think Tap start”</Text>
+              {'  '}begin recording
+            </Text>
+            <Text style={styles.cmdRow}>
+              <Text style={styles.cmd}>“Hey Think Tap stop”</Text>
+              {'  '}finish and save
+            </Text>
+            <Text style={styles.cmdRow}>
+              <Text style={styles.cmd}>“Hey Think Tap pause”</Text>
+              {'  '}pause
+            </Text>
+            <Text style={styles.cmdRow}>
+              <Text style={styles.cmd}>“Hey Think Tap resume”</Text>
+              {'  '}continue
+            </Text>
+          </View>
+          <Text style={styles.hint}>
+            While recording, the name is required — so saying “stop” in the
+            middle of your idea will not end the take.
+          </Text>
         </View>
 
         {!supportsAudioWithLiveTranscript() ? (
@@ -127,6 +196,28 @@ export default function SettingsScreen() {
         </View>
 
         <View style={styles.card}>
+          <Text style={styles.label}>Diagnostics</Text>
+          <Text style={styles.value}>Share a report with the developer</Text>
+          <Text style={styles.hint}>
+            Includes recent warnings and device state. Use this when reporting a
+            problem. No recordings or transcripts are included.
+          </Text>
+          <View style={styles.subscribeWrap}>
+            <Button title="Share diagnostics" onPress={() => void onShareDiagnostics()} />
+          </View>
+          <Pressable
+            onPress={() => {
+              clearLogs();
+              Alert.alert('Cleared', 'Diagnostic log cleared.');
+            }}
+          >
+            <Text style={[styles.hint, { textDecorationLine: 'underline' }]}>
+              Clear log ({logCount()} entries)
+            </Text>
+          </Pressable>
+        </View>
+
+        <View style={styles.card}>
           <Text style={styles.label}>{tx('appVersion')}</Text>
           <Text style={styles.meta}>1.0.0 · MVP</Text>
         </View>
@@ -138,6 +229,13 @@ export default function SettingsScreen() {
 }
 
 const styles = StyleSheet.create({
+  cmdList: { gap: 8, marginTop: 4, marginBottom: 12 },
+  cmdRow: {
+    fontFamily: fonts.body,
+    fontSize: typography.bodyMd.fontSize,
+    color: colors.onSurfaceVariant,
+  },
+  cmd: { fontFamily: fonts.bodySemi, color: colors.onSurface },
   safe: { flex: 1, backgroundColor: colors.background },
   content: { padding: spacing.containerMargin, gap: spacing.stackMd, paddingBottom: 40 },
   card: {

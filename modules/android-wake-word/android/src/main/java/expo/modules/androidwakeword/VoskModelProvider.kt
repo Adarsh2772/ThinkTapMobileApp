@@ -50,7 +50,6 @@ object VoskModelProvider {
         val dir = ensureUnpacked(app)
         model = Model(dir.absolutePath)
         cached = model
-        Log.i(TAG, "model loaded from ${dir.absolutePath}")
       } catch (e: Throwable) {
         error = e.message ?: e.javaClass.simpleName
         Log.e(TAG, "model load failed", e)
@@ -84,7 +83,6 @@ object VoskModelProvider {
     target.mkdirs()
     copyAssetDir(context, ASSET_DIR, target)
     marker.writeText(VERSION.toString())
-    Log.i(TAG, "model unpacked to ${target.absolutePath}")
     return target
   }
 

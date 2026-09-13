@@ -17,6 +17,7 @@ import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import 'react-native-reanimated';
 
 import { ToastHost } from '@/src/components/ToastHost';
+import { installLogCapture } from '@/src/services/diagnostics';
 import { WakeWordPermissionGate } from '@/src/features/wakeWord/WakeWordPermissionGate';
 import { WakeWordProvider } from '@/src/features/wakeWord/WakeWordProvider';
 import { DrawerLayout } from '@/src/navigation/DrawerLayout';
@@ -32,6 +33,13 @@ import { colors } from '@/src/theme/tokens';
 export { ErrorBoundary } from 'expo-router';
 
 SplashScreen.preventAutoHideAsync();
+
+/**
+ * WHY at module scope: capture must be live before any other module logs, so
+ * a warning during startup is not lost.
+ */
+installLogCapture();
+
 
 export default function RootLayout() {
   const [loaded, error] = useFonts({

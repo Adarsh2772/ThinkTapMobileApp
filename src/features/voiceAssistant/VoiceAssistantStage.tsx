@@ -57,7 +57,7 @@ export function VoiceAssistantStage({
           ? 'Saving your thought…'
           : 'Recording'
         : wakeEnabled
-          ? 'Say “Hey ThinkTap” or tap to record'
+          ? 'Say “Hey ThinkTap start” or tap to record'
           : labelIdle;
 
   const statusHint = isStarting

@@ -149,7 +149,20 @@ export async function announceRecordingStarted(): Promise<void> {
 export async function announceRecordingStopped(): Promise<void> {
   showToast('Recording stopped');
   await vibrateStopCue();
-  await speakAsFemale('Recording stopped');
+  /**
+   * WHY commands are suspended around the announcement: anything the app plays
+   * through the speaker is heard by its own microphone. "Recording stopped"
+   * cannot match a command today, but suspending during any app-generated audio
+   * keeps that true if the wording ever changes.
+   */
+  await AndroidWakeWord.setCommandsEnabled(false);
+  try {
+    await speakAsFemale('Recording stopped');
+  } finally {
+    setTimeout(() => {
+      void AndroidWakeWord.setCommandsEnabled(true);
+    }, 700);
+  }
 }
 
 /** Warm the TTS voice list in the background so stop announcements are snappy. */

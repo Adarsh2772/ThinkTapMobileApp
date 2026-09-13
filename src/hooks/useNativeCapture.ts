@@ -1,6 +1,6 @@
 import { AndroidWakeWord, type RecordingPayload } from 'android-wake-word';
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { AppState, Platform } from 'react-native';
+import { AppState, PermissionsAndroid, Platform } from 'react-native';
 
 import { persistRecording } from '@/src/services/audioStorage';
 import { useSettingsStore } from '@/src/store/settingsStore';
@@ -49,6 +49,8 @@ type Options = {
   onError?: (message: string) => void;
   /** A call took the microphone; the take is paused and must not auto-resume. */
   onInterrupted?: () => void;
+  /** The call ended. The take is still paused - prompt the user to resume. */
+  onCallEnded?: () => void;
 };
 
 export function useNativeCapture(options: Options = {}) {
@@ -56,10 +58,12 @@ export function useNativeCapture(options: Options = {}) {
   const onFinishedRef = useRef(options.onFinished);
   const onErrorRef = useRef(options.onError);
   const onInterruptedRef = useRef(options.onInterrupted);
+  const onCallEndedRef = useRef(options.onCallEnded);
   onWakeRef.current = options.onWake;
   onFinishedRef.current = options.onFinished;
   onErrorRef.current = options.onError;
   onInterruptedRef.current = options.onInterrupted;
+  onCallEndedRef.current = options.onCallEnded;
 
   const wakeEnabled = useWakeWordStore((s) => s.enabled);
   const wakeHydrated = useWakeWordStore((s) => s.hydrated);
@@ -72,6 +76,9 @@ export function useNativeCapture(options: Options = {}) {
   const [durationSec, setDurationSec] = useState(0);
   const [error, setError] = useState<string | null>(null);
   const [modelReady, setModelReady] = useState(false);
+  /** True while a take is paused because of a phone call. */
+  const [callHold, setCallHold] = useState(false);
+  const callHoldRef = useRef(false);
 
   const supported = Platform.OS === 'android' && AndroidWakeWord.isSupported();
   const stoppingRef = useRef(false);
@@ -91,10 +98,6 @@ export function useNativeCapture(options: Options = {}) {
     const subs = [
       AndroidWakeWord.addListener('onRecordingState', (e: RecordingPayload) => {
         if (captureOwner !== ownerRef.current) return;
-        console.log('[NATIVE] recording', e.state, {
-          fromVoice: e.fromVoice,
-          ms: e.durationMs,
-        });
 
         switch (e.state) {
           case 'started':
@@ -127,7 +130,6 @@ export function useNativeCapture(options: Options = {}) {
             // WHY: the service can emit 'stopped' more than once (a stop event
             // plus the state broadcast). Saving per event created duplicates.
             if (lastSavedPath === e.path) {
-              console.log('[NATIVE] duplicate stop ignored for', e.path);
               return;
             }
             lastSavedPath = e.path;
@@ -155,7 +157,6 @@ export function useNativeCapture(options: Options = {}) {
 
       AndroidWakeWord.addListener('onWakeDetected', (e) => {
         if (captureOwner !== ownerRef.current) return;
-        console.log('[NATIVE] wake:', e.transcript);
         setLastHeard(e.transcript);
         onWakeRef.current?.();
       }),
@@ -190,10 +191,31 @@ export function useNativeCapture(options: Options = {}) {
       }),
 
       AndroidWakeWord.addListener('onCallState', (e) => {
-        if (!e.active) return;
-        if (!AndroidWakeWord.isRecording()) return;
-        void AndroidWakeWord.pauseRecording();
-        onInterruptedRef.current?.();
+        if (captureOwner !== ownerRef.current) return;
+
+        if (e.active) {
+          if (!AndroidWakeWord.isRecording()) return;
+          if (AndroidWakeWord.isPaused()) return;
+          callHoldRef.current = true;
+          setCallHold(true);
+          void AndroidWakeWord.pauseRecording();
+          onInterruptedRef.current?.();
+          return;
+        }
+
+        /**
+         * Call ended. The take stays paused ON PURPOSE.
+         *
+         * WHY no auto-resume: a call can last minutes and the user has usually
+         * moved on by the time it ends. Resuming on their behalf would capture
+         * audio they did not intend to record, which is worse than making them
+         * spend one tap. They resume with the button or "hey think tap resume".
+         */
+        if (callHoldRef.current) {
+          callHoldRef.current = false;
+          setCallHold(false);
+          onCallEndedRef.current?.();
+        }
       }),
     ];
 
@@ -217,6 +239,19 @@ export function useNativeCapture(options: Options = {}) {
       void AndroidWakeWord.stopListening();
     }
   }, [supported, wakeEnabled, wakeHydrated, setAvailable]);
+
+  /**
+   * WHY started here: the watcher detects cellular and VoIP calls via audio
+   * mode, and must be live for the whole session - not just while recording -
+   * so a call that arrives mid-take is caught immediately.
+   */
+  useEffect(() => {
+    if (!supported) return;
+    void AndroidWakeWord.startCallWatch();
+    return () => {
+      void AndroidWakeWord.stopCallWatch();
+    };
+  }, [supported]);
 
   // Poll the model state so the UI can show when commands become available.
   useEffect(() => {
@@ -249,12 +284,39 @@ export function useNativeCapture(options: Options = {}) {
    * locked. The old build had to abort transcription here because the
    * activity-bound recogniser died; that problem no longer exists.
    */
+  /**
+   * The microphone follows the app's foreground state.
+   *
+   * WHY: an always-listening microphone was starting recordings on its own and
+   * holding the mic while the user was in other apps. Listening only while the
+   * app is open removes that entirely - the microphone indicator clears the
+   * moment you leave.
+   *
+   * An open take is paused rather than stopped, so the recording is never lost.
+   * It stays paused on return: the user resumes with the button or by saying
+   * "hey think tap resume". Auto-resuming would capture audio they did not
+   * intend, since they may have been away for minutes.
+   *
+   * TRADE-OFF: voice commands cannot be heard from outside the app, so a
+   * recording cannot be started or resumed by voice while backgrounded.
+   */
   useEffect(() => {
-    const sub = AppState.addEventListener('change', (s) => {
-      console.log('[NATIVE] app state', s, 'recording:', AndroidWakeWord.isRecording());
+    if (!supported) return;
+
+    const sub = AppState.addEventListener('change', (next) => {
+      if (next === 'active') {
+        void AndroidWakeWord.resumeMic();
+        return;
+      }
+      if (next === 'background' || next === 'inactive') {
+        void AndroidWakeWord.suspendMic();
+      }
     });
-    return () => sub.remove();
-  }, []);
+
+    return () => {
+      sub.remove();
+    };
+  }, [supported]);
 
   // ---------------------------------------------------------------
   // Controls
@@ -264,15 +326,82 @@ export function useNativeCapture(options: Options = {}) {
     if (!supported) return false;
     if (AndroidWakeWord.isRecording()) return true;
     setError(null);
+
+    /**
+     * WHY permission is requested here: with the wake toggle off, nothing else
+     * in the app ever asks for RECORD_AUDIO. The service then failed silently
+     * while the UI still showed "Recording started" - reported on OPPO A51 /
+     * Android 11.
+     */
+    try {
+      /**
+       * WHY a rationale is passed: without it Android shows a bare
+       * "Allow Think Tap to record audio?" with no context, and users decline
+       * out of caution. Saying what it is for up front raises acceptance and is
+       * simply honest.
+       */
+      const granted = await PermissionsAndroid.request(
+        PermissionsAndroid.PERMISSIONS.RECORD_AUDIO,
+        {
+          title: 'Microphone access',
+          message:
+            'Think Tap records your spoken ideas so they are never lost. ' +
+            'Audio stays on your phone; only the recording you make is used ' +
+            'to create your transcript.',
+          buttonPositive: 'Allow',
+          buttonNegative: 'Not now',
+        },
+      );
+      if (granted !== PermissionsAndroid.RESULTS.GRANTED) {
+        const msg = 'Microphone permission is required to record.';
+        setError(msg);
+        onErrorRef.current?.(msg);
+        return false;
+      }
+      if (Number(Platform.Version) >= 33) {
+        // The service is a foreground service; without this its notification
+        // is suppressed and some OEMs then kill it.
+        await PermissionsAndroid.request(
+          PermissionsAndroid.PERMISSIONS.POST_NOTIFICATIONS, {
+            title: 'Recording notification',
+            message:
+              'Android requires a notification while recording. Without it the ' +
+              'system stops the recording partway through.',
+            buttonPositive: 'Allow',
+            buttonNegative: 'Not now',
+          },
+        );
+      }
+    } catch (e) {
+      console.warn('[NATIVE] permission request failed', e);
+    }
+
     try {
       await AndroidWakeWord.startRecording(null);
-      return true;
     } catch (e) {
       const msg = e instanceof Error ? e.message : 'Could not start recording';
       setError(msg);
       onErrorRef.current?.(msg);
       return false;
     }
+
+    /**
+     * WHY this confirmation exists: startRecording only sends an intent, so it
+     * resolves even when the service fails afterwards. Without checking the
+     * real state the UI reported success for a take that never began.
+     */
+    for (let i = 0; i < 12; i += 1) {
+      await new Promise((r) => setTimeout(r, 150));
+      if (AndroidWakeWord.isRecording()) return true;
+    }
+
+    const msg =
+      'Recording did not start. Check that microphone permission is allowed and ' +
+      'battery usage is set to Unrestricted for Think Tap.';
+    console.warn('[NATIVE] start not confirmed after 1.8s');
+    setError(msg);
+    onErrorRef.current?.(msg);
+    return false;
   }, [supported]);
 
   const pause = useCallback(async (): Promise<boolean> => {
@@ -282,10 +411,13 @@ export function useNativeCapture(options: Options = {}) {
 
   const resume = useCallback(async (): Promise<boolean> => {
     if (!supported || !AndroidWakeWord.isRecording()) return false;
+    // WHY: resuming mid-call would record the call audio, not the user's idea.
     if (AndroidWakeWord.isCallActive()) {
       onInterruptedRef.current?.();
       return false;
     }
+    callHoldRef.current = false;
+    setCallHold(false);
     return AndroidWakeWord.resumeRecording();
   }, [supported]);
 
@@ -308,6 +440,8 @@ export function useNativeCapture(options: Options = {}) {
     /** False until the offline model unpacks. Recording works regardless. */
     modelReady,
     status,
+    /** Paused by a phone call - the UI should say so and offer Resume. */
+    callHold,
     isRecording: status === 'recording' || status === 'paused',
     isActivelyRecording: status === 'recording',
     isPaused: status === 'paused',

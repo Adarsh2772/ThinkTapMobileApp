@@ -160,6 +160,38 @@ class AndroidWakeWordModule : Module() {
       send(AudioCaptureService.ACTION_DISCARD_RECORDING); true
     }
 
+    /**
+     * Suspend or resume command matching without releasing the microphone.
+     *
+     * WHY: playing a recording through the speaker feeds the app's own audio
+     * back into its own microphone, so a take containing "hey think tap stop"
+     * could stop a live recording. Call this with false before playback and
+     * true after.
+     */
+    AsyncFunction("setCommandsEnabled") { enabled: Boolean ->
+      send(AudioCaptureService.ACTION_SET_COMMANDS) { intent ->
+        intent.putExtra(AudioCaptureService.EXTRA_COMMANDS_ENABLED, enabled)
+      }
+      true
+    }
+
+    Function("areCommandsEnabled") { AudioCaptureService.commandsEnabled }
+
+    /**
+     * Release the microphone while keeping any open take intact.
+     *
+     * WHY separate from stopListening: stopping the service would close the WAV
+     * file and end the recording. This only releases AudioRecord, so the take
+     * is paused and can continue into the same file when the app returns.
+     */
+    AsyncFunction("suspendMic") {
+      send(AudioCaptureService.ACTION_SUSPEND_MIC); true
+    }
+
+    AsyncFunction("resumeMic") {
+      send(AudioCaptureService.ACTION_RESUME_MIC); true
+    }
+
     // ---------------- call watch ----------------
 
     Function("isCallActive") { callWatcher?.isCallActive() == true }

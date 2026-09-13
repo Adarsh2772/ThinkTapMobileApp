@@ -28,6 +28,17 @@ async function preparePlaybackAudioMode() {
 
 async function releaseWakeForPlayback() {
   useWakeWordStore.getState().setPlaybackActive(true);
+  /**
+   * WHY: the speaker feeds the app's own audio straight back into its own
+   * microphone. A recording containing "hey think tap stop" would stop a live
+   * take, and one containing "hey think tap start" would open a take the user
+   * never asked for - exactly the accidental recordings reported during
+   * playback testing.
+   *
+   * Only command matching is suspended. The microphone keeps running, so wake
+   * detection resumes the moment playback ends.
+   */
+  await AndroidWakeWord.setCommandsEnabled(false);
   try {
     /**
      * WHY nothing to pause now: the capture service owns the microphone, not a
@@ -43,6 +54,14 @@ async function releaseWakeForPlayback() {
 
 function endPlaybackHold() {
   useWakeWordStore.getState().setPlaybackActive(false);
+  /**
+   * Small delay before re-arming: the last moment of audio can still be in the
+   * output buffer when playback reports finished, and re-enabling immediately
+   * lets that tail resolve into a command.
+   */
+  setTimeout(() => {
+    void AndroidWakeWord.setCommandsEnabled(true);
+  }, 700);
 }
 
 export function AudioPlayer({ uri, durationSec }: Props) {
@@ -66,6 +85,11 @@ export function AudioPlayer({ uri, durationSec }: Props) {
     })();
 
     return () => {
+      /**
+       * WHY re-arm here too: if the user navigates away mid-playback the
+       * didJustFinish event never fires, and without this the app would be left
+       * permanently deaf to commands.
+       */
       endPlaybackHold();
       try {
         player.pause();

@@ -109,15 +109,18 @@ object CommandMatcher {
       return Command.NONE
     }
 
-    // ---- Idle: only a wake / start can fire ----
+    // ---- Idle: a start command, and nothing else ----
     if (STOP_ONLY.containsMatchIn(n)) return Command.NONE
     if (PAUSE_ONLY.containsMatchIn(n)) return Command.NONE
-    if (START_ONLY.containsMatchIn(n)) return Command.WAKE
-    // WHY the length guard: "and let us see how is it was hitting that" should
-    // never start a recording. A wake phrase is spoken, not narrated.
     if (!isShort(n)) return Command.NONE
+
+    /**
+     * WHY the name alone is no longer enough: "if (hasName(n)) return WAKE" used
+     * to be the last line here, so any mention of the product started a
+     * recording. Saying "think tap" in conversation opened a take the user
+     * never asked for. A start command must now carry an explicit verb.
+     */
     if (hasName(n) && TRAILING_START.containsMatchIn(n)) return Command.WAKE
-    if (hasName(n)) return Command.WAKE
     return Command.NONE
   }
 }

@@ -99,7 +99,6 @@ class WavWriter(
       f.seek(0)
       f.write(buildHeader(dataBytes))
       f.close()
-      Log.i(TAG, "closed ${file.name} bytes=$dataBytes ms=$durationMs")
       file.absolutePath
     } catch (e: Exception) {
       Log.e(TAG, "close failed", e)

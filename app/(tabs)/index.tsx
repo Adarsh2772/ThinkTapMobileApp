@@ -1,3 +1,4 @@
+import { useRouter } from 'expo-router';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Alert, AppState, Pressable, StyleSheet, Text, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
@@ -27,6 +28,11 @@ import { usePendingRecordingStore } from '@/src/store/pendingRecordingStore';
 import { useSettingsStore } from '@/src/store/settingsStore';
 import { showToast } from '@/src/store/toastStore';
 import { useWakeWordStore } from '@/src/store/wakeWordStore';
+import {
+  processTranscriptionQueue,
+  queueForTranscription,
+  startAutoRetry,
+} from '@/src/services/transcriptionQueue';
 import { colors, fonts } from '@/src/theme/tokens';
 
 export default function HomeScreen() {
@@ -38,6 +44,8 @@ export default function HomeScreen() {
   const languageCode = useSettingsStore((s) => s.languageCode);
   const tx = useSettingsStore((s) => s.tx);
   const drawer = useDrawerOptional();
+  const router = useRouter();
+
   const triggerToken = useWakeWordStore((s) => s.triggerToken);
   const triggerAt = useWakeWordStore((s) => s.triggerAt);
   const stopToken = useWakeWordStore((s) => s.stopToken);
@@ -52,6 +60,34 @@ export default function HomeScreen() {
   useEffect(() => {
     const sub = AppState.addEventListener('change', setAppState);
     return () => sub.remove();
+  }, []);
+
+  /**
+   * WHY on foreground rather than a network listener: coming back to the app is
+   * the moment the user might look for the transcript, and it avoids holding a
+   * connectivity subscription for the whole session. Exits immediately when the
+   * queue is empty.
+   */
+  useEffect(() => {
+    if (appState !== 'active') return;
+    void processTranscriptionQueue();
+    /**
+     * WHY both: the foreground drain catches the common case of returning to
+     * the app, and the poller covers turning a connection on while already
+     * inside it - which the foreground event never fires for. It stops itself
+     * once the queue empties.
+     */
+    startAutoRetry();
+  }, [appState]);
+
+  /**
+   * WHY a second drain on mount: the effect above only fires on an appState
+   * change. A cold start is already 'active', so nothing ran until the user
+   * backgrounded and returned. Recordings queued in a previous session sat
+   * waiting for an event that never came.
+   */
+  useEffect(() => {
+    void processTranscriptionQueue();
   }, []);
 
   useEffect(() => {
@@ -116,6 +152,8 @@ export default function HomeScreen() {
     },
     onError: (message) => showToast(message, 'error'),
     onInterrupted: () => showToast('Paused — call in progress', 'info'),
+    onCallEnded: () =>
+      showToast('Call ended. Say “Hey ThinkTap resume” or tap Resume.', 'info'),
   });
   const useNativePath = native.supported;
 
@@ -148,6 +186,25 @@ export default function HomeScreen() {
         const patch = await enrichPendingRecording(pending, languageCode, (stage) => {
           setOrganizeStage(stage);
         });
+        /**
+         * WHY queue on empty text: the audio is already saved, so nothing is
+         * lost - but without a retry the transcript stayed empty forever after
+         * one offline attempt. Queued takes are retried when the app next opens
+         * with a connection.
+         */
+        if (!patch || !(patch.transcript ?? '').trim()) {
+          if (pending.audioUri) {
+            void queueForTranscription({
+              ideaId: localIdea.id,
+              audioUri: pending.audioUri,
+              durationSec: pending.durationSec,
+              speechLocale: pending.speechLocale,
+              languageCode,
+            });
+            startAutoRetry();
+            showToast('Saved. Transcript will be added when you are back online.', 'info');
+          }
+        }
         if (patch && (patch.transcript || patch.title)) {
           if (patch.language && patch.transcript) {
             setDetectedLanguageName(resolveSpokenLanguage(patch.language).name);
@@ -158,6 +215,15 @@ export default function HomeScreen() {
         }
       } catch (e) {
         console.warn('Transcription failed after save', e);
+        if (pending.audioUri) {
+          void queueForTranscription({
+            ideaId: localIdea.id,
+            audioUri: pending.audioUri,
+            durationSec: pending.durationSec,
+            speechLocale: pending.speechLocale,
+            languageCode,
+          });
+        }
         showToast('Saved. The transcript will be added when the network is back.', 'info');
       } finally {
         setOrganizing(false);
@@ -352,11 +418,18 @@ export default function HomeScreen() {
         await native.stop();
         return;
       }
+      /**
+       * WHY the toast waits for confirmation: native.start() now resolves only
+       * once the service reports it is actually recording. Announcing before
+       * that told the user "Recording started" for takes that never began -
+       * reported on OPPO A51 / Android 11.
+       */
       const ok = await native.start();
       if (ok) {
         showToast('Recording — your transcript appears after you stop');
         void announceRecordingStarted();
       }
+      // Failure already surfaced through onError.
       return;
     }
 
@@ -409,7 +482,9 @@ export default function HomeScreen() {
           subtitle={tx('readyForIdea')}
           right={
             <Pressable
-              onPress={() => drawer?.openDrawer()}
+              /* WHY Settings, not the drawer: the avatar reads as a profile
+                 control, so users expected it to open their settings. */
+              onPress={() => router.push('/(tabs)/settings')}
               style={({ pressed }) => [styles.avatar, pressed && { opacity: 0.85 }]}
             >
               <Text style={styles.avatarText}>
@@ -447,11 +522,14 @@ export default function HomeScreen() {
                 ? 'Stopping…'
                 : tx('recording')
             }
-            labelPaused="Paused — tap Resume to continue"
+            labelPaused={
+              useNativePath && native.callHold
+                ? 'Paused for a call — say “Hey ThinkTap resume” or tap Resume'
+                : 'Paused — tap Resume or say “Hey ThinkTap resume”'
+            }
           />
         </View>
       </View>
-
     </SafeAreaView>
   );
 }

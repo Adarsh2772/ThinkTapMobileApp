@@ -217,10 +217,8 @@ function guessCategory(text: string): string {
   }
 
   if (bestScore === 0 || !best) {
-    console.log('[AI] no category keywords matched - defaulting');
     return normalizeCategory('Business');
   }
-  console.log('[AI] category', best, 'score', bestScore);
   return normalizeCategory(best);
 }
 
@@ -282,6 +280,38 @@ const CANNED_HALLUCINATIONS = [
 /** Same seed Whisper sees as `prompt`. On silence it often repeats this as the transcript. */
 const WHISPER_SEED_PROMPT =
   'आज मौसम अच्छा है। आज मी ऑफिसला जाणार आहे. कल मुझे meeting के लिए जाना है।';
+
+/**
+ * Removes echoes of the old Whisper seed prompt from a transcript.
+ *
+ * WHY this is still needed after the seed was removed: recordings made by
+ * earlier builds already contain the echo, and Whisper can reproduce fragments
+ * it learned from similar priming. A real English recording came back with
+ * "कल मुझे meeting के लिए जाना है।" inserted twice mid-sentence - text the user
+ * never spoke.
+ *
+ * Only these exact phrases are stripped. Genuine Hindi or Marathi the user
+ * actually speaks is untouched, because the Human Signal must stay verbatim.
+ */
+const SEED_ECHO_PATTERNS: RegExp[] = [
+  /आज\s*मौसम\s*अच्छा\s*है।?/gu,
+  /आज\s*मी\s*ऑफिसला\s*जाणार\s*आहे।?\.?/gu,
+  /कल\s*मुझे\s*meeting\s*के\s*लिए\s*जाना\s*है।?/gu,
+  /अच्छा\s*जाणार\s*जाणार\s*का\s*भूत्रे\s*के\s*लिए\s*जाना\s*है।?/gu,
+];
+
+export function stripSeedEcho(text: string): string {
+  if (!text) return text;
+  let out = text;
+  for (const re of SEED_ECHO_PATTERNS) {
+    out = out.replace(re, ' ');
+  }
+  // Collapse the gaps the removals leave behind.
+  out = out.replace(/\s{2,}/g, ' ').replace(/\s+([.,!?])/g, '$1').trim();
+  if (out !== text) {
+  }
+  return out;
+}
 
 function foldHallucinationText(value: string): string {
   return value
@@ -376,7 +406,7 @@ export function transcriptFromWhisperSegments(
 }
 
 export const UNCLEAR_RECORDING_MESSAGE =
-  'Recording is not clear. Please record properly.';
+  'Audio saved. The transcript will appear once transcription completes.';
 
 export function emptySpeechEnrichment(): EnrichmentResult {
   return {
@@ -554,7 +584,18 @@ export async function enrichIdeaFromAudio(input: {
  * English instructions bias the model to English. Seed with native-script speech.
  */
 export function whisperPromptFor(_languageName: string | 'auto'): string {
-  return WHISPER_SEED_PROMPT;
+  /**
+   * WHY the seed prompt is no longer sent: Whisper treats `prompt` as previous
+   * transcript text, so on unclear or quiet audio it simply repeats it back.
+   * A real 46-second English recording came back with
+   * "कल मुझे meeting के लिए जाना है।" twice - verbatim from the seed, not
+   * anything the user said. Fabricated content in the Human Signal is worse
+   * than a slightly weaker language bias.
+   *
+   * Whisper auto-detects language without a seed. Code-mixed speech is handled
+   * by the model itself rather than by priming it.
+   */
+  return '';
 }
 
 function providerConfig(apiKey: string) {
@@ -674,8 +715,8 @@ async function whisperTranscribe(
     },
     fields: {
       model: provider.whisperModel,
+      // Deterministic: no creative filling-in of unclear audio.
       temperature: '0',
-      prompt: whisperPromptFor('auto'),
       response_format: provider.responseFormat,
     },
   });
@@ -792,7 +833,8 @@ async function enrichWithCloudStt(
 
   const whisper = await whisperTranscribe(provider, apiKey, audioUri, mime);
 
-  let transcript = whisper.text;
+  // Strip any echo of the old seed prompt before the text becomes the Human Signal.
+  let transcript = stripSeedEcho(whisper.text);
   if (!transcript) {
     throw new Error('No speech detected in this recording. Try speaking more clearly.');
   }

@@ -371,7 +371,6 @@ export function useLanguageTranscript({
       fallbackIndexRef.current = nextIndex;
       activeLocaleRef.current = chain[nextIndex];
       if (__DEV__) {
-        console.log('[STT] locale fallback', localeRef.current, '→', activeLocaleRef.current);
       }
       scheduleRestart(400);
       return;

@@ -3,6 +3,7 @@ import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useEffect, useState } from 'react';
 import {
   ActivityIndicator,
+  Alert,
   BackHandler,
   Pressable,
   ScrollView,
@@ -13,6 +14,12 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { AudioPlayer } from '@/src/components/AudioPlayer';
+import {
+  processTranscriptionQueue,
+  queueStatus,
+  retryNow,
+  type QueueStatus,
+} from '@/src/services/transcriptionQueue';
 import { DeleteThoughtDialog } from '@/src/components/DeleteThoughtDialog';
 import { findLanguageByWhisperCode, resolveSpokenLanguage } from '@/src/i18n/languages';
 import { useIdeasStore } from '@/src/store/ideasStore';
@@ -89,10 +96,77 @@ export default function IdeaDetailScreen() {
    * something else caused a re-render.
    */
   const transcriptText = (idea?.transcript ?? '').trim();
-  const createdMsAgo = idea?.createdAt
-    ? Date.now() - new Date(idea.createdAt).getTime()
-    : Number.MAX_SAFE_INTEGER;
-  const transcribing = !transcriptText && createdMsAgo < 3 * 60_000;
+  const createdAtMs = idea?.createdAt ? new Date(idea.createdAt).getTime() : 0;
+  const updatedAtMs = idea?.updatedAt ? new Date(idea.updatedAt).getTime() : 0;
+  const createdMsAgo = createdAtMs ? Date.now() - createdAtMs : Number.MAX_SAFE_INTEGER;
+
+  /**
+   * WHY updatedAt is the signal: buildLocalIdea saves the take with
+   * updatedAt === createdAt, then the transcription pipeline patches the record
+   * and bumps updatedAt. So a later updatedAt means the pipeline has finished -
+   * whether it produced text or not.
+   *
+   * Without that check the spinner spun forever whenever transcription failed
+   * (no API key, no network), which looks identical to "still working".
+   * The time cap is a backstop in case the app was killed mid-pipeline.
+   */
+  const pipelineFinished = updatedAtMs > createdAtMs + 500;
+
+  /**
+   * WHY a queued state separate from "transcribing": a spinner that silently
+   * times out into "no transcript was produced" tells the user nothing and
+   * offers no way forward. Knowing the recording is waiting for a connection -
+   * and being able to retry - is the difference between a bug and a status.
+   */
+  const [qStatus, setQStatus] = useState<QueueStatus>({ state: 'none' });
+  const [retrying, setRetrying] = useState(false);
+
+  /**
+   * WHY the poll: the queue retries on its own every 15 seconds, so the moment
+   * a connection returns the transcript arrives without the user doing
+   * anything. This just keeps the screen in step with that.
+   */
+  useEffect(() => {
+    if (!idea?.id) return;
+    let cancelled = false;
+
+    /**
+     * WHY the retry lives here rather than in a shared timer: this screen is
+     * where the user waits for the transcript, so it owns the retry while it is
+     * visible and stops when it is not. One less global to keep in sync.
+     */
+    let busy = false;
+    const check = async () => {
+      if (busy) return;
+      busy = true;
+      try {
+        await processTranscriptionQueue();
+        const st = await queueStatus(idea.id);
+        if (!cancelled) setQStatus(st);
+      } finally {
+        busy = false;
+      }
+    };
+    void check();
+    // 8s: fast enough to feel automatic, slow enough not to hammer the network.
+    const id = setInterval(check, 8000);
+    return () => {
+      cancelled = true;
+      clearInterval(id);
+    };
+  }, [idea?.id, transcriptText]);
+
+  const onRetry = async () => {
+    if (!idea?.id || retrying) return;
+    setRetrying(true);
+    const result = await retryNow(idea.id);
+    setRetrying(false);
+    if (!result.ok) {
+      Alert.alert('Could not transcribe', result.reason);
+    }
+  };
+  const transcribing =
+    !transcriptText && !pipelineFinished && createdMsAgo < 90_000;
 
   const goBack = () => {
     router.replace('/(tabs)/ideas');
@@ -229,18 +303,46 @@ export default function IdeaDetailScreen() {
             <Text style={[styles.sectionTitle, styles.sectionTitleInline]}>Transcript</Text>
           </View>
           <View style={styles.transcriptCard}>
-            {transcribing ? (
+            {transcribing || retrying ? (
               <View style={styles.transcribingRow}>
                 <ActivityIndicator size="small" color={colors.secondary} />
                 <Text style={styles.transcribingText}>
-                  Transcribing your recording… this appears in a few seconds.
+                  Transcribing your recording…
                 </Text>
+              </View>
+            ) : qStatus.state === 'waiting' ? (
+              <View style={styles.transcribingRow}>
+                <ActivityIndicator size="small" color={colors.secondary} />
+                <Text style={styles.transcribingText}>
+                  Waiting for a connection. Your recording is safe — the
+                  transcript will appear on its own once you are online.
+                </Text>
+              </View>
+            ) : qStatus.state === 'retrying' ? (
+              <View style={styles.transcribingRow}>
+                <ActivityIndicator size="small" color={colors.secondary} />
+                <Text style={styles.transcribingText}>
+                  Trying again… (attempt {qStatus.attempts + 1}). Your recording
+                  is safe — no need to do anything.
+                </Text>
+              </View>
+            ) : qStatus.state === 'failed' ? (
+              <View>
+                <Text style={styles.transcribingText}>
+                  We could not create a transcript after{' '}
+                  {qStatus.state === 'failed' ? qStatus.attempts : 0} attempts.
+                  The audio is saved — you can play it above.
+                </Text>
+                <Pressable onPress={() => void onRetry()} style={styles.retryBtn}>
+                  <Text style={styles.retryText}>Try again</Text>
+                </Pressable>
               </View>
             ) : (
               <Text style={styles.body}>
                 {transcriptText
                   ? idea.transcript
-                  : 'No transcript for this recording. The audio is saved — play it above.'}
+                  : 'No transcript was produced. The audio is saved — play it above. ' +
+                    'If this keeps happening, transcription is not configured.'}
               </Text>
             )}
           </View>
@@ -302,6 +404,19 @@ export default function IdeaDetailScreen() {
 }
 
 const styles = StyleSheet.create({
+  retryBtn: {
+    alignSelf: 'flex-start',
+    marginTop: 14,
+    paddingHorizontal: 16,
+    paddingVertical: 9,
+    borderRadius: 999,
+    backgroundColor: colors.secondarySoft,
+  },
+  retryText: {
+    fontFamily: fonts.bodySemi,
+    fontSize: 14,
+    color: colors.onSecondaryFixedVariant,
+  },
   transcribingRow: {
     flexDirection: 'row',
     alignItems: 'center',

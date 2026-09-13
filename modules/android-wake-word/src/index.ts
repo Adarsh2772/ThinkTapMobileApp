@@ -70,6 +70,12 @@ type NativeModule = {
   stopRecording(): Promise<boolean>;
   discardRecording(): Promise<boolean>;
 
+  setCommandsEnabled(enabled: boolean): Promise<boolean>;
+  areCommandsEnabled(): boolean;
+  suspendMic(): Promise<boolean>;
+  resumeMic(): Promise<boolean>;
+
+
   isCallActive(): boolean;
   startCallWatch(): Promise<boolean>;
   stopCallWatch(): Promise<boolean>;
@@ -197,6 +203,57 @@ export const AndroidWakeWord = {
     if (!Native) return false;
     try {
       return await Native.discardRecording();
+    } catch {
+      return false;
+    }
+  },
+
+  /**
+   * Suspend or resume voice-command matching without releasing the microphone.
+   *
+   * WHY: playing a recording through the speaker feeds the app's own audio back
+   * into its own microphone. A take containing "hey think tap stop" could stop
+   * a live recording, and one containing "hey think tap start" could open a
+   * take the user never asked for. Call with false before playback, true after.
+   *
+   * The recording itself is unaffected - only matching pauses.
+   */
+  async setCommandsEnabled(enabled: boolean): Promise<boolean> {
+    if (!Native) return false;
+    try {
+      return await Native.setCommandsEnabled(enabled);
+    } catch {
+      return false;
+    }
+  },
+
+  areCommandsEnabled: (): boolean =>
+    safeBool(Native?.areCommandsEnabled.bind(Native)),
+
+  /**
+   * True when Android will doze this app - the service will be killed and the
+   * user will think the app is broken.
+   */
+  /**
+   * Release the microphone without ending an open take.
+   *
+   * WHY not stopListening: that closes the WAV file and ends the recording.
+   * This releases only AudioRecord, so the microphone indicator clears and
+   * nothing is heard, while the take stays open and paused.
+   */
+  async suspendMic(): Promise<boolean> {
+    if (!Native) return false;
+    try {
+      return await Native.suspendMic();
+    } catch {
+      return false;
+    }
+  },
+
+  async resumeMic(): Promise<boolean> {
+    if (!Native) return false;
+    try {
+      return await Native.resumeMic();
     } catch {
       return false;
     }

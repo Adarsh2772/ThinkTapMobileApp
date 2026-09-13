@@ -136,7 +136,6 @@ export function useIdeaCapture(
       // Real metering moves with input. A flat line means the device lies.
       if (max - min > 6) {
         meteringUsableRef.current = true;
-        console.log('[CAPTURE] metering verified - silence auto-pause armed');
       }
     }
   }, []);
