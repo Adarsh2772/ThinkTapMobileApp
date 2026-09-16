@@ -32,7 +32,7 @@ export function MicButton({
   labelIdle = 'Tap to Record',
   labelRecording = 'Recording…',
   labelPaused = 'Paused',
-  helperIdle = 'On-device speech-to-text — set your transcription language in Settings',
+  helperIdle = 'Your Thought is translated to English after you stop',
   hideAmbientRings = false,
 }: Props) {
   const pulse = useRef(new Animated.Value(0)).current;

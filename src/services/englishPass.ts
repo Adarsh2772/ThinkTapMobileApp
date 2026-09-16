@@ -19,7 +19,16 @@ import { useAiConfigStore } from '@/src/store/aiConfigStore';
  * than none, so this can never block a thought from being saved.
  */
 
-const MODEL = 'llama-3.3-70b-versatile';
+/**
+ * WHY not llama-3.3-70b-versatile: Groq decommissioned it on 16 August 2026.
+ * Requests using it return 400, and because both of these features fail
+ * silently by design, the app quietly fell back to keyword matching with no
+ * sign anything was wrong.
+ *
+ * openai/gpt-oss-120b is Groq's recommended replacement. Overridable so the
+ * next deprecation is a config change rather than a release.
+ */
+const MODEL = process.env.EXPO_PUBLIC_LLM_MODEL?.trim() || 'openai/gpt-oss-120b';
 const TIMEOUT_MS = 15_000;
 
 function baseUrlFor(apiKey: string): string {
@@ -43,21 +52,34 @@ const TRANSLITERATION_MARKERS = [
   'mala', 'tula', 'tyala', 'amhi', 'tumhi', 'maza', 'majha', 'tumcha',
   'hain', 'kya', 'kaise', 'karna', 'karne', 'liye', 'raha', 'rahi', 'rahe',
   'tayar', 'jevan', 'chaan', 'khup', 'ekda', 'gosht', 'mhanje', 'ani',
+  // Seen in real transcripts from the app.
+  'banwa', 'banwi', 'banavi', 'asihi', 'ashi', 'aahet', 'hoti', 'hota',
+  'sangto', 'sangte', 'pahije', 'kelay', 'zhala', 'tyacha', 'tyachi',
+  'mazha', 'majhi', 'aapla', 'aaple', 'yeto', 'yete', 'disto', 'diste',
 ];
 
-/** True when the text is clearly not yet English. */
+/**
+ * True when the text needs translating.
+ *
+ * WHY a single marker is now enough: the transcript arrives in the language
+ * spoken, so most non-English text is plainly non-English and caught by script.
+ * The marker list catches the remaining case - Marathi or Hindi that Whisper
+ * wrote in English letters, like "Ashi Banwa Banwi", where the script test
+ * sees nothing wrong.
+ *
+ * A false positive is cheap: the model is told to leave English untouched, so
+ * running the pass on English text returns it unchanged.
+ */
 export function needsEnglishPass(text: string): boolean {
   const t = text.trim();
   if (!t) return false;
   if (NON_LATIN.test(t)) return true;
 
   const words = t.toLowerCase().split(/\s+/);
-  let hits = 0;
   for (const w of words) {
     const clean = w.replace(/[^a-z]/g, '');
-    if (TRANSLITERATION_MARKERS.includes(clean)) {
-      hits += 1;
-      if (hits >= 2) return true;
+    if (clean.length >= 3 && TRANSLITERATION_MARKERS.includes(clean)) {
+      return true;
     }
   }
   return false;
@@ -75,15 +97,34 @@ export async function toEnglish(text: string): Promise<string> {
   const apiKey = useAiConfigStore.getState().getApiKey();
   if (!apiKey) return text;
 
-  const system =
-    'You translate personal voice notes into natural English. ' +
-    'The input may be in Devanagari, or it may be Hindi or Marathi written in ' +
-    'English letters — translate both into real English, never spell them out ' +
-    'phonetically. ' +
-    'Keep the meaning and the speaker\'s voice. Do not summarise, do not add ' +
-    'anything, do not explain. ' +
-    'If a passage is already English, leave it exactly as it is. ' +
-    'Reply with the translated text only.';
+  /**
+   * WHY the prompt is this specific: a general "translate this" instruction
+   * produced transliteration on song titles and proper nouns - "Ashi Banwa
+   * Banwi" came back unchanged because the model treated it as a name. Naming
+   * the failure mode explicitly is what stops it.
+   */
+  const system = [
+    'You translate personal voice notes into natural English.',
+    '',
+    'The input may be:',
+    '- Devanagari or another Indic script',
+    '- Hindi or Marathi written in English letters (transliteration)',
+    '- English already',
+    '- A mixture of these',
+    '',
+    'Rules:',
+    '1. Translate meaning into English. Never spell words out phonetically.',
+    '   "Ashi Banwa Banwi" is a Marathi phrase meaning roughly "such pretence"',
+    '   - translate it, do not repeat it.',
+    '2. Leave passages that are already English exactly as they are.',
+    '3. Keep proper nouns as they are: people, places, film and song titles.',
+    '4. Keep the speaker\'s voice and every point they made. Do not summarise,',
+    '   do not add anything, do not explain what you did.',
+    '5. If a phrase is genuinely untranslatable, give the closest English',
+    '   meaning rather than the original words.',
+    '',
+    'Reply with the translated text and nothing else.',
+  ].join('\n');
 
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), TIMEOUT_MS);

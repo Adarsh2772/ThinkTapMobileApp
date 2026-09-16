@@ -790,6 +790,15 @@ async function enrichViaBackend(
     // A WAV header alone is 44 bytes; anything this small has no audio in it.
     throw new Error('This recording contains no audio.');
   }
+  /**
+   * WHY a length floor: a take of a second or two - a mis-tap, or a call
+   * arriving right as recording started - has nothing to transcribe, and an
+   * empty Thought reads as a failure. 32 kB is about one second of 16 kHz
+   * mono audio.
+   */
+  if (typeof info.size === 'number' && info.size < 32000) {
+    throw new Error('This recording is too short to produce a Thought.');
+  }
   if (typeof info.size === 'number' && info.size > MAX_STT_UPLOAD_BYTES) {
     throw new Error('Recording is too long for transcription (max ~25 MB).');
   }
@@ -887,6 +896,15 @@ async function enrichWithCloudStt(
   if (typeof info.size === 'number' && info.size < 2000) {
     // A WAV header alone is 44 bytes; anything this small has no audio in it.
     throw new Error('This recording contains no audio.');
+  }
+  /**
+   * WHY a length floor: a take of a second or two - a mis-tap, or a call
+   * arriving right as recording started - has nothing to transcribe, and an
+   * empty Thought reads as a failure. 32 kB is about one second of 16 kHz
+   * mono audio.
+   */
+  if (typeof info.size === 'number' && info.size < 32000) {
+    throw new Error('This recording is too short to produce a Thought.');
   }
   if (typeof info.size === 'number' && info.size > MAX_STT_UPLOAD_BYTES) {
     throw new Error(

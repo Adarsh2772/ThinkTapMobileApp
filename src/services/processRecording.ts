@@ -102,12 +102,17 @@ export async function enrichPendingRecording(
         // The transcription language chosen in Settings - see whisperTranscribe.
         speechLocale: pending.speechLocale,
         /**
-         * WHY always true: the Thought is defined as the English rendering of
-         * the idea, so search works across every recording regardless of the
-         * language spoken. The Human Signal - the audio - preserves the
-         * original words and can always be replayed.
+         * WHY false: Whisper's translate endpoint is markedly weaker than its
+         * transcribe endpoint. Asked to translate, it transliterates when
+         * unsure - "Ashi Banwa Banwi" came back spelled out rather than
+         * rendered in English, and that is not searchable.
+         *
+         * Transcribing in the spoken language is what Whisper is best at, and
+         * the LLM translation pass that follows is a text-to-text job where
+         * a language model is far stronger than a speech model. Two steps,
+         * each doing what it is good at.
          */
-        translateToEnglish: true,
+        translateToEnglish: false,
         onStage: reportStage,
       });
     } else if (deviceTranscript) {
@@ -124,12 +129,17 @@ export async function enrichPendingRecording(
         // The transcription language chosen in Settings - see whisperTranscribe.
         speechLocale: pending.speechLocale,
         /**
-         * WHY always true: the Thought is defined as the English rendering of
-         * the idea, so search works across every recording regardless of the
-         * language spoken. The Human Signal - the audio - preserves the
-         * original words and can always be replayed.
+         * WHY false: Whisper's translate endpoint is markedly weaker than its
+         * transcribe endpoint. Asked to translate, it transliterates when
+         * unsure - "Ashi Banwa Banwi" came back spelled out rather than
+         * rendered in English, and that is not searchable.
+         *
+         * Transcribing in the spoken language is what Whisper is best at, and
+         * the LLM translation pass that follows is a text-to-text job where
+         * a language model is far stronger than a speech model. Two steps,
+         * each doing what it is good at.
          */
-        translateToEnglish: true,
+        translateToEnglish: false,
         onStage: reportStage,
       });
     }

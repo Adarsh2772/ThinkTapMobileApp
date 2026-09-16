@@ -37,7 +37,7 @@ export function ThoughtSearchCard({ idea, onPress }: Props) {
       <Field label="Source" value={source} maxChars={90} />
       <Field label="AI Core Insight" value={insight} maxChars={90} />
       {!thought ? (
-        <Text style={styles.missing}>No raw transcript on this thought yet.</Text>
+        <Text style={styles.missing}>No Thought on this recording yet.</Text>
       ) : null}
     </Pressable>
   );

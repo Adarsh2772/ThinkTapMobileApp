@@ -99,7 +99,14 @@ export const CATEGORIES = [
 
 export type Category = (typeof CATEGORIES)[number];
 
-const CATEGORY_ALIASES: Record<string, Exclude<Category, 'All'>> = {
+/**
+ * Exported so categorizeService.ts can match against the same singular /
+ * alternate forms when parsing the LLM's reply, not just the exact plural
+ * canonical strings in CATEGORIES. Without this, a model answering "Song"
+ * or "Script" instead of "Songs" / "Scripts" fails to match, silently falls
+ * back to the keyword guess, and undoes the LLM categorisation entirely.
+ */
+export const CATEGORY_ALIASES: Record<string, Exclude<Category, 'All'>> = {
   movie: 'Movies',
   movies: 'Movies',
   film: 'Movies',

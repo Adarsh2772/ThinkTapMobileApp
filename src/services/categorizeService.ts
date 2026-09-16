@@ -1,5 +1,5 @@
 import { useAiConfigStore } from '@/src/store/aiConfigStore';
-import { CATEGORIES, normalizeCategory } from '@/src/theme/tokens';
+import { CATEGORIES, CATEGORY_ALIASES, normalizeCategory } from '@/src/theme/tokens';
 
 /**
  * Classifies a Thought into one of the app's categories using an LLM.
@@ -22,7 +22,16 @@ import { CATEGORIES, normalizeCategory } from '@/src/theme/tokens';
  * failure downgrades the result rather than breaking the save.
  */
 
-const MODEL = 'llama-3.3-70b-versatile';
+/**
+ * WHY not llama-3.3-70b-versatile: Groq decommissioned it on 16 August 2026.
+ * Requests using it return 400, and because both of these features fail
+ * silently by design, the app quietly fell back to keyword matching with no
+ * sign anything was wrong.
+ *
+ * openai/gpt-oss-120b is Groq's recommended replacement. Overridable so the
+ * next deprecation is a config change rather than a release.
+ */
+const MODEL = process.env.EXPO_PUBLIC_LLM_MODEL?.trim() || 'openai/gpt-oss-120b';
 const TIMEOUT_MS = 12_000;
 
 function baseUrlFor(apiKey: string): string {
@@ -95,13 +104,24 @@ export async function categorizeWithLlm(
      * "Movies." or "Category: Movies" despite the instruction. Matching against
      * the known list means an unexpected shape falls back instead of writing a
      * category that does not exist.
+     *
+     * WHY aliases are checked too, not just CATEGORIES: the prompt asks for
+     * the exact plural label ("Movies", "Songs", "Scripts"), but a model
+     * routinely answers with the natural singular ("Movie", "Song", "Script")
+     * despite that instruction. Checking CATEGORIES alone missed those
+     * replies entirely - "song".includes("songs") is false - and silently
+     * fell back to the keyword guess, which is the exact inaccuracy this LLM
+     * call exists to fix. This was landing song/movie/script notes back in
+     * Business.
      */
-    const match = CATEGORIES.find(
-      (c) => c !== 'All' && raw.toLowerCase().includes(c.toLowerCase()),
-    );
-    if (!match) return null;
+    const lower = raw.toLowerCase();
+    const exact = CATEGORIES.find((c) => c !== 'All' && lower.includes(c.toLowerCase()));
+    if (exact) return normalizeCategory(exact);
 
-    return normalizeCategory(match);
+    const aliasKey = Object.keys(CATEGORY_ALIASES).find((alias) => lower.includes(alias));
+    if (aliasKey) return CATEGORY_ALIASES[aliasKey];
+
+    return null;
   } catch {
     // Offline, timed out, or rate limited - the caller falls back to keywords.
     return null;

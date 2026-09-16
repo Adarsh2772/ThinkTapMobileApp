@@ -26,7 +26,7 @@ function stageCopy(stage: ProcessingStage | undefined, organizing: boolean): str
       return 'Language detected. Organizing your idea…';
     case 'summarizing':
     case 'saving':
-      return 'Transcription complete. Saving…';
+      return 'Translation complete. Saving…';
     default:
       return 'Organizing your idea in the background…';
   }
