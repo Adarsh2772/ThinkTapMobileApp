@@ -21,10 +21,30 @@ import { t } from '@/src/i18n/translations';
 const LANGUAGE_KEY = '@thinktap/app_language';
 const SPEECH_LOCALE_KEY = '@thinktap/speech_locale';
 const SAVE_AUDIO_KEY = '@thinktap/save_audio';
+const TRANSCRIPT_OUTPUT_KEY = '@thinktap/transcript_output';
+
+/**
+ * What the saved transcript should contain.
+ *
+ * 'spoken'  - verbatim, in whatever language was used. Marathi stays Marathi.
+ * 'english' - everything translated to English, whatever was spoken.
+ *
+ * WHY 'english' is the default: the Human Signal is the audio recording, which
+ * is preserved exactly as spoken and can always be replayed. The Thought is the
+ * text derived from it, and keeping that in one language makes search work
+ * across every recording - a user searching in English finds a thought they
+ * spoke in Marathi.
+ *
+ * Nothing is lost, because the original wording still exists in the recording.
+ * 'spoken' remains available for anyone who wants the text verbatim, at the
+ * cost of search only matching within the same language.
+ */
+export type TranscriptOutput = 'spoken' | 'english';
 
 type SettingsState = {
   languageCode: AppLanguageCode;
   speechLocale: SpeechLocaleCode;
+  transcriptOutput: TranscriptOutput;
   /** Persist the take as a file so cloud STT can auto-detect language. */
   saveAudioRecording: boolean;
   hydrated: boolean;
@@ -32,6 +52,7 @@ type SettingsState = {
   setLanguage: (code: AppLanguageCode) => Promise<void>;
   setSpeechLocale: (code: SpeechLocaleCode) => Promise<void>;
   setSaveAudioRecording: (value: boolean) => Promise<void>;
+  setTranscriptOutput: (value: TranscriptOutput) => Promise<void>;
   language: () => AppLanguage;
   speechLanguage: () => SpeechLocale;
   tx: (key: Parameters<typeof t>[1]) => string;
@@ -41,12 +62,14 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
   languageCode: DEFAULT_LANGUAGE,
   speechLocale: DEFAULT_SPEECH_LOCALE,
   saveAudioRecording: true,
+  transcriptOutput: 'english' as TranscriptOutput,
   hydrated: false,
 
   hydrate: async () => {
     let languageCode: AppLanguageCode = DEFAULT_LANGUAGE;
     let speechLocale: SpeechLocaleCode = DEFAULT_SPEECH_LOCALE;
     let saveAudioRecording = true;
+    let transcriptOutput: TranscriptOutput = 'english';
 
     try {
       const raw = await AsyncStorage.getItem(LANGUAGE_KEY);
@@ -71,11 +94,13 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
     try {
       const rawSave = await AsyncStorage.getItem(SAVE_AUDIO_KEY);
       saveAudioRecording = rawSave === null ? true : rawSave === 'true';
+      const rawOutput = await AsyncStorage.getItem(TRANSCRIPT_OUTPUT_KEY);
+      transcriptOutput = rawOutput === 'spoken' ? 'spoken' : 'english';
     } catch {
       // ignore
     }
 
-    set({ languageCode, speechLocale, saveAudioRecording, hydrated: true });
+    set({ languageCode, speechLocale, saveAudioRecording, transcriptOutput, hydrated: true });
   },
 
   setLanguage: async (code) => {
@@ -96,6 +121,15 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
   setSpeechLocale: async (code) => {
     set({ speechLocale: code });
     await AsyncStorage.setItem(SPEECH_LOCALE_KEY, code);
+  },
+
+  setTranscriptOutput: async (value) => {
+    set({ transcriptOutput: value });
+    try {
+      await AsyncStorage.setItem(TRANSCRIPT_OUTPUT_KEY, value);
+    } catch (e) {
+      console.warn('[AI] could not persist transcript output setting', e);
+    }
   },
 
   setSaveAudioRecording: async (value) => {

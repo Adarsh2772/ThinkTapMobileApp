@@ -285,20 +285,18 @@ export function useNativeCapture(options: Options = {}) {
    * activity-bound recogniser died; that problem no longer exists.
    */
   /**
-   * The microphone follows the app's foreground state.
+   * Microphone lifecycle.
    *
-   * WHY: an always-listening microphone was starting recordings on its own and
-   * holding the mic while the user was in other apps. Listening only while the
-   * app is open removes that entirely - the microphone indicator clears the
-   * moment you leave.
+   * WHY a recording is NOT paused on background: locking the screen and
+   * switching apps both report as "background", so pausing there stopped takes
+   * the moment the phone locked and the audio after that point was lost. A
+   * recording in progress continues - that is the whole point of a foreground
+   * service, and a wake lock keeps the capture loop alive with the screen off.
    *
-   * An open take is paused rather than stopped, so the recording is never lost.
-   * It stays paused on return: the user resumes with the button or by saying
-   * "hey think tap resume". Auto-resuming would capture audio they did not
-   * intend, since they may have been away for minutes.
+   * When nothing is being recorded the microphone is still released on leaving,
+   * so the app is not listening while the user is elsewhere.
    *
-   * TRADE-OFF: voice commands cannot be heard from outside the app, so a
-   * recording cannot be started or resumed by voice while backgrounded.
+   * Calls are handled separately and always pause the take.
    */
   useEffect(() => {
     if (!supported) return;
@@ -309,6 +307,7 @@ export function useNativeCapture(options: Options = {}) {
         return;
       }
       if (next === 'background' || next === 'inactive') {
+        if (AndroidWakeWord.isRecording()) return;
         void AndroidWakeWord.suspendMic();
       }
     });

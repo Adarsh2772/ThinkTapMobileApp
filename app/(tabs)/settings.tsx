@@ -30,6 +30,8 @@ import { colors, fonts, radii, spacing, typography } from '@/src/theme/tokens';
 export default function SettingsScreen() {
   const user = useAuthStore((s) => s.session?.user);
   const tx = useSettingsStore((s) => s.tx);
+  const transcriptOutput = useSettingsStore((s) => s.transcriptOutput);
+  const setTranscriptOutput = useSettingsStore((s) => s.setTranscriptOutput);
   const subscription = useSubscriptionStore((s) => s.profile);
   const wakeEnabled = useWakeWordStore((s) => s.enabled);
   const wakeAvailable = useWakeWordStore((s) => s.available);
@@ -147,6 +149,30 @@ export default function SettingsScreen() {
           {wakeEnabled && wakeLastHeard ? (
             <Text style={styles.hint}>Last heard: “{wakeLastHeard}”</Text>
           ) : null}
+        </View>
+
+        <View style={styles.card}>
+          <View style={styles.wakeRow}>
+            <View style={{ flex: 1 }}>
+              <Text style={styles.label}>Thought language</Text>
+              <Text style={styles.value}>
+                {transcriptOutput === 'english' ? 'English' : 'As spoken'}
+              </Text>
+            </View>
+            <Switch
+              value={transcriptOutput === 'english'}
+              onValueChange={(v) =>
+                void setTranscriptOutput(v ? 'english' : 'spoken')
+              }
+              trackColor={{ false: colors.outlineVariant, true: colors.secondary }}
+              thumbColor={colors.surfaceContainerLowest}
+            />
+          </View>
+          <Text style={styles.hint}>
+            {transcriptOutput === 'english'
+              ? 'Your Thought is written in English whatever language you speak, so search finds it however you phrase the query. Your Human Signal — the recording — is always kept exactly as spoken.'
+              : 'Your Thought stays in the language you spoke. Search will only match queries in that same language.'}
+          </Text>
         </View>
 
         <View style={styles.card}>

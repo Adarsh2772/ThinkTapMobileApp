@@ -91,6 +91,29 @@ class WavWriter(
     }
   }
 
+  /**
+   * Drop the last [ms] milliseconds of audio.
+   *
+   * WHY this exists: a take stopped by voice contains the spoken command at the
+   * end - "hey think tap stop" was audible in playback and appeared in the
+   * transcript. Rewinding the file before closing removes it.
+   *
+   * Safe on a short take: never trims below zero.
+   */
+  fun trimTail(ms: Long) {
+    val f = raf ?: return
+    val bytesPerMs = (sampleRate * channels * bitsPerSample / 8) / 1000.0
+    val drop = (ms * bytesPerMs).toLong()
+    if (drop <= 0 || drop >= dataBytes) return
+    try {
+      dataBytes -= drop
+      f.setLength(HEADER_BYTES + dataBytes)
+      f.seek(HEADER_BYTES + dataBytes)
+    } catch (e: Exception) {
+      Log.w(TAG, "trimTail failed", e)
+    }
+  }
+
   /** Patch the RIFF header with the real sizes and close. Returns the path. */
   fun close(): String? {
     val f = raf ?: return null

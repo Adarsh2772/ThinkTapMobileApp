@@ -10,6 +10,7 @@ import { analyzeTranscript } from '@/src/services/transcriptAnalysisService';
 import { hasIndicScript, type AppLanguageCode } from '@/src/i18n/languages';
 import { normalizeCategory } from '@/src/theme/tokens';
 import type { Idea, TranscriptAnalysis } from '@/src/types';
+import { useSettingsStore } from '@/src/store/settingsStore';
 import { createId } from '@/src/utils/format';
 
 export type PendingCapture = {
@@ -96,6 +97,15 @@ export async function enrichPendingRecording(
         audioUri: pending.audioUri,
         durationSec: pending.durationSec,
         languageCode,
+        // The transcription language chosen in Settings - see whisperTranscribe.
+        speechLocale: pending.speechLocale,
+        /**
+         * WHY read at call time rather than passed in: this runs in the
+         * background after a take, and the value must reflect the setting as it
+         * is now, not as it was when the screen mounted.
+         */
+        translateToEnglish:
+          useSettingsStore.getState().transcriptOutput === 'english',
         onStage: reportStage,
       });
     } else if (deviceTranscript) {
@@ -109,6 +119,15 @@ export async function enrichPendingRecording(
         audioUri: pending.audioUri,
         durationSec: pending.durationSec,
         languageCode,
+        // The transcription language chosen in Settings - see whisperTranscribe.
+        speechLocale: pending.speechLocale,
+        /**
+         * WHY read at call time rather than passed in: this runs in the
+         * background after a take, and the value must reflect the setting as it
+         * is now, not as it was when the screen mounted.
+         */
+        translateToEnglish:
+          useSettingsStore.getState().transcriptOutput === 'english',
         onStage: reportStage,
       });
     }

@@ -300,22 +300,22 @@ export default function IdeaDetailScreen() {
         <View style={styles.section}>
           <View style={styles.sectionHeader}>
             <Ionicons name="mic-outline" size={18} color={colors.secondary} />
-            <Text style={[styles.sectionTitle, styles.sectionTitleInline]}>Transcript</Text>
+            <Text style={[styles.sectionTitle, styles.sectionTitleInline]}>Thought</Text>
           </View>
           <View style={styles.transcriptCard}>
             {transcribing || retrying ? (
               <View style={styles.transcribingRow}>
                 <ActivityIndicator size="small" color={colors.secondary} />
                 <Text style={styles.transcribingText}>
-                  Transcribing your recording…
+                  Preparing your Thought…
                 </Text>
               </View>
             ) : qStatus.state === 'waiting' ? (
               <View style={styles.transcribingRow}>
                 <ActivityIndicator size="small" color={colors.secondary} />
                 <Text style={styles.transcribingText}>
-                  Waiting for a connection. Your recording is safe — the
-                  transcript will appear on its own once you are online.
+                  Waiting for a connection. Your Human Signal is saved — the
+                  Thought will appear on its own once you are online.
                 </Text>
               </View>
             ) : qStatus.state === 'retrying' ? (
@@ -329,9 +329,9 @@ export default function IdeaDetailScreen() {
             ) : qStatus.state === 'failed' ? (
               <View>
                 <Text style={styles.transcribingText}>
-                  We could not create a transcript after{' '}
+                  We could not create the Thought after{' '}
                   {qStatus.state === 'failed' ? qStatus.attempts : 0} attempts.
-                  The audio is saved — you can play it above.
+                  Your Human Signal is saved — you can play it above.
                 </Text>
                 <Pressable onPress={() => void onRetry()} style={styles.retryBtn}>
                   <Text style={styles.retryText}>Try again</Text>
@@ -351,9 +351,9 @@ export default function IdeaDetailScreen() {
         <View style={styles.section}>
           <View style={styles.sectionHeader}>
             <Ionicons name="sparkles-outline" size={18} color={colors.secondary} />
-            <Text style={[styles.sectionTitle, styles.sectionTitleInline]}>Analysis</Text>
+            <Text style={[styles.sectionTitle, styles.sectionTitleInline]}>AI Core Insight</Text>
           </View>
-          <Text style={styles.sectionHint}>Response from analyzing the transcript above</Text>
+          <Text style={styles.sectionHint}>Generated from the Thought above</Text>
 
           {showAnalysis ? (
             <View style={styles.analysisStack}>

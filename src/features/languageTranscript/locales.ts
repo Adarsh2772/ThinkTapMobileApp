@@ -2,6 +2,20 @@ import type { AppLanguageCode } from '@/src/i18n/languages';
 
 /** BCP-47 locale for OS speech recognition (Indian languages). */
 export type SpeechLocaleCode =
+  /**
+   * Let the model decide the language for itself.
+   *
+   * WHY this option exists: naming a language removes the guesswork and is much
+   * more accurate for a recording that is mostly one language - which is why
+   * Hindi and Marathi spellings were wrong while English was fine. But it cuts
+   * the other way when someone switches languages heavily mid-recording: long
+   * English stretches inside a Hindi setting can come back transliterated into
+   * Devanagari.
+   *
+   * Neither choice wins in both cases, so the user picks. Naming a language is
+   * right for most people; this is for genuinely mixed speech.
+   */
+  | 'auto'
   | 'en-IN'
   | 'hi-IN'
   | 'bn-IN'
@@ -26,6 +40,13 @@ export type SpeechLocale = {
 };
 
 export const INDIAN_SPEECH_LOCALES: SpeechLocale[] = [
+  {
+    code: 'auto',
+    name: 'Auto-detect (mixed languages)',
+    nativeName: 'Detect automatically',
+    languageCode: '',
+    script: 'latin',
+  },
   { code: 'en-IN', name: 'English (India)', nativeName: 'English', languageCode: 'en', script: 'latin' },
   { code: 'hi-IN', name: 'Hindi', nativeName: 'हिन्दी', languageCode: 'hi', script: 'devanagari' },
   { code: 'bn-IN', name: 'Bengali', nativeName: 'বাংলা', languageCode: 'bn', script: 'bengali' },

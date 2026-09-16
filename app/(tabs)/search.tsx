@@ -118,8 +118,9 @@ export default function SearchScreen() {
             </View>
             <Text style={styles.emptyTitle}>Search what you said</Text>
             <Text style={styles.emptyBody}>
-              Results come from your raw transcript only. Add another word to narrow the list. Word
-              order can differ — “Bollywood movie” still finds “movie in Bollywood.”
+              Results come from your Thought only. Add another word to narrow the
+              list. Word order can differ — “Bollywood movie” still finds “movie
+              in Bollywood.”
             </Text>
           </View>
         </View>
@@ -135,7 +136,7 @@ export default function SearchScreen() {
                 ? 'No matching thoughts you have opened yet.'
                 : sort === 'dormant_gems'
                   ? 'No matching dormant thoughts yet.'
-                  : `No transcripts matched “${query.trim()}”.`}
+                  : `No thoughts matched “${query.trim()}”.`}
             </Text>
           }
           renderItem={({ item }) => (

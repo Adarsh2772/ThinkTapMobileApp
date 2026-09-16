@@ -15,6 +15,7 @@ import android.media.AudioRecord
 import android.media.MediaRecorder
 import android.os.Build
 import android.os.IBinder
+import android.os.PowerManager
 import android.util.Log
 import androidx.core.app.NotificationCompat
 import androidx.core.content.ContextCompat
@@ -111,16 +112,26 @@ class AudioCaptureService : Service() {
      * take that starts on its own is worse than one that needs a clearer
      * phrase, so every command now carries an explicit verb.
      */
-    private const val GRAMMAR_IDLE = """[
+    /**
+     * ONE grammar for every state.
+     *
+     * WHY not one per state: grammar-constrained recognition must return one of
+     * its phrases. With a start-only grammar while idle, saying "hey think tap
+     * stop" had nowhere to go but "hey think tap start" - so a stop command
+     * started a recording. With a stop-only grammar while recording, "start"
+     * became "stop" and ended the take. Both were reported.
+     *
+     * Every command is now a candidate in every state, so the recogniser
+     * returns what was actually said. CommandMatcher then decides whether that
+     * command makes sense right now - "stop" while idle is simply ignored
+     * rather than forced into something else.
+     */
+    private const val COMMAND_GRAMMAR = """[
       "hey think tap start",
-      "think tap start",
-      "[unk]"
-    ]"""
-
-    private const val GRAMMAR_RECORDING = """[
       "hey think tap stop",
       "hey think tap pause",
       "hey think tap resume",
+      "think tap start",
       "think tap stop",
       "think tap pause",
       "think tap resume",
@@ -133,6 +144,16 @@ class AudioCaptureService : Service() {
      * take they never asked for.
      */
     private const val POST_STOP_COOLDOWN_MS = 4000L
+
+    /** Mean word confidence a final result must reach to count as a command. */
+    private const val MIN_COMMAND_CONFIDENCE = 0.75
+
+    /**
+     * The action verb must be heard clearly on its own, not inferred from the
+     * rest of the phrase. Set high deliberately: a missed command costs one
+     * repetition, an invented one costs an unwanted recording.
+     */
+    private const val MIN_ACTION_WORD_CONFIDENCE = 0.85
 
     @Volatile var isRunning: Boolean = false; private set
     @Volatile var isRecording: Boolean = false; private set
@@ -165,6 +186,7 @@ class AudioCaptureService : Service() {
   private var lastCommandAt = 0L
   private var lastStopAt = 0L
   @Volatile private var micSuspended = false
+  private var wakeLock: PowerManager.WakeLock? = null
   private val commandDebounceMs = 1500L
 
   override fun onBind(intent: Intent?): IBinder? = null
@@ -345,8 +367,7 @@ class AudioCaptureService : Service() {
   }
 
   private fun feedRecognizer(frame: ShortArray, read: Int) {
-    // Recording and idle use different phrase sets - see GRAMMAR_IDLE.
-    val wanted = if (isRecording) GRAMMAR_RECORDING else GRAMMAR_IDLE
+    val wanted = COMMAND_GRAMMAR
     if (recognizer != null && recognizerGrammar != wanted) {
       try { recognizer?.close() } catch (_: Exception) {}
       recognizer = null
@@ -355,7 +376,15 @@ class AudioCaptureService : Service() {
     val r = recognizer ?: run {
       val m = model ?: return
       val fresh = try {
-        Recognizer(m, SAMPLE_RATE.toFloat(), wanted)
+        Recognizer(m, SAMPLE_RATE.toFloat(), wanted).apply {
+          /**
+           * WHY word-level output: it carries a per-word confidence score, and
+           * a command is only acted on when the recogniser is actually sure.
+           * Without it every match looks equally certain, including the ones
+           * produced by speech the grammar does not cover.
+           */
+          setWords(true)
+        }
       } catch (e: Exception) {
         Log.e(TAG, "Recognizer create failed", e); return
       }
@@ -374,16 +403,67 @@ class AudioCaptureService : Service() {
 
     try {
       if (r.acceptWaveForm(bytes, bytes.size)) {
-        handleText(JSONObject(r.result).optString("text", ""), final = true)
+        val json = JSONObject(r.result)
+        handleText(
+          json.optString("text", ""),
+          final = true,
+          confidence = averageConfidence(json),
+          actionConfidence = actionWordConfidence(json),
+        )
       } else {
-        handleText(JSONObject(r.partialResult).optString("partial", ""), final = false)
+        val json = JSONObject(r.partialResult)
+        handleText(json.optString("partial", ""), final = false, confidence = 0.0, actionConfidence = 0.0)
       }
     } catch (e: Exception) {
       Log.w(TAG, "recognizer error", e)
     }
   }
 
-  private fun handleText(text: String, final: Boolean) {
+  /**
+   * Mean per-word confidence from a Vosk result, or 1.0 when the model does not
+   * report it - an absent score must not block a genuine command.
+   */
+  /**
+   * Confidence of the LAST word in a result - the action verb.
+   *
+   * WHY this matters more than the average: grammar-constrained recognition
+   * must return one of its phrases. Say "hey think tap" and the closest option
+   * is "hey think tap start", so Vosk returns that with "start" essentially
+   * invented. Three of the four words genuinely matched, so the average stays
+   * high and the command fires - a recording starts that the user never asked
+   * for.
+   *
+   * The invented word itself always scores low. Checking it directly is what
+   * separates "hey think tap start" from "hey think tap".
+   */
+  private fun actionWordConfidence(json: JSONObject): Double {
+    val words = json.optJSONArray("result") ?: return 1.0
+    if (words.length() == 0) return 1.0
+    val last = words.optJSONObject(words.length() - 1) ?: return 1.0
+    if (!last.has("conf")) return 1.0
+    return last.optDouble("conf", 1.0)
+  }
+
+  private fun averageConfidence(json: JSONObject): Double {
+    val words = json.optJSONArray("result") ?: return 1.0
+    if (words.length() == 0) return 1.0
+    var total = 0.0
+    var counted = 0
+    for (i in 0 until words.length()) {
+      val w = words.optJSONObject(i) ?: continue
+      if (!w.has("conf")) continue
+      total += w.optDouble("conf", 1.0)
+      counted += 1
+    }
+    return if (counted == 0) 1.0 else total / counted
+  }
+
+  private fun handleText(
+    text: String,
+    final: Boolean,
+    confidence: Double,
+    actionConfidence: Double,
+  ) {
     if (text.isBlank()) return
 
     AndroidWakeWordModule.emit(
@@ -391,8 +471,46 @@ class AudioCaptureService : Service() {
       mapOf("transcript" to text, "isFinal" to final),
     )
 
+    /**
+     * WHY only final results act on a command: a partial is a running
+     * hypothesis that changes with every word. Acting on one meant a fleeting
+     * wrong guess could end a take - reported as a recording stopping on its
+     * own partway through, intermittently and with no obvious trigger.
+     *
+     * This matters most for speech the grammar does not cover. A Marathi
+     * sentence has only seven English phrases and [unk] to be scored against,
+     * so a mid-utterance hypothesis lands on "hey think tap stop" far more
+     * often than a settled final result does.
+     *
+     * Waiting for the final costs a few hundred milliseconds. Losing half a
+     * recording costs the user their thought.
+     */
+    if (!final) return
+
     val now = System.currentTimeMillis()
     if (now - lastCommandAt < commandDebounceMs) return
+
+    /**
+     * WHY a confidence floor: with a grammar of seven phrases, speech the
+     * grammar does not cover - a Marathi sentence, for instance - is still
+     * scored against those seven and occasionally lands on one. Those matches
+     * come back with a low score, while a phrase the user actually said comes
+     * back high. Requiring 0.75 keeps real commands and drops the accidents.
+     */
+    if (confidence < MIN_COMMAND_CONFIDENCE) {
+      return
+    }
+
+    /**
+     * WHY the action word is checked separately: it is the one the recogniser
+     * invents when the user says only the name. "hey think tap" comes back as
+     * "hey think tap start" with a high average and a low score on "start".
+     * Requiring the verb itself to be heard clearly is what stops a bare name
+     * from starting a recording.
+     */
+    if (actionConfidence < MIN_ACTION_WORD_CONFIDENCE) {
+      return
+    }
 
     val cmd = CommandMatcher.match(text, isRecording, isPausedRecording)
     if (cmd == CommandMatcher.Command.NONE) return
@@ -418,6 +536,40 @@ class AudioCaptureService : Service() {
   // ------------------------------------------------------------------
   // Recording state - never touches the microphone
   // ------------------------------------------------------------------
+
+  /**
+   * Keeps the CPU awake while recording.
+   *
+   * WHY: locking the screen puts the device into a doze state that suspends the
+   * capture thread, so a take stopped the moment the phone locked and the
+   * audio after that point was lost. A partial wake lock keeps the capture loop
+   * running with the screen off - it does not keep the screen on.
+   *
+   * Released the instant recording ends, so it cannot drain the battery beyond
+   * the take itself.
+   */
+  private fun acquireWakeLock() {
+    if (wakeLock?.isHeld == true) return
+    try {
+      val pm = getSystemService(Context.POWER_SERVICE) as? PowerManager ?: return
+      wakeLock = pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "ThinkTap::Recording").apply {
+        setReferenceCounted(false)
+        // Timeout is a safety net - a leaked lock cannot outlive a long take.
+        acquire(3 * 60 * 60 * 1000L)
+      }
+    } catch (e: Exception) {
+      Log.w(TAG, "wake lock failed", e)
+    }
+  }
+
+  private fun releaseWakeLock() {
+    try {
+      if (wakeLock?.isHeld == true) wakeLock?.release()
+    } catch (e: Exception) {
+      Log.w(TAG, "wake lock release failed", e)
+    }
+    wakeLock = null
+  }
 
   private fun startRecording(outputPath: String?) {
     if (isRecording) return
@@ -457,6 +609,7 @@ class AudioCaptureService : Service() {
       return
     }
 
+    acquireWakeLock()
     wavWriter = writer
     isRecording = true
     isPausedRecording = false
@@ -490,14 +643,28 @@ class AudioCaptureService : Service() {
     updateNotification()
   }
 
+  /**
+   * Audio to discard from the end of a take that was stopped by voice.
+   *
+   * WHY: the WAV keeps recording while the command is spoken and confirmed, so
+   * "hey think tap stop" ended up in the saved audio and then in the
+   * transcript. Dropping the last two seconds removes the command without
+   * touching the idea before it.
+   *
+   * Only applied to voice stops. A button stop has no command to remove.
+   */
+  private val voiceStopTrimMs = 2000L
+
   private fun stopRecording(fromVoice: Boolean, transcript: String = "") {
     if (!isRecording) return
+    if (fromVoice) wavWriter?.trimTail(voiceStopTrimMs)
     val writer = wavWriter
     recordedMs = writer?.durationMs ?: 0
     val saved = writer?.close()
     wavWriter = null
     isRecording = false
     isPausedRecording = false
+    releaseWakeLock()
 
     RecognitionAudioGuard.playStopCue(this)
     AndroidWakeWordModule.emit(
@@ -516,6 +683,7 @@ class AudioCaptureService : Service() {
   }
 
   private fun discardRecording() {
+    releaseWakeLock()
     wavWriter?.discard()
     wavWriter = null
     isRecording = false
@@ -575,6 +743,7 @@ class AudioCaptureService : Service() {
   }
 
   private fun stopEverything() {
+    releaseWakeLock()
     capturing = false
     try { captureThread?.join(500) } catch (_: Exception) {}
     captureThread = null

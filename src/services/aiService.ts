@@ -23,156 +23,99 @@ export type EnrichmentResult = AiEnrichment & {
 /** Max upload size for cloud STT (Whisper / gpt-4o-transcribe limit is ~25 MB). */
 export const MAX_STT_UPLOAD_BYTES = 25 * 1024 * 1024;
 
+/**
+ * Keywords that route a thought to a category.
+ *
+ * WHY multilingual: the list was English-only, so a Hindi or Marathi transcript
+ * matched nothing and every recording landed in Business regardless of what it
+ * was about. Speech in the user's own language has to be classifiable in that
+ * language.
+ *
+ * Hindi and Marathi share Devanagari, so most entries serve both. Other
+ * scripts can be added the same way - the matcher is whole-word and
+ * script-agnostic.
+ *
+ * These are a fallback. When the analysis service is reachable it classifies
+ * far better than keywords can; this is what keeps the app usable while that
+ * service is down.
+ */
 const CATEGORY_HINTS: { category: string; keywords: string[] }[] = [
   {
     category: 'Movies',
     keywords: [
-      'movie',
-      'movies',
-      'film',
-      'films',
-      'cinema',
-      'hollywood',
-      'bollywood',
-      'actor',
-      'actress',
-      'director',
-      'trailer',
-      'netflix',
-      'sequel',
-      'plot',
-      'watching',
-      'फिल्म',
-      'मूवी',
-      'चित्रपट',
+      'movie', 'movies', 'film', 'films', 'cinema', 'hollywood', 'bollywood',
+      'actor', 'actress', 'director', 'trailer', 'netflix', 'sequel', 'plot',
+      'scene', 'shooting', 'documentary', 'webseries', 'series',
+      // Hindi / Marathi
+      'फिल्म', 'मूवी', 'चित्रपट', 'सिनेमा', 'अभिनेता', 'अभिनेत्री', 'दिग्दर्शक',
+      'निर्देशक', 'कहानी', 'पटकथा', 'शूटिंग', 'ट्रेलर', 'नायक', 'नायिका',
     ],
   },
   {
     category: 'Songs',
     keywords: [
-      'song',
-      'songs',
-      'lyrics',
-      'verse',
-      'chorus',
-      'rap',
-      'singer',
-      'karaoke',
-      'गाना',
-      'गीत',
+      'song', 'songs', 'lyrics', 'verse', 'chorus', 'rap', 'singer', 'karaoke',
+      'sing', 'singing', 'ballad', 'antara', 'mukhda',
+      // Hindi / Marathi
+      'गाना', 'गाने', 'गीत', 'गाणे', 'गाणी', 'बोल', 'अंतरा', 'मुखड़ा',
+      'गायक', 'गायिका', 'कविता',
     ],
   },
   {
     category: 'Music',
-    keywords: ['music', 'beat', 'melody', 'drum', 'bass', 'album', 'instrument', 'संगीत'],
+    keywords: [
+      'music', 'beat', 'melody', 'drum', 'drums', 'bass', 'album', 'instrument',
+      'guitar', 'piano', 'tabla', 'raag', 'raga', 'tune', 'composer', 'band',
+      // Hindi / Marathi
+      'संगीत', 'धुन', 'ताल', 'राग', 'वाद्य', 'तबला', 'बांसुरी', 'सुर',
+      'संगीतकार', 'अल्बम',
+    ],
   },
   {
     category: 'Books',
-    keywords: ['book', 'books', 'novel', 'chapter', 'author', 'reading', 'किताब', 'पुस्तक'],
+    keywords: [
+      'book', 'books', 'novel', 'chapter', 'author', 'reading', 'read',
+      'publish', 'publisher', 'story', 'poetry', 'literature', 'writer',
+      // Hindi / Marathi
+      'किताब', 'पुस्तक', 'पुस्तके', 'अध्याय', 'लेखक', 'लेखिका', 'कादंबरी',
+      'उपन्यास', 'साहित्य', 'प्रकाशक', 'वाचन', 'गोष्ट', 'कथा',
+      // Spellings Whisper actually produces for these words.
+      'गोस्ट', 'कहानि', 'पुस्तिका',
+    ],
   },
   {
     category: 'Scripts',
-    keywords: ['dialogue', 'screenplay', 'monologue', 'script', 'screen play'],
+    keywords: [
+      'dialogue', 'screenplay', 'monologue', 'script', 'scripts', 'scene',
+      'act', 'character', 'draft',
+      // Hindi / Marathi
+      'संवाद', 'पटकथा', 'स्क्रिप्ट', 'दृश्य', 'पात्र', 'भूमिका', 'नाटक',
+      'एकपात्री', 'मसुदा',
+    ],
   },
   {
     category: 'Design',
-    keywords: ['design', 'poster', 'ui', 'brand', 'visual', 'layout', 'figma'],
+    keywords: [
+      'design', 'poster', 'logo', 'brand', 'branding', 'visual', 'layout',
+      'figma', 'typography', 'colour', 'color', 'palette', 'mockup', 'ui', 'ux',
+      // Hindi / Marathi
+      'डिजाइन', 'डिझाइन', 'पोस्टर', 'रंग', 'रचना', 'लोगो', 'मांडणी',
+      'नमुना', 'आकृती', 'सजावट',
+    ],
   },
   {
     category: 'Business',
     keywords: [
-      'business',
-      'startup',
-      'customer',
-      'revenue',
-      'meeting',
-      'office',
-      'client',
-      'sales',
-      'investor',
+      'business', 'startup', 'customer', 'customers', 'revenue', 'meeting',
+      'office', 'client', 'clients', 'sales', 'investor', 'funding', 'profit',
+      'market', 'product', 'strategy', 'team', 'project', 'deadline',
+      // Hindi / Marathi
+      'व्यवसाय', 'व्यापार', 'धंदा', 'ग्राहक', 'बैठक', 'मीटिंग', 'ऑफिस',
+      'कार्यालय', 'नफा', 'बाजार', 'गुंतवणूक', 'निवेश', 'कंपनी', 'योजना',
+      'विक्री', 'बिक्री', 'प्रकल्प', 'प्रोजेक्ट',
     ],
   },
 ];
-
-const MOCK_BY_LANGUAGE: Record<
-  AppLanguageCode,
-  { transcript: string; title: string; summary: string; category: string }
-> = {
-  en: {
-    title: 'Creative Project Spark',
-    category: 'Business',
-    transcript:
-      'I just had an idea for a short creative project. Capture the mood first, keep the structure simple, and expand the details later when I have more time.',
-    summary:
-      'A short creative project idea: start with mood, keep structure simple, and add details later.',
-  },
-  hi: {
-    title: 'रचनात्मक प्रोजेक्ट आइडिया',
-    category: 'Business',
-    transcript:
-      'मेरे पास एक छोटे रचनात्मक प्रोजेक्ट का आइडिया है। पहले मूड कैप्चर करें, संरचना सरल रखें, और बाद में विवरण जोड़ें।',
-    summary: 'एक छोटा रचनात्मक प्रोजेक्ट: पहले मूड, सरल संरचना, बाद में विवरण।',
-  },
-  mr: {
-    title: 'सर्जनशील प्रकल्प कल्पना',
-    category: 'Business',
-    transcript:
-      'मला एका छोट्या सर्जनशील प्रकल्पाची कल्पना आली. आधी मूड कॅप्चर करा, रचना साधी ठेवा आणि नंतर तपशील वाढवा.',
-    summary: 'छोटा सर्जनशील प्रकल्प: मूड प्रथम, साधी रचना, नंतर तपशील.',
-  },
-  fr: {
-    title: 'Idée de projet créatif',
-    category: 'Business',
-    transcript:
-      "Je viens d'avoir une idée pour un petit projet créatif. Capturer d'abord l'ambiance, garder une structure simple, puis développer les détails plus tard.",
-    summary:
-      "Petit projet créatif : commencer par l'ambiance, structure simple, détails plus tard.",
-  },
-  es: {
-    title: 'Idea de proyecto creativo',
-    category: 'Business',
-    transcript:
-      'Acabo de tener una idea para un proyecto creativo corto. Captura primero el ambiente, mantén la estructura simple y amplía los detalles después.',
-    summary:
-      'Proyecto creativo corto: primero el ambiente, estructura simple y detalles después.',
-  },
-  de: {
-    title: 'Kreative Projektidee',
-    category: 'Business',
-    transcript:
-      'Ich hatte gerade eine Idee für ein kurzes Kreativprojekt. Zuerst die Stimmung einfangen, die Struktur einfach halten und Details später ausbauen.',
-    summary:
-      'Kurzes Kreativprojekt: zuerst Stimmung, einfache Struktur, Details später.',
-  },
-  pt: {
-    title: 'Ideia de projeto criativo',
-    category: 'Business',
-    transcript:
-      'Acabei de ter uma ideia para um projeto criativo curto. Capturar primeiro o clima, manter a estrutura simples e expandir os detalhes depois.',
-    summary:
-      'Projeto criativo curto: primeiro o clima, estrutura simples, detalhes depois.',
-  },
-  ar: {
-    title: 'فكرة مشروع إبداعي',
-    category: 'Business',
-    transcript:
-      'خطر ببالي للتو فكرة لمشروع إبداعي قصير. التقط المزاج أولاً، حافظ على بنية بسيطة، ثم أضف التفاصيل لاحقاً.',
-    summary: 'مشروع إبداعي قصير: المزاج أولاً، بنية بسيطة، ثم التفاصيل.',
-  },
-  zh: {
-    title: '创意项目灵感',
-    category: 'Business',
-    transcript: '我刚想到一个短小的创意项目。先抓住氛围，保持结构简单，之后再补充细节。',
-    summary: '短小创意项目：先氛围，结构简单，细节稍后补充。',
-  },
-  ja: {
-    title: 'クリエイティブ企画のアイデア',
-    category: 'Business',
-    transcript:
-      '短いクリエイティブプロジェクトのアイデアが浮かびました。まず雰囲気を捉え、構成はシンプルに保ち、詳細は後で広げます。',
-    summary: '短い企画：まず雰囲気、シンプルな構成、詳細は後で。',
-  },
-};
 
 /**
  * WHY this was rewritten: the old version scored a keyword only once no matter
@@ -299,6 +242,35 @@ const SEED_ECHO_PATTERNS: RegExp[] = [
   /कल\s*मुझे\s*meeting\s*के\s*लिए\s*जाना\s*है।?/gu,
   /अच्छा\s*जाणार\s*जाणार\s*का\s*भूत्रे\s*के\s*लिए\s*जाना\s*है।?/gu,
 ];
+
+/**
+ * Spoken commands that may be caught at the end of a take.
+ *
+ * WHY this is needed even with the audio trimmed: the trim removes two seconds
+ * from the end, but a command spoken slightly earlier, or repeated, still lands
+ * in the transcript. "hey think tap stop" is an instruction to the app, not
+ * part of the user's idea, so it must never become the Human Signal.
+ *
+ * Only the command phrases are removed. Everything else the user said is
+ * untouched, in whatever language they said it.
+ */
+const SPOKEN_COMMAND_PATTERNS: RegExp[] = [
+  // The name, however the model renders it, followed by an action word.
+  /\b(hey\s+)?think\s?(tap|tab|top|app|that)\s*(start|stop|pause|resume|end|finish)\b[.,!?]*/giu,
+  // Devanagari renderings of the same.
+  /(हे\s*)?थिंक\s*(टॅप|टैप|टॅब|टैब)\s*(स्टार्ट|स्टॉप|स्टाप|पॉज|पॉझ|रिझ्यूम|रिज्यूम)[।.,!?]*/giu,
+  // Bare trailing command after the name was cut off by the trim.
+  /\b(hey\s+)?think\s?(tap|tab|top|app|that)\b[.,!?]*\s*$/giu,
+];
+
+export function stripSpokenCommands(text: string): string {
+  if (!text) return text;
+  let out = text;
+  for (const re of SPOKEN_COMMAND_PATTERNS) {
+    out = out.replace(re, ' ');
+  }
+  return out.replace(/\s{2,}/g, ' ').replace(/\s+([.,!?।])/g, '$1').trim();
+}
 
 export function stripSeedEcho(text: string): string {
   if (!text) return text;
@@ -504,6 +476,13 @@ export async function enrichIdeaFromAudio(input: {
   durationSec: number;
   /** UI language only — used for demo mocks / fallback display, never forced into Whisper. */
   languageCode?: AppLanguageCode;
+  /**
+   * The transcription language the user chose in Settings, e.g. "hi-IN".
+   * Passed to Whisper as a hint. Omit to auto-detect.
+   */
+  speechLocale?: string;
+  /** True to translate everything to English instead of keeping it verbatim. */
+  translateToEnglish?: boolean;
   onStage?: (stage: 'transcribing' | 'extracting' | 'summarizing') => void;
 }): Promise<EnrichmentResult> {
   const uiLanguageCode = input.languageCode ?? 'en';
@@ -523,7 +502,14 @@ export async function enrichIdeaFromAudio(input: {
   const apiKey = useAiConfigStore.getState().getApiKey();
   if (apiKey) {
     try {
-      const live = await enrichWithCloudStt(apiKey, input.audioUri, uiLanguageCode, input.onStage);
+      const live = await enrichWithCloudStt(
+        apiKey,
+        input.audioUri,
+        uiLanguageCode,
+        input.onStage,
+        input.speechLocale,
+        input.translateToEnglish ?? false,
+      );
       return { ...live, source: 'live' };
     } catch (error) {
       console.warn('Live transcription failed', error);
@@ -702,11 +688,39 @@ async function whisperTranscribe(
   apiKey: string,
   audioUri: string,
   mime: string,
+  languageHint?: string,
+  translateToEnglish = false,
 ): Promise<{ text: string; language?: string }> {
   const { name: fileName } = mimeAndName(audioUri);
-  // Omit `language` so the model auto-detects the spoken language.
+  /**
+   * WHY the language is sent when the user has chosen one: auto-detect guesses
+   * per 30-second window and drifts on Indic speech, which is why Hindi and
+   * Marathi came back with wrong spellings while English was fine. Telling the
+   * model which language to expect removes the guess and noticeably improves
+   * the transcript.
+   *
+   * Code-switching still works - Whisper handles English words inside a Hindi
+   * sentence. What it cannot do well is decide the base language from a short,
+   * accented, code-mixed clip.
+   *
+   * Absent means auto-detect, so nothing changes for users who have not picked
+   * a transcription language.
+   */
   const uploadResult = await uploadAudioMultipart({
-    url: `${provider.baseUrl}/audio/transcriptions`,
+    /**
+     * Two endpoints, two behaviours.
+     *
+     * /audio/transcriptions - keeps each language in its own script. Marathi
+     *   stays "माझं जेवण तयार आहे".
+     * /audio/translations   - always outputs English, whatever was spoken.
+     *   The same line becomes "my food is ready".
+     *
+     * The translate endpoint ignores a `language` field, so the hint is only
+     * sent when transcribing.
+     */
+    url: translateToEnglish
+      ? `${provider.baseUrl}/audio/translations`
+      : `${provider.baseUrl}/audio/transcriptions`,
     audioUri,
     mime,
     fileName,
@@ -718,6 +732,7 @@ async function whisperTranscribe(
       // Deterministic: no creative filling-in of unclear audio.
       temperature: '0',
       response_format: provider.responseFormat,
+      ...(!translateToEnglish && languageHint ? { language: languageHint } : {}),
     },
   });
 
@@ -812,11 +827,34 @@ async function enrichViaBackend(
   };
 }
 
+/**
+ * Converts a Settings locale such as "hi-IN" into the ISO code Whisper expects
+ * ("hi"). Returns undefined for English and for anything unrecognised, so those
+ * fall back to auto-detect rather than being forced into the wrong language.
+ */
+function whisperLanguageFrom(speechLocale?: string): string | undefined {
+  /**
+   * Absent, 'auto' and English all mean "let the model decide".
+   *
+   * WHY English is excluded rather than sent: telling Whisper the audio is
+   * English makes it render other languages AS English - a Marathi sentence
+   * came back translated to "my food is ready" instead of
+   * "माझं जेवण तयार आहे". Auto-detect keeps each language in its own script.
+   */
+  if (!speechLocale || speechLocale === 'auto') return undefined;
+  const base = speechLocale.split(/[-_]/)[0]?.toLowerCase();
+  if (!base || base === 'en' || base === 'auto') return undefined;
+  // Whisper takes two-letter ISO-639-1 codes.
+  return /^[a-z]{2}$/.test(base) ? base : undefined;
+}
+
 async function enrichWithCloudStt(
   apiKey: string,
   audioUri: string,
   uiLanguageCode: AppLanguageCode,
   onStage?: (stage: 'transcribing' | 'extracting' | 'summarizing') => void,
+  speechLocale?: string,
+  translateToEnglish = false,
 ): Promise<AiEnrichment> {
   const info = await getInfoAsync(audioUri);
   if (!info.exists) {
@@ -831,10 +869,17 @@ async function enrichWithCloudStt(
   const provider = providerConfig(apiKey);
   const { mime } = mimeAndName(audioUri);
 
-  const whisper = await whisperTranscribe(provider, apiKey, audioUri, mime);
+  const whisper = await whisperTranscribe(
+    provider,
+    apiKey,
+    audioUri,
+    mime,
+    whisperLanguageFrom(speechLocale),
+    translateToEnglish,
+  );
 
   // Strip any echo of the old seed prompt before the text becomes the Human Signal.
-  let transcript = stripSeedEcho(whisper.text);
+  let transcript = stripSpokenCommands(stripSeedEcho(whisper.text));
   if (!transcript) {
     throw new Error('No speech detected in this recording. Try speaking more clearly.');
   }

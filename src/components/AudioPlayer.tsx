@@ -156,7 +156,7 @@ export function AudioPlayer({ uri, durationSec }: Props) {
   if (Platform.OS === 'web') {
     return (
       <View style={styles.card}>
-        <Text style={styles.title}>Voice Recording</Text>
+        <Text style={styles.title}>Human Signal</Text>
         {sourceUri ? (
           createElement('audio', {
             src: sourceUri,
@@ -188,7 +188,7 @@ export function AudioPlayer({ uri, durationSec }: Props) {
           />
         </Pressable>
         <View style={{ flex: 1 }}>
-          <Text style={styles.title}>Voice Recording</Text>
+          <Text style={styles.title}>Human Signal</Text>
           <Text style={styles.meta}>
             {sourceUri
               ? `${formatClock(positionSec)} / ${formatClock(totalSec)}`
