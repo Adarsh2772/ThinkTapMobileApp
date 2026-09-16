@@ -4,6 +4,7 @@ import {
   enrichIdeaFromDeviceTranscript,
   isCloudSttAvailable,
   looksLikeWhisperHallucination,
+  stripSpokenCommands,
   type EnrichmentResult,
 } from '@/src/services/aiService';
 import { analyzeTranscript } from '@/src/services/transcriptAnalysisService';
@@ -168,11 +169,56 @@ export async function enrichPendingRecording(
     enrichment = emptySpeechEnrichment();
   }
 
+  /**
+   * WHY translation now happens here, before analysis/title/summary:
+   * previously only the "Thought" (transcript) field was translated, further
+   * down the pipeline. The title, the AI Core Insight summary, and the
+   * "aiStory" text are all generated from the *original* spoken-language
+   * transcript, so they stayed in Hindi/Tamil/whatever was spoken even after
+   * the Thought itself was correctly showing English. Translating first and
+   * building everything else from the English text fixes all of them in one
+   * place instead of patching each field separately.
+   *
+   * WHY the detected language is passed in: deciding "does this need
+   * translating" from script/word-guessing alone only ever covered Hindi and
+   * Marathi. Tamil, Telugu, Gujarati, Kannada, and every other supported
+   * language spoken by the user was silently left untranslated. Whisper
+   * already tells us what language was spoken, so that becomes the source of
+   * truth - any non-English detected language gets translated, no matter
+   * which script or words it uses.
+   */
+  const rawEnglishTranscript = await toEnglish(enrichment.transcript, enrichment.detectedLanguage);
+  /**
+   * WHY stripped again here, after translation: `stripSpokenCommands` already
+   * ran once on the original-language transcript inside `aiService.ts`. This
+   * second pass is a safety net for a command spoken in a script the first
+   * pass's patterns don't cover, or one whose punctuation happened to defeat
+   * the regex - better to strip nothing twice than to let "hey think tap
+   * pause" survive into the saved Thought, which is exactly what a QA report
+   * caught.
+   */
+  const englishTranscript = stripSpokenCommands(rawEnglishTranscript);
+
+  // Title, summary and aiStory are short strings the same finalize step
+  // generated in the original spoken language - translate each the same way.
+  // toEnglish() is a no-op (and cheap) whenever the text is already English.
+  const [rawEnglishTitle, rawEnglishSummary, rawEnglishAiStory] = await Promise.all([
+    toEnglish(enrichment.title, enrichment.detectedLanguage),
+    toEnglish(enrichment.summary, enrichment.detectedLanguage),
+    toEnglish(enrichment.aiStory, enrichment.detectedLanguage),
+  ]);
+  const englishTitle = stripSpokenCommands(rawEnglishTitle);
+  const englishSummary = stripSpokenCommands(rawEnglishSummary);
+  const englishAiStory = stripSpokenCommands(rawEnglishAiStory);
+
   onStage?.('summarizing');
   let analysis: TranscriptAnalysis | null = null;
   try {
-    if (enrichment.transcript.trim()) {
-      analysis = await analyzeTranscript(enrichment.transcript);
+    if (englishTranscript.trim()) {
+      // Analyze the English transcript, not the original-language one, so
+      // "AI Core Insight" comes back in English instead of needing its own
+      // translation pass afterwards.
+      analysis = await analyzeTranscript(englishTranscript);
     }
   } catch (analyzeError) {
     console.warn('Transcript analyze failed; using local summary', analyzeError);
@@ -181,22 +227,7 @@ export async function enrichPendingRecording(
   const analysisThought = analysis?.thought?.trim() ?? '';
   const keepAnalysisSummary =
     Boolean(analysisThought) &&
-    !(hasIndicScript(enrichment.transcript) && !hasIndicScript(analysisThought));
-
-  /**
-   * WHY the LLM runs here and not inside enrichment: it needs the finished
-   * transcript, and it must not block the save if it is slow or unreachable.
-   * A null result keeps the keyword guess, which is why a failure downgrades
-   * the accuracy rather than breaking the thought.
-   */
-  /**
-   * WHY a second pass over the text: Whisper's translate endpoint
-   * transliterates when it is unsure - "माझं जेवण तयार आहे" comes back as
-   * "Majha jevan tayar ahe", which is Marathi spelled with English letters,
-   * not English, and useless for search. Sometimes it leaves the Devanagari
-   * untouched. This fixes both, and leaves genuine English alone.
-   */
-  const englishTranscript = await toEnglish(enrichment.transcript);
+    !(hasIndicScript(englishTranscript) && !hasIndicScript(analysisThought));
 
   /**
    * WHY the LLM categorises here: it needs the finished text, and it must not
@@ -206,14 +237,17 @@ export async function enrichPendingRecording(
    */
   let category = normalizeCategory(enrichment.category);
   const smart = await categorizeWithLlm(englishTranscript);
-  if (smart) category = smart;
+  // normalizeCategory() narrows the plain `string` categorizeWithLlm returns
+  // back to the exact Category union - it's a no-op when the value is
+  // already one of the 7 known names, which it always is here.
+  if (smart) category = normalizeCategory(smart);
 
   return {
-    title: enrichment.title,
+    title: englishTitle,
     category,
-    summary: keepAnalysisSummary ? analysisThought : enrichment.summary,
+    summary: keepAnalysisSummary ? analysisThought : englishSummary,
     transcript: englishTranscript,
-    aiStory: enrichment.aiStory,
+    aiStory: englishAiStory,
     analysis: keepAnalysisSummary ? analysis : null,
     language: enrichment.detectedLanguage,
     transcriptSource: enrichment.source,

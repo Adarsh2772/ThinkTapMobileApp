@@ -256,9 +256,15 @@ const SEED_ECHO_PATTERNS: RegExp[] = [
  */
 const SPOKEN_COMMAND_PATTERNS: RegExp[] = [
   // The name, however the model renders it, followed by an action word.
-  /\b(hey\s+)?think\s?(tap|tab|top|app|that)\s*(start|stop|pause|resume|end|finish)\b[.,!?]*/giu,
+  // WHY [\s,.!?]* between the name and the action word, not \s*: Whisper
+  // regularly punctuates the wake phrase as its own clause - "Hey Think
+  // Tap, pause." or "Hey, ThinkTap. Pause." - and the old \s* only matched
+  // a bare space, so any comma or period in between let the whole command
+  // (and its translation) straight through into the saved Thought. A QA
+  // recording of "Hey think tap pause" showed up verbatim because of this.
+  /\b(hey\s+)?think\s?(tap|tab|top|app|that)[\s,.!?]*(start|stop|pause|resume|end|finish)\b[.,!?]*/giu,
   // Devanagari renderings of the same.
-  /(हे\s*)?थिंक\s*(टॅप|टैप|टॅब|टैब)\s*(स्टार्ट|स्टॉप|स्टाप|पॉज|पॉझ|रिझ्यूम|रिज्यूम)[।.,!?]*/giu,
+  /(हे\s*)?थिंक\s*(टॅप|टैप|टॅब|टैब)[\s,।.!?]*(स्टार्ट|स्टॉप|स्टाप|पॉज|पॉझ|रिझ्यूम|रिज्यूम)[।.,!?]*/giu,
   // Bare trailing command after the name was cut off by the trim.
   /\b(hey\s+)?think\s?(tap|tab|top|app|that)\b[.,!?]*\s*$/giu,
 ];
@@ -270,6 +276,76 @@ export function stripSpokenCommands(text: string): string {
     out = out.replace(re, ' ');
   }
   return out.replace(/\s{2,}/g, ' ').replace(/\s+([.,!?।])/g, '$1').trim();
+}
+
+/**
+ * Collapses a sentence (or short group of sentences) that repeats back to
+ * back many times in a row.
+ *
+ * WHY this is needed: Whisper degenerates into a loop on long, quiet, or
+ * musical stretches of audio - a real transcript came back as "Is it a
+ * meeting? I'm not sure. If it's a meeting, how much longer will it be?
+ * It's a very long time." repeated about fifteen times in a row. That is not
+ * something the user said fifteen times; it is the model getting stuck. Left
+ * in, it wastes the translation pass's token budget on repetition instead of
+ * the rest of the recording, and can push a long take past the translation
+ * call's output limit entirely.
+ *
+ * WHY three repeats as the threshold: singers and speakers do sometimes
+ * repeat a line or two for real (a chorus, "no, no, no"). Requiring the same
+ * block to repeat three or more times *consecutively* is enough to separate
+ * a stuck loop from normal repetition, which rarely goes past two.
+ */
+export function collapseRepeatedPhrases(text: string): string {
+  const parts = text.split(/([.!?।]+)/);
+  const sentences: string[] = [];
+  for (let k = 0; k < parts.length; k += 2) {
+    const body = (parts[k] ?? '').trim();
+    const punct = parts[k + 1] ?? '';
+    const s = (body + punct).trim();
+    if (s) sentences.push(s);
+  }
+  if (sentences.length < 6) return text;
+
+  const norm = (s: string) =>
+    s
+      .toLowerCase()
+      .replace(/[।.,!?;:'"()[\]\-–—]/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim();
+
+  const out: string[] = [];
+  let i = 0;
+  while (i < sentences.length) {
+    let collapsed = false;
+    const maxGroup = Math.min(6, Math.floor((sentences.length - i) / 3));
+    for (let g = maxGroup; g >= 1; g--) {
+      const group = sentences.slice(i, i + g).map(norm);
+      if (group.some((s) => !s)) continue;
+      let repeats = 1;
+      let j = i + g;
+      while (j + g <= sentences.length) {
+        const next = sentences.slice(j, j + g).map(norm);
+        if (next.length === group.length && next.every((s, idx) => s === group[idx])) {
+          repeats++;
+          j += g;
+        } else {
+          break;
+        }
+      }
+      if (repeats >= 3) {
+        out.push(...sentences.slice(i, i + g));
+        i = j;
+        collapsed = true;
+        break;
+      }
+    }
+    if (!collapsed) {
+      out.push(sentences[i]);
+      i++;
+    }
+  }
+  return out.join(' ').replace(/\s{2,}/g, ' ').trim();
 }
 
 export function stripSeedEcho(text: string): string {
@@ -584,6 +660,23 @@ export function whisperPromptFor(_languageName: string | 'auto'): string {
   return '';
 }
 
+/**
+ * WHY not llama-3.3-70b-versatile: Groq decommissioned it on 16 August 2026.
+ * Every call using it returns 400. Both `convertToNativeScript` and
+ * `finalizeFromTranscript` below were still pointed at it even after rev 15
+ * moved englishPass.ts and categorizeService.ts off it — every finalize call
+ * was silently failing and falling back to `titleFromTranscript` /
+ * `summaryFromTranscript`, which just slice the first 8 words / 220
+ * characters off the raw transcript. That is why titles read like
+ * "Take my heart, don't lose it Listen to" instead of a real title, and why
+ * "AI Core Insight" sometimes showed a raw chunk of the original-language
+ * transcript instead of a generated insight.
+ *
+ * openai/gpt-oss-120b is Groq's recommended replacement, same as the other
+ * two files, and overridable via EXPO_PUBLIC_LLM_MODEL for the same reason.
+ */
+const CHAT_MODEL = process.env.EXPO_PUBLIC_LLM_MODEL?.trim() || 'openai/gpt-oss-120b';
+
 function providerConfig(apiKey: string) {
   const isGroq = apiKey.startsWith('gsk_');
   if (isGroq) {
@@ -593,7 +686,7 @@ function providerConfig(apiKey: string) {
       whisperModel: 'whisper-large-v3',
       /** Groq Whisper returns language with verbose_json */
       responseFormat: 'verbose_json' as const,
-      chatModel: 'llama-3.3-70b-versatile',
+      chatModel: CHAT_MODEL,
     };
   }
   return {
@@ -925,7 +1018,7 @@ async function enrichWithCloudStt(
   );
 
   // Strip any echo of the old seed prompt before the text becomes the Human Signal.
-  let transcript = stripSpokenCommands(stripSeedEcho(whisper.text));
+  let transcript = collapseRepeatedPhrases(stripSpokenCommands(stripSeedEcho(whisper.text)));
   if (!transcript) {
     throw new Error('No speech detected in this recording. Try speaking more clearly.');
   }
@@ -1021,6 +1114,12 @@ async function convertToNativeScript(
         model: provider.chatModel,
         temperature: 0,
         response_format: { type: 'json_object' },
+        // WHY explicit: with no cap the API falls back to a provider default
+        // that can be too small for a multi-minute recording once you add
+        // the echoed transcript plus title/summary/aiStory in the same JSON
+        // reply — the reply gets cut off mid-sentence rather than erroring,
+        // which is worse because it looks like a real (short) answer.
+        max_tokens: 4096,
         messages: [
           {
             role: 'system',
@@ -1083,6 +1182,10 @@ async function finalizeFromTranscript(
       model: provider.chatModel,
       temperature: 0.2,
       response_format: { type: 'json_object' },
+      // See the note on the convertToNativeScript call above — same reason.
+      // This reply always echoes the full transcript back inside the JSON,
+      // so a long recording needs real headroom or it truncates mid-field.
+      max_tokens: 4096,
       messages: [
         {
           role: 'system',
