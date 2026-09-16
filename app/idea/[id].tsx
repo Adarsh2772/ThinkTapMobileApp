@@ -223,9 +223,9 @@ export default function IdeaDetailScreen() {
   const hasTranscript = Boolean((idea.transcript ?? '').trim());
   void hasTranscript;
   const sourceLabel = isDevice
-    ? 'Translated on this device'
+    ? 'Transcribed on this device'
     : isLive
-      ? 'Translated from your recording'
+      ? 'Transcribed from your recording'
       : hasTranscript
         ? 'Sample content — not your recording'
         : 'Transcript not available — audio is saved and can be transcribed later';

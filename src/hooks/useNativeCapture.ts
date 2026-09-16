@@ -324,30 +324,6 @@ export function useNativeCapture(options: Options = {}) {
   const start = useCallback(async (): Promise<boolean> => {
     if (!supported) return false;
     if (AndroidWakeWord.isRecording()) return true;
-
-    /**
-     * WHY this guard exists: starting while a call is already active let the
-     * app try to acquire a microphone another app already holds exclusively.
-     * On some devices AudioRecord accepted the request and reported itself as
-     * running while every read silently failed forever - the capture loop
-     * looked alive but delivered nothing, so neither manual stop nor a voice
-     * command could reach it afterwards, and even a JS reload could not fix a
-     * native service stuck in that state. Reported after starting a take
-     * deliberately during a WhatsApp call to see what would happen; recovery
-     * needed a full uninstall.
-     *
-     * Refusing up front, with a clear reason, is a better outcome than
-     * attempting it and risking that stuck state - the self-healing fix in
-     * the capture loop is the safety net for calls that begin mid-recording,
-     * not a reason to skip this check for calls already in progress.
-     */
-    if (AndroidWakeWord.isCallActive()) {
-      const msg = 'Cannot record during a call. Try again once it has ended.';
-      setError(msg);
-      onErrorRef.current?.(msg);
-      return false;
-    }
-
     setError(null);
 
     /**
@@ -434,13 +410,11 @@ export function useNativeCapture(options: Options = {}) {
 
   const resume = useCallback(async (): Promise<boolean> => {
     if (!supported || !AndroidWakeWord.isRecording()) return false;
-    /**
-     * WHY resume is no longer blocked during a call: it was refused while a
-     * call was active, but starting a brand new recording was not - so the user
-     * could record during a call, just not continue the take they already had.
-     * That inconsistency is worse than the risk it was guarding against, and
-     * the user pressing Resume mid-call has made their intention clear.
-     */
+    // WHY: resuming mid-call would record the call audio, not the user's idea.
+    if (AndroidWakeWord.isCallActive()) {
+      onInterruptedRef.current?.();
+      return false;
+    }
     callHoldRef.current = false;
     setCallHold(false);
     return AndroidWakeWord.resumeRecording();

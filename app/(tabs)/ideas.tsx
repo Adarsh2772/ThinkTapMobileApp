@@ -12,7 +12,6 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { IdeaCard } from '@/src/components/IdeaCard';
 import { ScreenHeader } from '@/src/components/ScreenHeader';
-import { guardedNavigate } from '@/src/utils/guardedNavigate';
 import { useAuthStore } from '@/src/store/authStore';
 import { useIdeasStore } from '@/src/store/ideasStore';
 import { useSettingsStore } from '@/src/store/settingsStore';
@@ -106,7 +105,7 @@ export default function IdeasScreen() {
           <IdeaCard
             idea={item}
             variant="archive"
-            onPress={() => guardedNavigate(() => router.push(`/idea/${item.id}`))}
+            onPress={() => router.push(`/idea/${item.id}`)}
             onDelete={() => void deleteIdea(item.id)}
           />
         )}

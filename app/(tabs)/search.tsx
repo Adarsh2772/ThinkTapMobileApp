@@ -14,7 +14,6 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { ScreenHeader } from '@/src/components/ScreenHeader';
 import { ThoughtSearchCard } from '@/src/components/ThoughtSearchCard';
-import { guardedNavigate } from '@/src/utils/guardedNavigate';
 import {
   SEARCH_SORTS,
   parseFragments,
@@ -141,10 +140,7 @@ export default function SearchScreen() {
             </Text>
           }
           renderItem={({ item }) => (
-            <ThoughtSearchCard
-              idea={item}
-              onPress={() => guardedNavigate(() => router.push(`/idea/${item.id}`))}
-            />
+            <ThoughtSearchCard idea={item} onPress={() => router.push(`/idea/${item.id}`)} />
           )}
         />
       )}

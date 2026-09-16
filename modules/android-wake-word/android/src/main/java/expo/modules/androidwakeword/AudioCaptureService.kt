@@ -14,9 +14,7 @@ import android.media.AudioFormat
 import android.media.AudioRecord
 import android.media.MediaRecorder
 import android.os.Build
-import android.os.Handler
 import android.os.IBinder
-import android.os.Looper
 import android.os.PowerManager
 import android.util.Log
 import androidx.core.app.NotificationCompat
@@ -194,13 +192,6 @@ class AudioCaptureService : Service() {
   private var lastStopAt = 0L
   @Volatile private var micSuspended = false
   private var wakeLock: PowerManager.WakeLock? = null
-  /**
-   * WHY needed: the capture thread cannot rebuild itself directly - tearing
-   * down calls captureThread?.join(), which would deadlock if invoked from
-   * inside that very thread. Self-healing hands the rebuild to the main
-   * thread instead.
-   */
-  private val mainHandler = Handler(Looper.getMainLooper())
   private val commandDebounceMs = 1500L
 
   override fun onBind(intent: Intent?): IBinder? = null
@@ -271,49 +262,6 @@ class AudioCaptureService : Service() {
   // Capture loop - the single microphone owner
   // ------------------------------------------------------------------
 
-  /**
-   * Is the capture loop genuinely alive?
-   *
-   * WHY this check exists: `capturing` is a flag, and it stays true if the
-   * capture thread dies or AudioRecord is reclaimed underneath us - which OEM
-   * builds do after a few sessions. startListening then returned early
-   * believing all was well, so the third or fourth recording produced
-   * "Recording Started" and nothing else: no timer, no audio, no file.
-   * Reported on OPPO A51 / Android 11.
-   *
-   * Checking the thread and the recorder state, rather than trusting the flag,
-   * is what lets the service notice and rebuild itself.
-   */
-  private fun captureIsHealthy(): Boolean {
-    if (!capturing) return false
-    val t = captureThread
-    if (t == null || !t.isAlive) return false
-    val rec = audioRecord ?: return false
-    return try {
-      rec.state == AudioRecord.STATE_INITIALIZED &&
-        rec.recordingState == AudioRecord.RECORDSTATE_RECORDING
-    } catch (_: Exception) {
-      false
-    }
-  }
-
-  /** Tear the capture loop down without touching an open take. */
-  private fun teardownCapture() {
-    capturing = false
-    try { captureThread?.join(300) } catch (_: Exception) {}
-    captureThread = null
-    try {
-      audioRecord?.stop()
-      audioRecord?.release()
-    } catch (e: Exception) {
-      Log.w(TAG, "teardown release failed", e)
-    }
-    audioRecord = null
-    try { recognizer?.close() } catch (_: Exception) {}
-    recognizer = null
-    recognizerGrammar = null
-  }
-
   private fun startListening() {
     /**
      * WHY ensureForeground() comes first: this service is launched with
@@ -326,17 +274,8 @@ class AudioCaptureService : Service() {
     ensureForeground()
 
     if (capturing) {
-      if (captureIsHealthy()) {
-        updateNotification()
-        return
-      }
-      /**
-       * The flag says we are capturing but nothing actually is. Rebuild rather
-       * than return - this is the state that made the app stop recording after
-       * a few takes with no visible error.
-       */
-      Log.w(TAG, "capture state stale - rebuilding")
-      teardownCapture()
+      updateNotification()
+      return
     }
     if (ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO)
       != PackageManager.PERMISSION_GRANTED
@@ -399,24 +338,6 @@ class AudioCaptureService : Service() {
     isRunning = true
     rec.startRecording()
 
-    /**
-     * WHY this counter exists: read() returning <= 0 was silently ignored
-     * forever - the loop just spun doing nothing. That happens whenever the
-     * microphone is taken away mid-session: another app (WhatsApp, a phone
-     * call the CallStateWatcher poll had not yet caught, an OEM reclaiming the
-     * mic) grabs exclusive access and every subsequent read fails. capturing
-     * stayed true throughout, so nothing noticed and nothing rebuilt - the
-     * wake listener was dead, which meant it could never hear "hey think tap
-     * start" to trigger its own repair. Reported after a WhatsApp video call:
-     * the take never resumed and voice start stopped responding afterwards.
-     *
-     * Consecutive failures are counted instead of any single one, because an
-     * isolated dropped frame is normal and not worth rebuilding over. Sustained
-     * failure for about three seconds means the mic is genuinely gone.
-     */
-    var consecutiveFailures = 0
-    val maxConsecutiveFailures = 15 // ~3s at 200ms frames
-
     captureThread = thread(name = "ThinkTapCapture", isDaemon = true) {
       // 200 ms frames: small enough for responsive commands, large enough to
       // keep JNI overhead low.
@@ -427,22 +348,7 @@ class AudioCaptureService : Service() {
         } catch (e: Exception) {
           Log.e(TAG, "read failed", e); -1
         }
-        if (read <= 0) {
-          consecutiveFailures += 1
-          if (consecutiveFailures >= maxConsecutiveFailures) {
-            Log.w(TAG, "sustained read failure - microphone likely taken by another app, rebuilding")
-            capturing = false
-            // Rebuild off this thread - teardownCapture() joins captureThread,
-            // which would deadlock if called from inside the thread itself.
-            mainHandler.post {
-              teardownCapture()
-              if (isRunning) startListening()
-            }
-            break
-          }
-          continue
-        }
-        consecutiveFailures = 0
+        if (read <= 0) continue
 
         // Consumer 1 - the recording.
         val writer = wavWriter
@@ -674,9 +580,8 @@ class AudioCaptureService : Service() {
   private fun startRecording(outputPath: String?) {
     if (isRecording) return
     ensureForeground()
-    // WHY re-checked here too: a take must never start against a dead loop.
-    if (!captureIsHealthy()) startListening()
-    if (!captureIsHealthy()) {
+    if (!capturing) startListening()
+    if (!capturing) {
       // startListening bailed - permission or AudioRecord failure already emitted.
       Log.e(TAG, "cannot record: capture loop not running")
       AndroidWakeWordModule.emit(

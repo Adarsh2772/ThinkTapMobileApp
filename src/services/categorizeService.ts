@@ -83,22 +83,7 @@ export async function categorizeWithLlm(
         model: MODEL,
         // Deterministic: the same note should always land in the same tab.
         temperature: 0,
-        /**
-         * WHY 150 and not 8: openai/gpt-oss-120b is a reasoning model. It
-         * spends completion tokens on hidden chain-of-thought BEFORE writing
-         * the answer, and that reasoning is billed against max_tokens same as
-         * the visible output. At 8, the entire budget was consumed by
-         * reasoning every time - message.content came back "" with
-         * finish_reason "length", the code correctly read that as failure and
-         * fell back to keywords. This was happening on every single call,
-         * which is why categorisation looked keyword-only even after fixing
-         * the alias matching. 150 leaves room for reasoning at low effort plus
-         * the one-word answer.
-         */
-        max_tokens: 150,
-        // WHY: caps how much the model reasons before answering. 'low' keeps
-        // this fast and leaves the rest of the budget for the actual answer.
-        reasoning_effort: 'low',
+        max_tokens: 8,
         messages: [
           { role: 'system', content: system },
           { role: 'user', content: excerpt },
@@ -112,23 +97,7 @@ export async function categorizeWithLlm(
       choices?: { message?: { content?: string } }[];
     };
     const raw = json.choices?.[0]?.message?.content?.trim() ?? '';
-    if (!raw) {
-      /**
-       * WHY logged: an empty reply with finish_reason "length" means the
-       * reasoning budget ran out before an answer was written - the exact
-       * failure this max_tokens/reasoning_effort combination exists to
-       * prevent. If it recurs (a model change, a lower limit) this makes the
-       * cause visible instead of a silent fallback to keywords.
-       */
-      const finishReason = (json as { choices?: { finish_reason?: string }[] })
-        .choices?.[0]?.finish_reason;
-      if (finishReason === 'length') {
-        console.warn(
-          '[AI] categorize: empty reply, reasoning exhausted max_tokens',
-        );
-      }
-      return null;
-    }
+    if (!raw) return null;
 
     /**
      * WHY the reply is matched rather than trusted: a model can answer

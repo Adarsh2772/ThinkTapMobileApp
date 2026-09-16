@@ -352,34 +352,6 @@ export function looksLikeWhisperHallucination(
  * Drop non-speech Whisper segments, then reject leftover hallucination.
  * Overlapping speakers must not invent words that were never said.
  */
-/**
- * Removes consecutive repeats of the same sentence.
- *
- * WHY: Whisper loops on silence and on unclear audio, emitting the same phrase
- * several times. QA saw duplicated sentences in regional-language transcripts.
- * The repeats are an artefact, not something the speaker said, so they should
- * not reach the Thought.
- *
- * Only consecutive repeats are dropped. Someone genuinely repeating themselves
- * later in a recording keeps both.
- */
-export function dropRepeatedSentences(text: string): string {
-  if (!text) return text;
-  const parts = text.split(/(?<=[.!?।])\s+/).filter((p) => p.trim());
-  if (parts.length < 2) return text;
-
-  const out: string[] = [];
-  for (const part of parts) {
-    const key = part.toLowerCase().replace(/[^\p{L}\p{N}]+/gu, ' ').trim();
-    const prev = out.length
-      ? out[out.length - 1].toLowerCase().replace(/[^\p{L}\p{N}]+/gu, ' ').trim()
-      : '';
-    if (key && key === prev) continue;
-    out.push(part);
-  }
-  return out.join(' ').trim();
-}
-
 export function transcriptFromWhisperSegments(
   fullText: string,
   language: string | undefined,
@@ -387,20 +359,12 @@ export function transcriptFromWhisperSegments(
 ): { text: string; language?: string } {
   let text = cleanTranscript(fullText);
   if (segments.length > 0) {
-    /**
-     * WHY 0.5 and not 0.7: Whisper invents plausible text from silence rather
-     * than returning nothing, and it reports those segments with a high
-     * no_speech_prob. At 0.7 a long pause still slipped through and produced
-     * a sentence the user never said. Half is a reasonable line - a segment the
-     * model is only 50% sure contains speech is not worth keeping in a record
-     * that is meant to be what someone actually said.
-     */
     const kept = segments
-      .filter((s) => (s.no_speech_prob ?? 0) < 0.5)
+      .filter((s) => (s.no_speech_prob ?? 0) < 0.7)
       .map((s) => cleanTranscript(s.text ?? ''))
       .filter(Boolean);
     const allNoise = segments.every(
-      (s) => (s.no_speech_prob ?? 0) >= 0.5 || !cleanTranscript(s.text ?? ''),
+      (s) => (s.no_speech_prob ?? 0) >= 0.7 || !cleanTranscript(s.text ?? ''),
     );
     if (allNoise || kept.length === 0) {
       return { text: '', language: undefined };
@@ -428,7 +392,7 @@ export function emptySpeechEnrichment(): EnrichmentResult {
   };
 }
 
-export function titleFromTranscript(transcript: string): string {
+function titleFromTranscript(transcript: string): string {
   const cleaned = transcript.replace(/\s+/g, ' ').trim();
   if (!cleaned) return 'Untitled Idea';
   const firstSentence = cleaned.split(/[.!?।]/)[0]?.trim() ?? cleaned;
@@ -961,9 +925,7 @@ async function enrichWithCloudStt(
   );
 
   // Strip any echo of the old seed prompt before the text becomes the Human Signal.
-  let transcript = dropRepeatedSentences(
-    stripSpokenCommands(stripSeedEcho(whisper.text)),
-  );
+  let transcript = stripSpokenCommands(stripSeedEcho(whisper.text));
   if (!transcript) {
     throw new Error('No speech detected in this recording. Try speaking more clearly.');
   }
