@@ -146,14 +146,19 @@ class AudioCaptureService : Service() {
     private const val POST_STOP_COOLDOWN_MS = 4000L
 
     /** Mean word confidence a final result must reach to count as a command. */
-    private const val MIN_COMMAND_CONFIDENCE = 0.75
+    private const val MIN_COMMAND_CONFIDENCE = 0.55
 
     /**
-     * The action verb must be heard clearly on its own, not inferred from the
-     * rest of the phrase. Set high deliberately: a missed command costs one
-     * repetition, an invented one costs an unwanted recording.
+     * The action verb must be heard on its own, not inferred from the rest of
+     * the phrase - that is what stops "hey think tap" being read as
+     * "hey think tap start".
+     *
+     * WHY 0.60 and not 0.85: the stricter value rejected genuine commands on
+     * the first attempt, so users had to repeat themselves. An invented word
+     * scores far below a spoken one, so this still separates them while
+     * letting a normally-spoken verb through first time.
      */
-    private const val MIN_ACTION_WORD_CONFIDENCE = 0.85
+    private const val MIN_ACTION_WORD_CONFIDENCE = 0.60
 
     @Volatile var isRunning: Boolean = false; private set
     @Volatile var isRecording: Boolean = false; private set
@@ -194,6 +199,7 @@ class AudioCaptureService : Service() {
   override fun onCreate() {
     super.onCreate()
     createChannel()
+
     VoskModelProvider.loadAsync(this) { loaded, error ->
       if (loaded != null) {
         model = loaded
@@ -706,6 +712,7 @@ class AudioCaptureService : Service() {
    */
   private fun suspendMic() {
     if (!capturing) return
+
 
     if (isRecording && !isPausedRecording) {
       wavWriter?.pause()

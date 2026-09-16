@@ -287,10 +287,10 @@ export function useNativeCapture(options: Options = {}) {
   /**
    * Microphone lifecycle.
    *
-   * WHY a recording is NOT paused on background: locking the screen and
+   * WHY a recording is not paused on background: locking the screen and
    * switching apps both report as "background", so pausing there stopped takes
    * the moment the phone locked and the audio after that point was lost. A
-   * recording in progress continues - that is the whole point of a foreground
+   * recording in progress continues - that is the point of a foreground
    * service, and a wake lock keeps the capture loop alive with the screen off.
    *
    * When nothing is being recorded the microphone is still released on leaving,

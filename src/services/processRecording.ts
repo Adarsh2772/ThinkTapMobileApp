@@ -9,6 +9,8 @@ import {
 import { analyzeTranscript } from '@/src/services/transcriptAnalysisService';
 import { hasIndicScript, type AppLanguageCode } from '@/src/i18n/languages';
 import { normalizeCategory } from '@/src/theme/tokens';
+import { categorizeWithLlm } from '@/src/services/categorizeService';
+import { toEnglish } from '@/src/services/englishPass';
 import type { Idea, TranscriptAnalysis } from '@/src/types';
 import { useSettingsStore } from '@/src/store/settingsStore';
 import { createId } from '@/src/utils/format';
@@ -100,12 +102,12 @@ export async function enrichPendingRecording(
         // The transcription language chosen in Settings - see whisperTranscribe.
         speechLocale: pending.speechLocale,
         /**
-         * WHY read at call time rather than passed in: this runs in the
-         * background after a take, and the value must reflect the setting as it
-         * is now, not as it was when the screen mounted.
+         * WHY always true: the Thought is defined as the English rendering of
+         * the idea, so search works across every recording regardless of the
+         * language spoken. The Human Signal - the audio - preserves the
+         * original words and can always be replayed.
          */
-        translateToEnglish:
-          useSettingsStore.getState().transcriptOutput === 'english',
+        translateToEnglish: true,
         onStage: reportStage,
       });
     } else if (deviceTranscript) {
@@ -122,12 +124,12 @@ export async function enrichPendingRecording(
         // The transcription language chosen in Settings - see whisperTranscribe.
         speechLocale: pending.speechLocale,
         /**
-         * WHY read at call time rather than passed in: this runs in the
-         * background after a take, and the value must reflect the setting as it
-         * is now, not as it was when the screen mounted.
+         * WHY always true: the Thought is defined as the English rendering of
+         * the idea, so search works across every recording regardless of the
+         * language spoken. The Human Signal - the audio - preserves the
+         * original words and can always be replayed.
          */
-        translateToEnglish:
-          useSettingsStore.getState().transcriptOutput === 'english',
+        translateToEnglish: true,
         onStage: reportStage,
       });
     }
@@ -171,11 +173,36 @@ export async function enrichPendingRecording(
     Boolean(analysisThought) &&
     !(hasIndicScript(enrichment.transcript) && !hasIndicScript(analysisThought));
 
+  /**
+   * WHY the LLM runs here and not inside enrichment: it needs the finished
+   * transcript, and it must not block the save if it is slow or unreachable.
+   * A null result keeps the keyword guess, which is why a failure downgrades
+   * the accuracy rather than breaking the thought.
+   */
+  /**
+   * WHY a second pass over the text: Whisper's translate endpoint
+   * transliterates when it is unsure - "माझं जेवण तयार आहे" comes back as
+   * "Majha jevan tayar ahe", which is Marathi spelled with English letters,
+   * not English, and useless for search. Sometimes it leaves the Devanagari
+   * untouched. This fixes both, and leaves genuine English alone.
+   */
+  const englishTranscript = await toEnglish(enrichment.transcript);
+
+  /**
+   * WHY the LLM categorises here: it needs the finished text, and it must not
+   * block the save if it is slow or unreachable. A null result keeps the
+   * keyword guess, so a failure downgrades accuracy rather than breaking the
+   * thought.
+   */
+  let category = normalizeCategory(enrichment.category);
+  const smart = await categorizeWithLlm(englishTranscript);
+  if (smart) category = smart;
+
   return {
     title: enrichment.title,
-    category: normalizeCategory(enrichment.category),
+    category,
     summary: keepAnalysisSummary ? analysisThought : enrichment.summary,
-    transcript: enrichment.transcript,
+    transcript: englishTranscript,
     aiStory: enrichment.aiStory,
     analysis: keepAnalysisSummary ? analysis : null,
     language: enrichment.detectedLanguage,

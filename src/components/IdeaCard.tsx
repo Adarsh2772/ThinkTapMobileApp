@@ -1,6 +1,6 @@
 import { Ionicons } from '@expo/vector-icons';
 import { useState } from 'react';
-import { Pressable, StyleSheet, Text, View } from 'react-native';
+import { ActivityIndicator, Pressable, StyleSheet, Text, View } from 'react-native';
 
 import { DeleteThoughtDialog } from '@/src/components/DeleteThoughtDialog';
 
@@ -31,6 +31,24 @@ type Props = {
   onPress: () => void;
   onDelete?: () => void;
 };
+
+/**
+ * Is this thought still waiting for its Thought text?
+ *
+ * WHY: a take is saved the instant you stop, then the audio is sent for
+ * transcription. During that gap the transcript is empty, and the card was
+ * showing "Recording is not clear. Please record properly." - which reads as a
+ * failure for a recording that is perfectly fine and still processing.
+ *
+ * The pipeline bumps updatedAt when it finishes, so an unchanged updatedAt
+ * means it has not run yet.
+ */
+function isAwaitingThought(idea: Idea): boolean {
+  if ((idea.transcript ?? '').trim()) return false;
+  const created = new Date(idea.createdAt).getTime();
+  const updated = new Date(idea.updatedAt ?? idea.createdAt).getTime();
+  return updated <= created + 500;
+}
 
 export function IdeaCard({ idea, variant = 'compact', onPress, onDelete }: Props) {
   const icon = CATEGORY_ICONS[idea.category] ?? 'bulb-outline';
@@ -63,9 +81,17 @@ export function IdeaCard({ idea, variant = 'compact', onPress, onDelete }: Props
           onPress={onPress}
           style={({ pressed }) => [styles.archiveBody, pressed && styles.pressed]}
         >
-          <Text style={styles.archiveTitle} numberOfLines={2}>
-            {idea.transcript?.trim() || 'Recording is not clear. Please record properly.'}
-          </Text>
+          {isAwaitingThought(idea) ? (
+            <View style={styles.pendingRow}>
+              <ActivityIndicator size="small" color={colors.secondary} />
+              <Text style={styles.pendingText}>Preparing your Thought…</Text>
+            </View>
+          ) : (
+            <Text style={styles.archiveTitle} numberOfLines={2}>
+              {idea.transcript?.trim() ||
+                'No Thought for this recording — play the Human Signal above.'}
+            </Text>
+          )}
           <View style={styles.archiveFooter}>
             <View style={styles.metaRow}>
               <Ionicons name="mic-outline" size={16} color={colors.secondary} />
@@ -95,9 +121,16 @@ export function IdeaCard({ idea, variant = 'compact', onPress, onDelete }: Props
         <Ionicons name={icon} size={22} color={tint.bg} />
       </View>
       <View style={{ flex: 1 }}>
-        <Text style={styles.compactTitle} numberOfLines={1}>
-          {idea.transcript?.trim() || 'Recording is not clear. Please record properly.'}
-        </Text>
+        {isAwaitingThought(idea) ? (
+          <View style={styles.pendingRow}>
+            <ActivityIndicator size="small" color={colors.secondary} />
+            <Text style={styles.pendingText}>Preparing your Thought…</Text>
+          </View>
+        ) : (
+          <Text style={styles.compactTitle} numberOfLines={1}>
+            {idea.transcript?.trim() || 'No Thought yet'}
+          </Text>
+        )}
         <View style={styles.chipRow}>
           <View style={[styles.chip, { backgroundColor: tint.soft }]}>
             <Text style={[styles.chipText, { color: tint.bg }]}>{idea.category}</Text>
@@ -111,6 +144,12 @@ export function IdeaCard({ idea, variant = 'compact', onPress, onDelete }: Props
 }
 
 const styles = StyleSheet.create({
+  pendingRow: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+  pendingText: {
+    fontFamily: fonts.body,
+    fontSize: typography.bodyMd.fontSize,
+    color: colors.onSurfaceVariant,
+  },
   pressed: { transform: [{ scale: 0.985 }], opacity: 0.94 },
   compactCard: {
     backgroundColor: colors.surfaceContainerLowest,

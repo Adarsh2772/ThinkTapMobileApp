@@ -1,8 +1,8 @@
 import { File, UploadType } from 'expo-file-system';
 import { getInfoAsync } from 'expo-file-system/legacy';
+import { normalizeFileUri } from '@/src/services/audioStorage';
 
 import { hasDevanagari } from '@/src/features/wakeWord/phrases';
-import { normalizeFileUri } from '@/src/services/audioStorage';
 import {
   applyCodeMixIfNeeded,
   hasIndicScript,
@@ -772,9 +772,23 @@ async function enrichViaBackend(
   audioUri: string,
   onStage?: (stage: 'transcribing' | 'extracting' | 'summarizing') => void,
 ): Promise<AiEnrichment> {
-  const info = await getInfoAsync(audioUri);
+  /**
+   * WHY the URI is normalised first: the native service returns an absolute
+   * path with no scheme, and getInfoAsync needs file://. Without this a
+   * perfectly good recording reported "not found" and the Thought was never
+   * generated - seen on longer takes where the path came straight from the
+   * service rather than through a copy.
+   */
+  const resolved = normalizeFileUri(audioUri);
+  const info = await getInfoAsync(resolved);
   if (!info.exists) {
-    throw new Error('Recording file not found on device');
+    throw new Error(
+      'Recording file not found on device. It may have been moved or deleted.',
+    );
+  }
+  if (typeof info.size === 'number' && info.size < 2000) {
+    // A WAV header alone is 44 bytes; anything this small has no audio in it.
+    throw new Error('This recording contains no audio.');
   }
   if (typeof info.size === 'number' && info.size > MAX_STT_UPLOAD_BYTES) {
     throw new Error('Recording is too long for transcription (max ~25 MB).');
@@ -856,9 +870,23 @@ async function enrichWithCloudStt(
   speechLocale?: string,
   translateToEnglish = false,
 ): Promise<AiEnrichment> {
-  const info = await getInfoAsync(audioUri);
+  /**
+   * WHY the URI is normalised first: the native service returns an absolute
+   * path with no scheme, and getInfoAsync needs file://. Without this a
+   * perfectly good recording reported "not found" and the Thought was never
+   * generated - seen on longer takes where the path came straight from the
+   * service rather than through a copy.
+   */
+  const resolved = normalizeFileUri(audioUri);
+  const info = await getInfoAsync(resolved);
   if (!info.exists) {
-    throw new Error('Recording file not found on device');
+    throw new Error(
+      'Recording file not found on device. It may have been moved or deleted.',
+    );
+  }
+  if (typeof info.size === 'number' && info.size < 2000) {
+    // A WAV header alone is 44 bytes; anything this small has no audio in it.
+    throw new Error('This recording contains no audio.');
   }
   if (typeof info.size === 'number' && info.size > MAX_STT_UPLOAD_BYTES) {
     throw new Error(
@@ -867,12 +895,12 @@ async function enrichWithCloudStt(
   }
 
   const provider = providerConfig(apiKey);
-  const { mime } = mimeAndName(audioUri);
+  const { mime } = mimeAndName(resolved);
 
   const whisper = await whisperTranscribe(
     provider,
     apiKey,
-    audioUri,
+    resolved,
     mime,
     whisperLanguageFrom(speechLocale),
     translateToEnglish,
