@@ -59,13 +59,17 @@ const TRANSLITERATION_MARKERS = [
 ];
 
 /**
- * True when the text needs translating.
+ * True when the text needs translating, based on script/word heuristics only.
  *
- * WHY a single marker is now enough: the transcript arrives in the language
- * spoken, so most non-English text is plainly non-English and caught by script.
- * The marker list catches the remaining case - Marathi or Hindi that Whisper
- * wrote in English letters, like "Ashi Banwa Banwi", where the script test
- * sees nothing wrong.
+ * WHY this is kept as a fallback and not the primary signal any more: it only
+ * catches Indic scripts plus a Hindi/Marathi transliteration word list. A
+ * transcript in Tamil, Telugu, Gujarati, Kannada, or any other language whose
+ * words are not on that list - and French, Spanish, German, Portuguese,
+ * Chinese, Japanese, all of which the app also supports - would never trip
+ * this check, so `toEnglish` skipped them and they stayed in the local
+ * language. `toEnglish` now primarily trusts the language Whisper detected
+ * (see the `spokenLanguageCode` parameter below) and only falls back to this
+ * heuristic when no detected language is available.
  *
  * A false positive is cheap: the model is told to leave English untouched, so
  * running the pass on English text returns it unchanged.
@@ -88,11 +92,32 @@ export function needsEnglishPass(text: string): boolean {
 /**
  * Translate anything non-English in the text, leaving genuine English alone.
  * Returns the original on any failure.
+ *
+ * @param spokenLanguageCode The language Whisper detected the audio as
+ * (e.g. 'ta' for Tamil, 'te' for Telugu, 'fr' for French). This is the
+ * authoritative signal: if it is set and is not English, we translate,
+ * full stop - no script or word guessing needed, and it covers every
+ * language the app supports, not just the ones with a keyword list.
+ * When it is missing (older callers, device-transcript path with no
+ * language info), we fall back to the script/word heuristic below so
+ * behaviour degrades gracefully instead of silently skipping translation.
  */
-export async function toEnglish(text: string): Promise<string> {
+export async function toEnglish(
+  text: string,
+  spokenLanguageCode?: string,
+): Promise<string> {
   const source = text.replace(/\s+/g, ' ').trim();
   if (!source) return text;
-  if (!needsEnglishPass(source)) return text;
+
+  const knownNonEnglish =
+    typeof spokenLanguageCode === 'string' &&
+    spokenLanguageCode.trim().length > 0 &&
+    !spokenLanguageCode.toLowerCase().startsWith('en');
+
+  const shouldTranslate =
+    spokenLanguageCode !== undefined ? knownNonEnglish : needsEnglishPass(source);
+
+  if (!shouldTranslate) return text;
 
   const apiKey = useAiConfigStore.getState().getApiKey();
   if (!apiKey) return text;
@@ -141,6 +166,21 @@ export async function toEnglish(text: string): Promise<string> {
         model: MODEL,
         // Deterministic: the same recording should always read the same way.
         temperature: 0,
+        /**
+         * WHY these two: openai/gpt-oss-120b is a reasoning model and spends
+         * completion tokens on hidden chain-of-thought before it writes the
+         * translation - that reasoning is billed against max_tokens the same
+         * as the visible output. This call had no max_tokens set, which uses
+         * the provider default; on a long recording that default can still be
+         * exhausted by reasoning before any translation is written, silently
+         * returning the original text (see categorizeService.ts, which hit
+         * exactly this with max_tokens: 8 - every single call failed the same
+         * way). 2000 gives room for a long transcript's translation plus
+         * reasoning; 'low' keeps the reasoning itself short so more of that
+         * budget reaches the actual output.
+         */
+        max_tokens: 2000,
+        reasoning_effort: 'low',
         messages: [
           { role: 'system', content: system },
           { role: 'user', content: source },
@@ -154,7 +194,16 @@ export async function toEnglish(text: string): Promise<string> {
       choices?: { message?: { content?: string } }[];
     };
     const out = json.choices?.[0]?.message?.content?.trim() ?? '';
-    if (!out) return text;
+    if (!out) {
+      const finishReason = (json as { choices?: { finish_reason?: string }[] })
+        .choices?.[0]?.finish_reason;
+      if (finishReason === 'length') {
+        console.warn(
+          '[AI] toEnglish: empty reply, reasoning exhausted max_tokens',
+        );
+      }
+      return text;
+    }
 
     /**
      * WHY the result is sanity-checked: a model can answer with a preamble

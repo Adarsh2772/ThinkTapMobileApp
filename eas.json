@@ -17,7 +17,7 @@
         "buildType": "apk"
       },
       "env": {
-        "EXPO_PUBLIC_GROQ_API_KEY": "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"
+        "EXPO_PUBLIC_GROQ_API_KEY": "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"
       }
     },
     "production": {
