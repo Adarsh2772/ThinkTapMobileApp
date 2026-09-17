@@ -1,5 +1,6 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
+import { isNetworkError } from '@/src/services/aiService';
 import { recordingExists } from '@/src/services/audioStorage';
 import { enrichPendingRecording } from '@/src/services/processRecording';
 import { useIdeasStore } from '@/src/store/ideasStore';
@@ -140,6 +141,30 @@ export async function queueStatus(ideaId: string): Promise<QueueStatus> {
   return { state: 'waiting' };
 }
 
+/**
+ * Every queued idea's status in one pass.
+ *
+ * WHY this exists alongside queueStatus: a list screen showing many pending
+ * cards used to have no way to tell "waiting for a connection, nothing to
+ * see here" apart from "actively being retried right now" without calling
+ * queueStatus() once per card - each call re-reading and re-parsing the same
+ * AsyncStorage entry. One read for the whole list is enough.
+ */
+export async function readQueueStatuses(): Promise<Map<string, QueueStatus>> {
+  const queue = await readQueue();
+  const statuses = new Map<string, QueueStatus>();
+  for (const entry of queue) {
+    if (entry.lastAttemptFailed && entry.attempts >= FAILURES_BEFORE_RETRY_BUTTON) {
+      statuses.set(entry.ideaId, { state: 'failed', attempts: entry.attempts });
+    } else if (entry.attempts > 0) {
+      statuses.set(entry.ideaId, { state: 'retrying', attempts: entry.attempts });
+    } else {
+      statuses.set(entry.ideaId, { state: 'waiting' });
+    }
+  }
+  return statuses;
+}
+
 /** True when this thought is waiting to be transcribed, for any reason. */
 export async function isQueued(ideaId: string): Promise<boolean> {
   const queue = await readQueue();
@@ -191,7 +216,7 @@ export async function retryNow(ideaId: string): Promise<
     const msg = e instanceof Error ? e.message : 'Transcription failed.';
     return {
       ok: false,
-      reason: /network|fetch|timeout/i.test(msg)
+      reason: isNetworkError(e)
         ? 'Still no connection. Try again once you are online.'
         : msg,
     };
@@ -257,16 +282,18 @@ export async function processTranscriptionQueue(): Promise<void> {
     } catch (e) {
       const msg = e instanceof Error ? e.message : '';
       /**
-       * WHY the list is broad: a connection that has just come back produces a
-       * variety of transport errors before it settles - DNS not resolving yet,
-       * a socket reset, an aborted request. None of those mean transcription
-       * failed, so none should count against the retry budget or surface a
-       * button.
+       * WHY the list is broad, and why the marker is checked first: a
+       * connection that has just come back produces a variety of transport
+       * errors before it settles - DNS not resolving yet, a socket reset, an
+       * aborted request. None of those mean transcription failed, so none
+       * should count against the retry budget or surface a button. The
+       * marker (see isNetworkError in aiService.ts) catches the case a
+       * keyword list alone missed: mapSttError deliberately rewrites the raw
+       * error into a friendly message for the user, and that friendly
+       * wording does not contain any of these keywords - so a plainly
+       * offline failure was falling through to "real failure" below.
        */
-      const offline =
-        /network|fetch|timeout|connection|abort|ENOTFOUND|ECONN|EAI_AGAIN|ETIMEDOUT|socket|dns|unreachable|offline/i.test(
-          msg,
-        ) || msg === '';
+      const offline = isNetworkError(e) || msg === '';
 
       /**
        * WHY offline does not count: a user with no signal for a day would

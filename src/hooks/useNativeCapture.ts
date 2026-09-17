@@ -1,10 +1,29 @@
 import { AndroidWakeWord, type RecordingPayload } from 'android-wake-word';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { AppState, PermissionsAndroid, Platform } from 'react-native';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 
 import { persistRecording } from '@/src/services/audioStorage';
 import { useSettingsStore } from '@/src/store/settingsStore';
 import { useWakeWordStore } from '@/src/store/wakeWordStore';
+
+/**
+ * Key for the "a recording is currently open" marker.
+ *
+ * WHY this exists: the native side already survives a sudden kill - the WAV
+ * header is patched every ~2s (see AudioCaptureService.flushHeader) and a
+ * shutdown broadcast closes it cleanly when the OS gives warning - but
+ * neither of those puts the file back in the app. Nothing in the app's data
+ * ever pointed to it, because that only ever happened via the normal
+ * 'stopped' handler below, and that handler never got to run if the whole
+ * process died with it. This AsyncStorage marker is the thing that survives
+ * a full power-off/power-on (native module state does not - it lives in a
+ * JVM process that no longer exists) and lets recoverOrphanedRecording()
+ * find that file again on the next launch and turn it into a real Thought
+ * instead of an invisible file nobody knows about.
+ */
+export const ACTIVE_RECORDING_PATH_KEY = 'thinktap:activeRecordingPath';
+
 
 /**
  * Android capture driven entirely by the native single-microphone service.
@@ -105,6 +124,9 @@ export function useNativeCapture(options: Options = {}) {
             setStatus('recording');
             setDurationSec(0);
             setCaptureActive(true);
+            // See ACTIVE_RECORDING_PATH_KEY above - this is what lets a
+            // recording still open when the phone dies get recovered later.
+            if (e.path) void AsyncStorage.setItem(ACTIVE_RECORDING_PATH_KEY, e.path).catch(() => {});
             break;
 
           case 'paused':
@@ -133,6 +155,10 @@ export function useNativeCapture(options: Options = {}) {
               return;
             }
             lastSavedPath = e.path;
+            // A clean stop reached here, so there is nothing left to recover -
+            // clear the marker now rather than after the async copy below,
+            // so it can't be left behind if persistRecording throws.
+            void AsyncStorage.removeItem(ACTIVE_RECORDING_PATH_KEY).catch(() => {});
             // Move out of the service's directory into app documents so the
             // file survives cache clearing and is reachable by the player.
             void (async () => {
@@ -151,6 +177,8 @@ export function useNativeCapture(options: Options = {}) {
             setStatus('idle');
             setDurationSec(0);
             setCaptureActive(false);
+            // Discarded on purpose - nothing to recover later either.
+            void AsyncStorage.removeItem(ACTIVE_RECORDING_PATH_KEY).catch(() => {});
             break;
         }
       }),
@@ -324,6 +352,30 @@ export function useNativeCapture(options: Options = {}) {
   const start = useCallback(async (): Promise<boolean> => {
     if (!supported) return false;
     if (AndroidWakeWord.isRecording()) return true;
+
+    /**
+     * WHY this guard exists: starting while a call is already active let the
+     * app try to acquire a microphone another app already holds exclusively.
+     * On some devices AudioRecord accepted the request and reported itself as
+     * running while every read silently failed forever - the capture loop
+     * looked alive but delivered nothing, so neither manual stop nor a voice
+     * command could reach it afterwards, and even a JS reload could not fix a
+     * native service stuck in that state. Reported after starting a take
+     * deliberately during a WhatsApp call to see what would happen; recovery
+     * needed a full uninstall.
+     *
+     * Refusing up front, with a clear reason, is a better outcome than
+     * attempting it and risking that stuck state - the self-healing fix in
+     * the capture loop is the safety net for calls that begin mid-recording,
+     * not a reason to skip this check for calls already in progress.
+     */
+    if (AndroidWakeWord.isCallActive()) {
+      const msg = 'Cannot record during a call. Try again once it has ended.';
+      setError(msg);
+      onErrorRef.current?.(msg);
+      return false;
+    }
+
     setError(null);
 
     /**
@@ -410,11 +462,13 @@ export function useNativeCapture(options: Options = {}) {
 
   const resume = useCallback(async (): Promise<boolean> => {
     if (!supported || !AndroidWakeWord.isRecording()) return false;
-    // WHY: resuming mid-call would record the call audio, not the user's idea.
-    if (AndroidWakeWord.isCallActive()) {
-      onInterruptedRef.current?.();
-      return false;
-    }
+    /**
+     * WHY resume is no longer blocked during a call: it was refused while a
+     * call was active, but starting a brand new recording was not - so the user
+     * could record during a call, just not continue the take they already had.
+     * That inconsistency is worse than the risk it was guarding against, and
+     * the user pressing Resume mid-call has made their intention clear.
+     */
     callHoldRef.current = false;
     setCallHold(false);
     return AndroidWakeWord.resumeRecording();

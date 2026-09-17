@@ -1,6 +1,7 @@
 import { useRouter } from 'expo-router';
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import {
+    AppState,
     FlatList,
     Pressable,
     ScrollView,
@@ -12,9 +13,11 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { IdeaCard } from '@/src/components/IdeaCard';
 import { ScreenHeader } from '@/src/components/ScreenHeader';
+import { guardedNavigate } from '@/src/utils/guardedNavigate';
 import { useAuthStore } from '@/src/store/authStore';
 import { useIdeasStore } from '@/src/store/ideasStore';
 import { useSettingsStore } from '@/src/store/settingsStore';
+import { readQueueStatuses, type QueueStatus } from '@/src/services/transcriptionQueue';
 import {
     CATEGORIES,
     categoryColor,
@@ -35,6 +38,38 @@ export default function IdeasScreen() {
   const tx = useSettingsStore((s) => s.tx);
   void languageCode;
   const [category, setCategory] = useState<string>('All');
+  const [queueStatuses, setQueueStatuses] = useState<Map<string, QueueStatus>>(new Map());
+
+  /**
+   * WHY this exists: a card showing "Preparing your Thought…" with a spinner
+   * used to mean exactly that whether the app was mid-attempt or had been
+   * sitting offline for ten minutes - both looked identical, like something
+   * was actively happening the whole time. Reading the real queue status
+   * lets each card show "waiting for a connection" honestly instead, and
+   * only spin while a retry is genuinely in flight. See queueForTranscription
+   * for where offline takes actually land, and startAutoRetry (started from
+   * the Home screen) for what actually drives a retry once you're back
+   * online - this effect only reads that state to reflect it, it does not
+   * drive the retries itself.
+   */
+  useEffect(() => {
+    let cancelled = false;
+    const refresh = async () => {
+      const statuses = await readQueueStatuses();
+      if (!cancelled) setQueueStatuses(statuses);
+    };
+    void refresh();
+    const sub = AppState.addEventListener('change', (s) => {
+      if (s === 'active') void refresh();
+    });
+    // 8s: matches the idea detail screen's own poll interval.
+    const id = setInterval(refresh, 8000);
+    return () => {
+      cancelled = true;
+      sub.remove();
+      clearInterval(id);
+    };
+  }, []);
 
   const ideas = useMemo(() => {
     if (!user) return [];
@@ -105,7 +140,8 @@ export default function IdeasScreen() {
           <IdeaCard
             idea={item}
             variant="archive"
-            onPress={() => router.push(`/idea/${item.id}`)}
+            queueState={queueStatuses.get(item.id)}
+            onPress={() => guardedNavigate(() => router.push(`/idea/${item.id}`))}
             onDelete={() => void deleteIdea(item.id)}
           />
         )}

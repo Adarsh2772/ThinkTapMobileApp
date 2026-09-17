@@ -699,6 +699,34 @@ function providerConfig(apiKey: string) {
   };
 }
 
+/**
+ * Marks an error as network-related so callers far from here - the retry
+ * queue, enrichPendingRecording's own catch block - can tell "no internet"
+ * apart from a real failure without re-deriving it from the message text.
+ *
+ * WHY this exists instead of just matching more keywords: mapSttError below
+ * already knows, precisely, when the underlying cause was a network problem
+ * - it has its own regex for exactly that. But it then replaces the message
+ * with a friendly one for the user ("Could not reach the transcription
+ * service. Check internet and try again.") that does not contain any of the
+ * words a *different*, independent regex elsewhere in the app was looking
+ * for ("network", "timeout", "dns", ...). That mismatch is why a plainly
+ * offline failure was logged as "Enrichment failed; using device or empty
+ * speech" instead of being recognised as offline and queued for retry - the
+ * friendly wording silently broke the connection between the two. A marker
+ * set once, at the one place that actually knows the answer, survives any
+ * amount of message rewriting after that.
+ */
+export function isNetworkError(error: unknown): boolean {
+  if (error && typeof error === 'object' && (error as { isNetworkError?: boolean }).isNetworkError) {
+    return true;
+  }
+  const msg = error instanceof Error ? error.message : String(error ?? '');
+  return /network|fetch|timeout|connection|abort|ENOTFOUND|ECONN|EAI_AGAIN|ETIMEDOUT|socket|dns|unreachable|offline|reach the transcription service/i.test(
+    msg,
+  );
+}
+
 export function mapSttError(error: unknown): Error {
   if (!(error instanceof Error)) {
     return new Error('Speech-to-text failed. Check your API key and network.');
@@ -718,7 +746,11 @@ export function mapSttError(error: unknown): Error {
       msg,
     )
   ) {
-    return new Error('Could not reach the transcription service. Check internet and try again.');
+    const friendly = new Error(
+      'Could not reach the transcription service. Check internet and try again.',
+    );
+    (friendly as Error & { isNetworkError?: boolean }).isNetworkError = true;
+    return friendly;
   }
   if (/25\s*MB|file too large|payload too large|413/i.test(msg)) {
     return new Error(
@@ -741,6 +773,39 @@ export function mapSttError(error: unknown): Error {
  * Native multipart upload via expo-file-system. Avoids expo/fetch FormData,
  * which rejects Expo File parts as "Unsupported FormDataPart implementation".
  */
+/**
+ * How long a Whisper upload gets before it's treated as failed.
+ *
+ * WHY this exists: file.upload() below had no timeout at all. A flat "no
+ * network" usually fails fast on its own, but a weak or half-working
+ * connection - wifi connected with no real internet, one signal bar,
+ * a captive portal - can leave the request hanging far longer than that,
+ * sometimes for minutes. Nothing has failed yet during that time, so the
+ * recording never reaches the retry queue, which is exactly where the
+ * honest "waiting for a connection" message lives - the user is left
+ * staring at a bare "Preparing your Thought…" with no indication anything
+ * is wrong or what to expect. Bounding the wait means a bad connection
+ * fails in a predictable, short window and the honest message shows up
+ * promptly instead of after an open-ended hang.
+ */
+const UPLOAD_TIMEOUT_MS = 20_000;
+
+function withTimeout<T>(promise: Promise<T>, ms: number, message: string): Promise<T> {
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error(message)), ms);
+    promise.then(
+      (value) => {
+        clearTimeout(timer);
+        resolve(value);
+      },
+      (error) => {
+        clearTimeout(timer);
+        reject(error);
+      },
+    );
+  });
+}
+
 export async function uploadAudioMultipart(input: {
   url: string;
   audioUri: string;
@@ -762,14 +827,23 @@ export async function uploadAudioMultipart(input: {
   }
 
   try {
-    const result = await file.upload(input.url, {
-      httpMethod: 'POST',
-      uploadType: UploadType.MULTIPART,
-      fieldName: input.fieldName ?? 'file',
-      mimeType: input.mime,
-      headers: input.headers,
-      parameters: input.fields,
-    });
+    const result = await withTimeout(
+      file.upload(input.url, {
+        httpMethod: 'POST',
+        uploadType: UploadType.MULTIPART,
+        fieldName: input.fieldName ?? 'file',
+        mimeType: input.mime,
+        headers: input.headers,
+        parameters: input.fields,
+      }),
+      UPLOAD_TIMEOUT_MS,
+      // WHY this exact wording: it must contain a word every offline-detector
+      // in the app already looks for - see isNetworkError in
+      // processRecording.ts and the matching regex in transcriptionQueue.ts -
+      // so a stalled upload is recognised as "no connection" everywhere a
+      // real network error already would be, with no separate handling needed.
+      'Upload timeout - no network connection',
+    );
     return { status: result.status, body: result.body };
   } catch (error) {
     throw new Error(error instanceof Error ? error.message : 'Audio upload failed (network)');
@@ -1104,7 +1178,8 @@ async function convertToNativeScript(
           : 'Japanese script (Kanji/Hiragana/Katakana)';
 
   try {
-    const res = await fetch(`${provider.baseUrl}/chat/completions`, {
+    const res = await withTimeout(
+      fetch(`${provider.baseUrl}/chat/completions`, {
       method: 'POST',
       headers: {
         Authorization: `Bearer ${apiKey}`,
@@ -1138,7 +1213,15 @@ Return JSON: { "transcript": string }`,
           },
         ],
       }),
-    });
+      }),
+      // WHY this call needs its own bound: it has no caller above it that
+      // treats a hang differently from a real failure - the catch below
+      // swallows everything into the same safe fallback either way. This is
+      // purely about not leaving the whole enrichment pipeline stuck waiting
+      // on one request for minutes on a bad connection.
+      UPLOAD_TIMEOUT_MS,
+      'Chat completion timeout - no network connection',
+    );
 
     if (!res.ok) return rawTranscript;
     const json = (await res.json()) as {
@@ -1172,7 +1255,8 @@ async function finalizeFromTranscript(
   onStage?.('extracting');
   onStage?.('summarizing');
 
-  const chatRes = await fetch(`${provider.baseUrl}/chat/completions`, {
+  const chatRes = await withTimeout(
+    fetch(`${provider.baseUrl}/chat/completions`, {
     method: 'POST',
     headers: {
       Authorization: `Bearer ${apiKey}`,
@@ -1205,7 +1289,19 @@ Return JSON: { "transcript": string, "title": string, "category": string, "summa
         },
       ],
     }),
-  });
+    }),
+    /**
+     * WHY this one matters most: this is the call whose thrown error is
+     * meant to propagate all the way up to the retry queue (see
+     * isNetworkError in processRecording.ts). Without a bound here, a
+     * stalled-but-not-yet-failed connection meant that propagation never
+     * got a chance to happen at all - the promise just never settled, so
+     * nothing reached the queue, so the honest "waiting for a connection"
+     * message never showed up. This is the fix for exactly that gap.
+     */
+    UPLOAD_TIMEOUT_MS,
+    'Chat completion timeout - no network connection',
+  );
 
   if (!chatRes.ok) {
     return {
