@@ -2,16 +2,18 @@ import { useRouter } from 'expo-router';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Alert, AppState, Pressable, StyleSheet, Text, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 
 import { ScreenHeader } from '@/src/components/ScreenHeader';
 import { VoiceAssistantStage } from '@/src/features/voiceAssistant/VoiceAssistantStage';
 import { getSpeechLocale } from '@/src/features/languageTranscript/locales';
 import { useIdeaCapture } from '@/src/hooks/useIdeaCapture';
-import { useNativeCapture } from '@/src/hooks/useNativeCapture';
+import { ACTIVE_RECORDING_PATH_KEY, useNativeCapture } from '@/src/hooks/useNativeCapture';
 import { useDrawerOptional } from '@/src/navigation/DrawerContext';
 import { releaseWakeMicForCapture } from '@/src/services/micHandoff';
 import { abortLiveRecognition } from '@/src/services/languageTranscriptService';
 import { resolveSpokenLanguage } from '@/src/i18n/languages';
+import { probeAudioDurationSec, recordingExists } from '@/src/services/audioStorage';
 import {
   buildLocalIdea,
   enrichPendingRecording,
@@ -248,6 +250,55 @@ export default function HomeScreen() {
     },
     [setPending, runOrganizeInBackground],
   );
+
+  /**
+   * Recover a recording that was still open when the app died.
+   *
+   * WHY this runs here: this is exactly the same save path a normal
+   * just-finished recording takes below (runOrganizeInBackground) - the only
+   * difference is where the file came from. See ACTIVE_RECORDING_PATH_KEY's
+   * own note in useNativeCapture.ts for why the marker is what makes this
+   * possible at all: the audio file itself usually survives a sudden kill
+   * fine (see AudioCaptureService.flushHeader), but nothing ever told the
+   * app's data that the file existed, because that only happens in the
+   * normal 'stopped' handler - which never got to run if the app died with
+   * the recording still going. This is what closes that gap: on the next
+   * launch, if the marker says a recording was left open, treat that file
+   * exactly like one that just finished.
+   */
+  useEffect(() => {
+    if (!user) return;
+    let cancelled = false;
+    void (async () => {
+      let path: string | null = null;
+      try {
+        path = await AsyncStorage.getItem(ACTIVE_RECORDING_PATH_KEY);
+      } catch {
+        return;
+      }
+      if (!path || cancelled) return;
+      // Clear immediately, before touching anything else - so a second
+      // mount, or a crash during recovery itself, can't try this file twice.
+      await AsyncStorage.removeItem(ACTIVE_RECORDING_PATH_KEY).catch(() => {});
+
+      if (!(await recordingExists(path))) return; // nothing left to recover
+      if (cancelled) return;
+
+      const durationSec = (await probeAudioDurationSec(path)) ?? 1;
+      if (cancelled) return;
+
+      showToast('Found a recording from before the app closed — saving it now.', 'info');
+      void runOrganizeInBackground({
+        audioUri: path,
+        durationSec,
+        transcript: '',
+        speechLocale,
+      });
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [user, speechLocale, runOrganizeInBackground]);
 
   // A native take finished — no transcript yet; Whisper produces it from the file.
   nativeFinishRef.current = (result) => {

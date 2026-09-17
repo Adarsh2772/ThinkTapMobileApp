@@ -222,10 +222,16 @@ export default function IdeaDetailScreen() {
    */
   const hasTranscript = Boolean((idea.transcript ?? '').trim());
   void hasTranscript;
+  // Every non-English recording now goes through a translation pass (see
+  // processRecording.ts), so what's shown below is translated English, not
+  // a raw transcript, whenever the spoken language wasn't English already.
+  const wasTranslated = Boolean(idea.language?.trim()) && !idea.language!.toLowerCase().startsWith('en');
   const sourceLabel = isDevice
     ? 'Transcribed on this device'
     : isLive
-      ? 'Transcribed from your recording'
+      ? wasTranslated
+        ? 'Translated to English from your recording'
+        : 'Transcribed from your recording'
       : hasTranscript
         ? 'Sample content — not your recording'
         : 'Transcript not available — audio is saved and can be transcribed later';
@@ -303,19 +309,31 @@ export default function IdeaDetailScreen() {
             <Text style={[styles.sectionTitle, styles.sectionTitleInline]}>Thought</Text>
           </View>
           <View style={styles.transcriptCard}>
-            {transcribing || retrying ? (
+            {/*
+              WHY 'waiting' is checked first, ahead of the generic transcribing
+              window: transcribing was true for the first 90 seconds no matter
+              what, so a take that got queued for having no connection in the
+              first few seconds still showed the generic "Preparing your
+              Thought…" spinner - implying active work - for the rest of that
+              90-second window even though nothing was happening in between
+              15-second retry ticks. Checking the real queue status first means
+              a genuinely idle wait says so immediately, and only a truly
+              in-flight attempt (first try, or an active retry) gets the
+              spinner.
+            */}
+            {qStatus.state === 'waiting' ? (
+              <View style={styles.transcribingRow}>
+                <Ionicons name="cloud-offline-outline" size={18} color={colors.onSurfaceVariant} />
+                <Text style={styles.transcribingText}>
+                  Waiting for a connection. Your Human Signal is saved — the
+                  Thought will appear on its own once you are online.
+                </Text>
+              </View>
+            ) : transcribing || retrying ? (
               <View style={styles.transcribingRow}>
                 <ActivityIndicator size="small" color={colors.secondary} />
                 <Text style={styles.transcribingText}>
                   Preparing your Thought…
-                </Text>
-              </View>
-            ) : qStatus.state === 'waiting' ? (
-              <View style={styles.transcribingRow}>
-                <ActivityIndicator size="small" color={colors.secondary} />
-                <Text style={styles.transcribingText}>
-                  Waiting for a connection. Your Human Signal is saved — the
-                  Thought will appear on its own once you are online.
                 </Text>
               </View>
             ) : qStatus.state === 'retrying' ? (

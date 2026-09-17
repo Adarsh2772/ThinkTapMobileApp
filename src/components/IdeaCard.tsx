@@ -13,6 +13,7 @@ import {
     typography,
 } from '@/src/theme/tokens';
 import type { Idea } from '@/src/types';
+import type { QueueStatus } from '@/src/services/transcriptionQueue';
 import { formatDuration, relativeDate } from '@/src/utils/format';
 
 const CATEGORY_ICONS: Record<string, keyof typeof Ionicons.glyphMap> = {
@@ -30,6 +31,14 @@ type Props = {
   variant?: 'compact' | 'archive';
   onPress: () => void;
   onDelete?: () => void;
+  /**
+   * The idea's real status in the transcription retry queue, when known.
+   * Passed down from the list screen, which reads the whole queue once per
+   * poll rather than every card reading it separately. Undefined just means
+   * "not queued" - either it never needed to be, or it hasn't been checked
+   * yet on this render.
+   */
+  queueState?: QueueStatus;
 };
 
 /**
@@ -50,7 +59,38 @@ function isAwaitingThought(idea: Idea): boolean {
   return updated <= created + 500;
 }
 
-export function IdeaCard({ idea, variant = 'compact', onPress, onDelete }: Props) {
+/**
+ * What to show while a thought is awaiting its transcript.
+ *
+ * WHY this needs to be more than one message: "Preparing your Thought…"
+ * with a spinner used to show for every awaiting idea, whether the app was
+ * genuinely mid-attempt or had been offline for ten minutes with nothing
+ * happening between 15-second retry ticks - both looked identical, like
+ * active work was continuously underway. queueState tells the two apart:
+ * 'waiting' means nothing is happening right now because there is no
+ * connection, so it gets an honest, non-spinning message instead of one
+ * that implies the app is busy. 'retrying' and no queue entry at all (still
+ * on the very first attempt) are genuine in-flight work, so those keep the
+ * spinner.
+ */
+function ThoughtStatus({ queueState }: { queueState?: QueueStatus }) {
+  if (queueState?.state === 'waiting') {
+    return (
+      <View style={styles.pendingRow}>
+        <Ionicons name="cloud-offline-outline" size={16} color={colors.onSurfaceVariant} />
+        <Text style={styles.pendingText}>Waiting for a connection…</Text>
+      </View>
+    );
+  }
+  return (
+    <View style={styles.pendingRow}>
+      <ActivityIndicator size="small" color={colors.secondary} />
+      <Text style={styles.pendingText}>Preparing your Thought…</Text>
+    </View>
+  );
+}
+
+export function IdeaCard({ idea, variant = 'compact', onPress, onDelete, queueState }: Props) {
   const icon = CATEGORY_ICONS[idea.category] ?? 'bulb-outline';
   const tint = categoryColor(idea.category);
   const [confirmDelete, setConfirmDelete] = useState(false);
@@ -82,10 +122,7 @@ export function IdeaCard({ idea, variant = 'compact', onPress, onDelete }: Props
           style={({ pressed }) => [styles.archiveBody, pressed && styles.pressed]}
         >
           {isAwaitingThought(idea) ? (
-            <View style={styles.pendingRow}>
-              <ActivityIndicator size="small" color={colors.secondary} />
-              <Text style={styles.pendingText}>Preparing your Thought…</Text>
-            </View>
+            <ThoughtStatus queueState={queueState} />
           ) : (
             <Text style={styles.archiveTitle} numberOfLines={2}>
               {idea.transcript?.trim() ||
@@ -122,10 +159,7 @@ export function IdeaCard({ idea, variant = 'compact', onPress, onDelete }: Props
       </View>
       <View style={{ flex: 1 }}>
         {isAwaitingThought(idea) ? (
-          <View style={styles.pendingRow}>
-            <ActivityIndicator size="small" color={colors.secondary} />
-            <Text style={styles.pendingText}>Preparing your Thought…</Text>
-          </View>
+          <ThoughtStatus queueState={queueState} />
         ) : (
           <Text style={styles.compactTitle} numberOfLines={1}>
             {idea.transcript?.trim() || 'No Thought yet'}

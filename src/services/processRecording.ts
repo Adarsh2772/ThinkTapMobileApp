@@ -3,6 +3,7 @@ import {
   enrichIdeaFromAudio,
   enrichIdeaFromDeviceTranscript,
   isCloudSttAvailable,
+  isNetworkError,
   looksLikeWhisperHallucination,
   stripSpokenCommands,
   type EnrichmentResult,
@@ -77,26 +78,6 @@ export function buildLocalIdea(
   languageCode: AppLanguageCode,
 ): Idea {
   return ideaFromEnrichment(userId, pending, localEnrichment(pending, languageCode), null);
-}
-
-/**
- * True when an error looks like "no connection" rather than a real failure.
- *
- * WHY this exists: `enrichPendingRecording` used to catch every error the
- * same way and quietly fall back to an empty transcript - including a plain
- * "no network" failure. That made an offline attempt look, to the retry
- * queue, exactly like a real failure (Whisper reached, nothing found), which
- * burns through the queue's small retry budget in about a minute even though
- * the user was simply offline. A recording made with no connection then lost
- * its place in the queue before the connection ever came back. Recognising a
- * network error and re-throwing it (see below) lets the queue's own,
- * already-correct offline handling keep retrying indefinitely instead.
- */
-function isNetworkError(error: unknown): boolean {
-  const msg = error instanceof Error ? error.message : String(error ?? '');
-  return /network|fetch|timeout|connection|abort|ENOTFOUND|ECONN|EAI_AGAIN|ETIMEDOUT|socket|dns|unreachable|offline/i.test(
-    msg,
-  );
 }
 
 export async function enrichPendingRecording(
@@ -233,14 +214,24 @@ export async function enrichPendingRecording(
   // Title, summary and aiStory are short strings the same finalize step
   // generated in the original spoken language - translate each the same way.
   // toEnglish() is a no-op (and cheap) whenever the text is already English.
+  //
+  // WHY aiStory is guarded and the other two are not: aiStory is the one
+  // field typed string | null (emptySpeechEnrichment sets it to null when
+  // there was nothing to enrich - no speech, or the enrichment step itself
+  // failed and fell back). toEnglish() calls text.replace() on whatever it's
+  // given with no null check of its own, so passing null straight through
+  // crashed with "Cannot read property 'replace' of null" - and specifically
+  // only on takes that had already failed once, which is exactly why it kept
+  // showing up paired with "Enrichment failed; using device or empty speech"
+  // in the logs rather than on every recording.
   const [rawEnglishTitle, rawEnglishSummary, rawEnglishAiStory] = await Promise.all([
     toEnglish(enrichment.title, enrichment.detectedLanguage),
     toEnglish(enrichment.summary, enrichment.detectedLanguage),
-    toEnglish(enrichment.aiStory, enrichment.detectedLanguage),
+    enrichment.aiStory ? toEnglish(enrichment.aiStory, enrichment.detectedLanguage) : null,
   ]);
   const englishTitle = stripSpokenCommands(rawEnglishTitle);
   const englishSummary = stripSpokenCommands(rawEnglishSummary);
-  const englishAiStory = stripSpokenCommands(rawEnglishAiStory);
+  const englishAiStory = rawEnglishAiStory ? stripSpokenCommands(rawEnglishAiStory) : null;
 
   onStage?.('summarizing');
   let analysis: TranscriptAnalysis | null = null;
