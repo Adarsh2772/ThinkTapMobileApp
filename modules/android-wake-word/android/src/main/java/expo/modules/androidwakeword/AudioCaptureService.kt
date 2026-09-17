@@ -6,8 +6,10 @@ import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
 import android.app.Service
+import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
+import android.content.IntentFilter
 import android.content.pm.PackageManager
 import android.content.pm.ServiceInfo
 import android.media.AudioFormat
@@ -176,7 +178,11 @@ class AudioCaptureService : Service() {
     @Volatile var currentPath: String? = null; private set
     /** Live audio written, in ms. Updated from the capture loop. */
     @Volatile var recordedMs: Long = 0
+    /** How often the WAV header is re-patched mid-recording. See flushHeader(). */
+    private const val HEADER_FLUSH_INTERVAL_MS = 2000L
   }
+
+  private var lastHeaderFlushMs: Long = 0
 
   private var audioRecord: AudioRecord? = null
   private var captureThread: Thread? = null
@@ -199,6 +205,7 @@ class AudioCaptureService : Service() {
   override fun onCreate() {
     super.onCreate()
     createChannel()
+    registerShutdownReceiver()
 
     VoskModelProvider.loadAsync(this) { loaded, error ->
       if (loaded != null) {
@@ -214,6 +221,54 @@ class AudioCaptureService : Service() {
       }
     }
   }
+
+  /**
+   * WHY this receiver exists: a recording that was still going when the user
+   * powers the phone off used to just stop existing mid-take - the service
+   * process is killed with no chance to run its normal stop/close path, so
+   * the WAV header was never patched with the real size (or was up to
+   * HEADER_FLUSH_INTERVAL_MS stale - see flushHeader()). Android sends
+   * ACTION_SHUTDOWN to give running apps a moment to react before that
+   * happens for a user-initiated power-off. Reacting to it by closing the
+   * take exactly like a normal stop means the recording the user made right
+   * up to the moment they chose to power off is saved properly, not just
+   * whatever the last periodic flush happened to catch.
+   *
+   * WHY this is not the only fix: ACTION_SHUTDOWN is not guaranteed for every
+   * kind of power loss - a battery that dies outright, or an OEM killing the
+   * process before shutdown broadcasts go out, gets no warning at all. That
+   * is exactly what the periodic flushHeader() call in the capture loop is
+   * for: it means the file on disk is never more than a couple of seconds
+   * away from being valid, with or without this receiver's help.
+   */
+  private var shutdownReceiver: BroadcastReceiver? = null
+
+  private fun registerShutdownReceiver() {
+    if (shutdownReceiver != null) return
+    val receiver = object : BroadcastReceiver() {
+      override fun onReceive(context: Context?, intent: Intent?) {
+        Log.i(TAG, "device shutting down - saving any active take")
+        if (isRecording) stopRecording(fromVoice = false)
+      }
+    }
+    try {
+      registerReceiver(receiver, IntentFilter(Intent.ACTION_SHUTDOWN))
+      shutdownReceiver = receiver
+    } catch (e: Exception) {
+      Log.w(TAG, "could not register shutdown receiver", e)
+    }
+  }
+
+  private fun unregisterShutdownReceiver() {
+    val receiver = shutdownReceiver ?: return
+    shutdownReceiver = null
+    try {
+      unregisterReceiver(receiver)
+    } catch (e: Exception) {
+      Log.w(TAG, "could not unregister shutdown receiver", e)
+    }
+  }
+
 
   override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
     /**
@@ -254,6 +309,7 @@ class AudioCaptureService : Service() {
   }
 
   override fun onDestroy() {
+    unregisterShutdownReceiver()
     stopEverything()
     super.onDestroy()
   }
@@ -361,6 +417,19 @@ class AudioCaptureService : Service() {
            * comes from bytes actually written it never counts paused time.
            */
           recordedMs = writer.durationMs
+
+          /**
+           * WHY every ~2s and not every frame: flushHeader() is a small file
+           * seek-and-write, cheap once in a while but wasteful five times a
+           * second for the whole length of a take. Two seconds is a small
+           * enough gap that a sudden power-off during a 30-second idea loses
+           * at most a couple of seconds off the end, not the whole recording -
+           * see flushHeader()'s own note for why this matters at all.
+           */
+          if (recordedMs - lastHeaderFlushMs >= HEADER_FLUSH_INTERVAL_MS) {
+            writer.flushHeader()
+            lastHeaderFlushMs = recordedMs
+          }
         }
 
         // Consumer 2 - command recognition.
@@ -621,6 +690,7 @@ class AudioCaptureService : Service() {
     isPausedRecording = false
     currentPath = path
     recordedMs = 0
+    lastHeaderFlushMs = 0
 
     RecognitionAudioGuard.playStartCue(this)
     emitRecording("started", path)
@@ -629,6 +699,18 @@ class AudioCaptureService : Service() {
 
   private fun pauseRecording(fromVoice: Boolean, transcript: String = "") {
     if (!isRecording || isPausedRecording) return
+    /**
+     * WHY trimmed here too, not just on stop: stopRecording already drops the
+     * last two seconds of audio on a voice stop, to remove "hey think tap
+     * stop" from the saved take. Pause never got the same treatment - the
+     * writer was simply switched off while the command was still being
+     * recorded, so "hey think tap pause" stayed in the audio and then in the
+     * transcript, exactly as a QA report caught. Unlike stop, recording
+     * continues after a pause (on resume), so this cannot close the file the
+     * way stopRecording does - it only needs to rewind the write position,
+     * which trimTail already does safely.
+     */
+    if (fromVoice) wavWriter?.trimTail(voiceStopTrimMs)
     /**
      * WHY the capture loop keeps running while paused: if it stopped, the
      * microphone would be released and "resume" could never be heard. Only the

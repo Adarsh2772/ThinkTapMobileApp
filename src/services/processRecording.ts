@@ -79,6 +79,26 @@ export function buildLocalIdea(
   return ideaFromEnrichment(userId, pending, localEnrichment(pending, languageCode), null);
 }
 
+/**
+ * True when an error looks like "no connection" rather than a real failure.
+ *
+ * WHY this exists: `enrichPendingRecording` used to catch every error the
+ * same way and quietly fall back to an empty transcript - including a plain
+ * "no network" failure. That made an offline attempt look, to the retry
+ * queue, exactly like a real failure (Whisper reached, nothing found), which
+ * burns through the queue's small retry budget in about a minute even though
+ * the user was simply offline. A recording made with no connection then lost
+ * its place in the queue before the connection ever came back. Recognising a
+ * network error and re-throwing it (see below) lets the queue's own,
+ * already-correct offline handling keep retrying indefinitely instead.
+ */
+function isNetworkError(error: unknown): boolean {
+  const msg = error instanceof Error ? error.message : String(error ?? '');
+  return /network|fetch|timeout|connection|abort|ENOTFOUND|ECONN|EAI_AGAIN|ETIMEDOUT|socket|dns|unreachable|offline/i.test(
+    msg,
+  );
+}
+
 export async function enrichPendingRecording(
   pending: PendingCapture,
   languageCode: AppLanguageCode,
@@ -145,6 +165,17 @@ export async function enrichPendingRecording(
       });
     }
   } catch (error) {
+    /**
+     * WHY re-thrown instead of swallowed: this is the one error a caller
+     * must be able to tell apart from "no speech in the recording" - see
+     * isNetworkError above. Every caller of enrichPendingRecording already
+     * has its own offline-aware handling for a thrown error (processPendingRecording
+     * falls back to a local, transcript-less save; the transcription queue
+     * keeps retrying without spending its attempt budget); only this
+     * function was short-circuiting that by never letting the error surface.
+     */
+    if (isNetworkError(error)) throw error;
+
     console.warn('Enrichment failed; using device or empty speech', error);
     enrichment = deviceTranscript
       ? enrichIdeaFromDeviceTranscript({

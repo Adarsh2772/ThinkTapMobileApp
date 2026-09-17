@@ -114,6 +114,36 @@ class WavWriter(
     }
   }
 
+  /**
+   * Patch the header with the current size without closing the file.
+   *
+   * WHY this exists: the header written by open() has zero for every size
+   * field - open() reserves 44 bytes but does not know the final length yet,
+   * and only close() ever went back and filled in the real numbers. That
+   * means a file was only ever valid, playable audio at the very end of a
+   * take. If the app was killed before that point - the phone powered off,
+   * the process was force-stopped, anything short of a clean stop - the WAV
+   * on disk had a zero-length header forever, even though the audio bytes
+   * themselves were sitting right there in the file. Calling this every few
+   * seconds during recording means the file on disk is always a valid,
+   * playable WAV as of the last flush, at most a couple of seconds stale -
+   * so a sudden power-off loses at most that gap, never the whole recording.
+   *
+   * Safe to call while still writing: it seeks back to the current write
+   * position afterward, so the next frame appends in exactly the right place.
+   */
+  fun flushHeader() {
+    val f = raf ?: return
+    try {
+      val pos = HEADER_BYTES + dataBytes
+      f.seek(0)
+      f.write(buildHeader(dataBytes))
+      f.seek(pos)
+    } catch (e: Exception) {
+      Log.w(TAG, "flushHeader failed", e)
+    }
+  }
+
   /** Patch the RIFF header with the real sizes and close. Returns the path. */
   fun close(): String? {
     val f = raf ?: return null
