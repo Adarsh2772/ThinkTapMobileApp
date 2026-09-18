@@ -2,6 +2,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
 import { useMemo, useState } from 'react';
 import {
+  Alert,
   FlatList,
   Pressable,
   ScrollView,
@@ -13,6 +14,7 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { ScreenHeader } from '@/src/components/ScreenHeader';
+import { exportThoughtsPdf } from '@/src/services/exportThoughtsPdf';
 import { ThoughtSearchCard } from '@/src/components/ThoughtSearchCard';
 import {
   SEARCH_SORTS,
@@ -42,7 +44,27 @@ export default function SearchScreen() {
 
   const removeFragment = (fragment: string) => {
     const next = fragments.filter((item) => item !== fragment);
-    setQuery(next.join(' '));
+    // Comma-joined to match the new comma-separated input format -
+    // rejoining with a space would silently merge two fragments back into
+    // one multi-word fragment instead of keeping them as separate pills.
+    setQuery(next.join(', '));
+  };
+
+  const [exporting, setExporting] = useState(false);
+
+  const onExportPdf = async () => {
+    if (exporting || results.length === 0) return;
+    setExporting(true);
+    try {
+      await exportThoughtsPdf(results, query);
+    } catch (e) {
+      Alert.alert(
+        'Could not export',
+        e instanceof Error ? e.message : 'Something went wrong creating the PDF.',
+      );
+    } finally {
+      setExporting(false);
+    }
   };
 
   return (
@@ -56,7 +78,7 @@ export default function SearchScreen() {
         <TextInput
           value={query}
           onChangeText={setQuery}
-          placeholder="Type a remembered fragment…"
+          placeholder="Type remembered fragments, separated by commas…"
           placeholderTextColor={colors.outlineVariant}
           style={styles.input}
           autoCorrect={false}
@@ -130,6 +152,20 @@ export default function SearchScreen() {
           keyExtractor={(item) => item.id}
           contentContainerStyle={styles.list}
           ItemSeparatorComponent={() => <View style={{ height: spacing.stackMd }} />}
+          ListHeaderComponent={
+            results.length > 0 ? (
+              <Pressable
+                onPress={() => void onExportPdf()}
+                disabled={exporting}
+                style={[styles.exportBtn, exporting && styles.exportBtnDisabled]}
+              >
+                <Ionicons name="download-outline" size={16} color={colors.onSecondaryFixedVariant} />
+                <Text style={styles.exportBtnText}>
+                  {exporting ? 'Preparing PDF…' : `Download PDF report (${results.length})`}
+                </Text>
+              </Pressable>
+            ) : null
+          }
           ListEmptyComponent={
             <Text style={styles.noResults}>
               {sort === 'recently_visited'
@@ -149,6 +185,24 @@ export default function SearchScreen() {
 }
 
 const styles = StyleSheet.create({
+  exportBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    borderRadius: radii.full,
+    paddingVertical: 10,
+    marginBottom: spacing.stackMd,
+    backgroundColor: colors.secondarySoft,
+    borderWidth: 1,
+    borderColor: colors.secondaryFixed,
+  },
+  exportBtnDisabled: { opacity: 0.5 },
+  exportBtnText: {
+    fontFamily: fonts.label,
+    fontSize: typography.labelMd.fontSize,
+    color: colors.onSecondaryFixedVariant,
+  },
   safe: { flex: 1, backgroundColor: colors.background },
   pad: { paddingHorizontal: spacing.containerMargin },
   searchWrap: {

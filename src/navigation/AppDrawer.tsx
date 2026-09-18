@@ -1,7 +1,7 @@
-import { Ionicons } from '@expo/vector-icons';
-import { usePathname } from 'expo-router';
-import { Pressable, StyleSheet, Text, View } from 'react-native';
-import { Gesture, GestureDetector } from 'react-native-gesture-handler';
+import { Ionicons } from "@expo/vector-icons";
+import { usePathname } from "expo-router";
+import { Pressable, StyleSheet, Text, View } from "react-native";
+import { Gesture, GestureDetector } from "react-native-gesture-handler";
 import Animated, {
   Easing,
   Extrapolation,
@@ -11,14 +11,14 @@ import Animated, {
   useSharedValue,
   withSpring,
   withTiming,
-} from 'react-native-reanimated';
-import { useSafeAreaInsets } from 'react-native-safe-area-context';
+} from "react-native-reanimated";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
 
-import { SPRING, useDrawer } from '@/src/navigation/DrawerContext';
-import { useAuthStore } from '@/src/store/authStore';
-import { useSettingsStore } from '@/src/store/settingsStore';
-import { useSubscriptionStore } from '@/src/store/subscriptionStore';
-import { colors, fonts, radii, spacing, typography } from '@/src/theme/tokens';
+import { SPRING, useDrawer } from "@/src/navigation/DrawerContext";
+import { useAuthStore } from "@/src/store/authStore";
+import { useSettingsStore } from "@/src/store/settingsStore";
+import { useSubscriptionStore } from "@/src/store/subscriptionStore";
+import { colors, fonts, radii, spacing, typography } from "@/src/theme/tokens";
 
 type NavItem = {
   key: string;
@@ -30,7 +30,8 @@ type NavItem = {
 };
 
 export function AppDrawer() {
-  const { open, closeDrawer, progress, drawerWidth, navigateFromDrawer } = useDrawer();
+  const { open, closeDrawer, progress, drawerWidth, navigateFromDrawer } =
+    useDrawer();
   const insets = useSafeAreaInsets();
   const dragX = useSharedValue(0);
   const pathname = usePathname();
@@ -40,45 +41,45 @@ export function AppDrawer() {
 
   const items: NavItem[] = [
     {
-      key: 'home',
-      label: tx('home'),
-      icon: 'home-outline',
-      iconActive: 'home',
-      href: '/(tabs)',
+      key: "home",
+      label: tx("home"),
+      icon: "home-outline",
+      iconActive: "home",
+      href: "/(tabs)",
       match: (p) =>
-        p === '/' ||
-        p === '/(tabs)' ||
-        p.endsWith('/(tabs)/') ||
-        p.includes('/(tabs)/index') ||
-        (!p.includes('ideas') &&
-          !p.includes('search') &&
-          !p.includes('settings') &&
-          !p.includes('idea') &&
-          !p.includes('processing')),
+        p === "/" ||
+        p === "/(tabs)" ||
+        p.endsWith("/(tabs)/") ||
+        p.includes("/(tabs)/index") ||
+        (!p.includes("ideas") &&
+          !p.includes("search") &&
+          !p.includes("settings") &&
+          !p.includes("idea") &&
+          !p.includes("processing")),
     },
     {
-      key: 'ideas',
-      label: tx('ideas'),
-      icon: 'bulb-outline',
-      iconActive: 'bulb',
-      href: '/(tabs)/ideas',
-      match: (p) => p.includes('ideas'),
+      key: "ideas",
+      label: tx("ideas"),
+      icon: "bulb-outline",
+      iconActive: "bulb",
+      href: "/(tabs)/ideas",
+      match: (p) => p.includes("ideas"),
     },
     {
-      key: 'search',
-      label: tx('search'),
-      icon: 'search-outline',
-      iconActive: 'search',
-      href: '/(tabs)/search',
-      match: (p) => p.includes('search'),
+      key: "search",
+      label: tx("search"),
+      icon: "search-outline",
+      iconActive: "search",
+      href: "/(tabs)/search",
+      match: (p) => p.includes("search"),
     },
     {
-      key: 'settings',
-      label: tx('settings'),
-      icon: 'settings-outline',
-      iconActive: 'settings',
-      href: '/(tabs)/settings',
-      match: (p) => p.includes('settings'),
+      key: "settings",
+      label: tx("settings"),
+      icon: "settings-outline",
+      iconActive: "settings",
+      href: "/(tabs)/settings",
+      match: (p) => p.includes("settings"),
     },
   ];
 
@@ -92,14 +93,19 @@ export function AppDrawer() {
     })
     .onEnd((e) => {
       if (!open) return;
-      const shouldClose = e.translationX < -drawerWidth * 0.28 || e.velocityX < -600;
+      const shouldClose =
+        e.translationX < -drawerWidth * 0.28 || e.velocityX < -600;
       if (shouldClose) {
         const current = progress.value + dragX.value / drawerWidth;
         dragX.value = 0;
         progress.value = current;
-        progress.value = withTiming(0, { duration: 240, easing: Easing.out(Easing.cubic) }, (ok) => {
-          if (ok) runOnJS(onClose)();
-        });
+        progress.value = withTiming(
+          0,
+          { duration: 240, easing: Easing.out(Easing.cubic) },
+          (ok) => {
+            if (ok) runOnJS(onClose)();
+          },
+        );
       } else {
         dragX.value = withSpring(0, SPRING);
       }
@@ -116,22 +122,28 @@ export function AppDrawer() {
     const p = progress.value + dragX.value / drawerWidth;
     const clamped = interpolate(p, [0, 1], [0, 1], Extrapolation.CLAMP);
     return {
-      transform: [{ translateX: interpolate(clamped, [0, 1], [-drawerWidth, 0]) }],
+      transform: [
+        { translateX: interpolate(clamped, [0, 1], [-drawerWidth, 0]) },
+      ],
     };
   });
 
   return (
     <View style={StyleSheet.absoluteFill} pointerEvents="box-none">
       <Animated.View
-        pointerEvents={open ? 'auto' : 'none'}
+        pointerEvents={open ? "auto" : "none"}
         style={[styles.backdrop, backdropStyle]}
       >
-        <Pressable style={StyleSheet.absoluteFill} onPress={onClose} accessibilityLabel="Close menu" />
+        <Pressable
+          style={StyleSheet.absoluteFill}
+          onPress={onClose}
+          accessibilityLabel="Close menu"
+        />
       </Animated.View>
 
       <GestureDetector gesture={pan}>
         <Animated.View
-          pointerEvents={open ? 'auto' : 'none'}
+          pointerEvents={open ? "auto" : "none"}
           style={[
             styles.panel,
             {
@@ -148,7 +160,7 @@ export function AppDrawer() {
             </View>
             <View style={{ flex: 1 }}>
               <Text style={styles.brand}>Think Tap</Text>
-              <Text style={styles.brandSub}>Capture ideas by voice</Text>
+              <Text style={styles.brandSub}>Capture tasset by voice</Text>
             </View>
             <Pressable onPress={onClose} hitSlop={12} style={styles.closeBtn}>
               <Ionicons name="close" size={22} color={colors.drawerMuted} />
@@ -157,14 +169,16 @@ export function AppDrawer() {
 
           <View style={styles.profileCard}>
             <View style={styles.avatar}>
-              <Text style={styles.avatarText}>{(user?.firstName?.[0] ?? 'T').toUpperCase()}</Text>
+              <Text style={styles.avatarText}>
+                {(user?.firstName?.[0] ?? "T").toUpperCase()}
+              </Text>
             </View>
             <View style={{ flex: 1 }}>
               <Text style={styles.profileName} numberOfLines={1}>
                 {user?.firstName} {user?.lastName}
               </Text>
               <Text style={styles.profileMeta}>
-                {subscription ? tx('freeTrialActive') : 'Guest mode'}
+                {subscription ? tx("freeTrialActive") : "Guest mode"}
               </Text>
             </View>
           </View>
@@ -189,7 +203,11 @@ export function AppDrawer() {
                     size={22}
                     color={active ? colors.drawerActive : colors.drawerMuted}
                   />
-                  <Text style={[styles.navLabel, active && styles.navLabelActive]}>{item.label}</Text>
+                  <Text
+                    style={[styles.navLabel, active && styles.navLabelActive]}
+                  >
+                    {item.label}
+                  </Text>
                   {active ? <View style={styles.activeDot} /> : null}
                 </Pressable>
               );
@@ -198,11 +216,11 @@ export function AppDrawer() {
 
           <View style={styles.footer}>
             <Pressable
-              onPress={() => navigateFromDrawer('/(tabs)/settings')}
+              onPress={() => navigateFromDrawer("/(tabs)/settings")}
               style={styles.subscribeCta}
             >
               <Ionicons name="sparkles" size={18} color={colors.onPrimary} />
-              <Text style={styles.subscribeText}>{tx('subscribe')}</Text>
+              <Text style={styles.subscribeText}>{tx("subscribe")}</Text>
             </Pressable>
             <Text style={styles.version}>Think Tap · 1.0.0</Text>
           </View>
@@ -214,7 +232,7 @@ export function AppDrawer() {
 
 const styles = StyleSheet.create({
   backdrop: {
-    position: 'absolute',
+    position: "absolute",
     left: 0,
     right: 0,
     top: 0,
@@ -222,7 +240,7 @@ const styles = StyleSheet.create({
     backgroundColor: colors.overlay,
   },
   panel: {
-    position: 'absolute',
+    position: "absolute",
     left: 0,
     top: 0,
     bottom: 0,
@@ -238,8 +256,8 @@ const styles = StyleSheet.create({
     zIndex: 40,
   },
   brandBlock: {
-    flexDirection: 'row',
-    alignItems: 'center',
+    flexDirection: "row",
+    alignItems: "center",
     gap: 12,
     marginBottom: spacing.stackLg,
   },
@@ -248,8 +266,8 @@ const styles = StyleSheet.create({
     height: 44,
     borderRadius: 14,
     backgroundColor: colors.drawerActive,
-    alignItems: 'center',
-    justifyContent: 'center',
+    alignItems: "center",
+    justifyContent: "center",
   },
   brand: {
     fontFamily: fonts.headlineBold,
@@ -266,17 +284,17 @@ const styles = StyleSheet.create({
     width: 36,
     height: 36,
     borderRadius: 18,
-    alignItems: 'center',
-    justifyContent: 'center',
-    backgroundColor: 'rgba(255,255,255,0.06)',
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: "rgba(255,255,255,0.06)",
   },
   profileCard: {
-    flexDirection: 'row',
-    alignItems: 'center',
+    flexDirection: "row",
+    alignItems: "center",
     gap: 12,
     padding: 14,
     borderRadius: radii.xl,
-    backgroundColor: 'rgba(255,255,255,0.06)',
+    backgroundColor: "rgba(255,255,255,0.06)",
     marginBottom: spacing.stackLg,
   },
   avatar: {
@@ -284,8 +302,8 @@ const styles = StyleSheet.create({
     height: 42,
     borderRadius: 21,
     backgroundColor: colors.secondary,
-    alignItems: 'center',
-    justifyContent: 'center',
+    alignItems: "center",
+    justifyContent: "center",
   },
   avatarText: {
     fontFamily: fonts.bodySemi,
@@ -305,8 +323,8 @@ const styles = StyleSheet.create({
   },
   nav: { gap: 6, flex: 1 },
   navItem: {
-    flexDirection: 'row',
-    alignItems: 'center',
+    flexDirection: "row",
+    alignItems: "center",
     gap: 14,
     paddingVertical: 14,
     paddingHorizontal: 14,
@@ -333,9 +351,9 @@ const styles = StyleSheet.create({
   },
   footer: { gap: 14 },
   subscribeCta: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
     gap: 8,
     height: 48,
     borderRadius: radii.lg,
@@ -347,7 +365,7 @@ const styles = StyleSheet.create({
     color: colors.onPrimary,
   },
   version: {
-    textAlign: 'center',
+    textAlign: "center",
     fontFamily: fonts.label,
     fontSize: 11,
     color: colors.drawerMuted,

@@ -40,9 +40,21 @@ const SYNONYMS: Record<string, string[]> = {
   rain: ['rainy', 'rainfall'],
 };
 
+/**
+ * WHY split on comma, not space: the previous version split on every
+ * space, so each word became its own separate search pill - there was no
+ * way to enter a multi-word phrase as one fragment. The client's spec
+ * reference shows comma-separated phrases ("Bollywood movie, rain,
+ * dialogue about fathers") as the intended input shape. A fragment can
+ * still be multi-word after this change - see scoreSignal below for how
+ * multi-word fragments are matched word-order-flexibly rather than as one
+ * rigid phrase, which is what keeps "Bollywood movie" also finding
+ * "movie in Bollywood" working exactly as the spec requires.
+ */
 export function parseFragments(query: string): string[] {
-  return normalize(query)
-    .split(' ')
+  return query
+    .split(',')
+    .map((part) => normalize(part))
     .filter((token) => token.length > 0);
 }
 
@@ -113,17 +125,38 @@ function containsVariant(signal: string, variant: string): boolean {
 function scoreSignal(signal: string, fragments: string[]): number | null {
   let score = 0;
   for (const fragment of fragments) {
-    const variants = expandFragment(fragment);
-    const exactIndex = signal.indexOf(fragment);
-    const synonymHit = variants.slice(1).some((variant) => containsVariant(signal, variant));
-    if (exactIndex < 0 && !synonymHit && !containsVariant(signal, fragment)) {
-      return null;
+    /**
+     * WHY matched word-by-word instead of as one substring: fragments can
+     * now be multi-word (comma-separated input, see parseFragments).
+     * Requiring the whole phrase to appear adjacent would have broken the
+     * spec's explicit requirement that "Bollywood movie" also finds a
+     * thought that only ever said "movie in Bollywood" - every word in the
+     * fragment must appear somewhere in the signal, in any order, for the
+     * fragment to count as matched. A single-word fragment behaves exactly
+     * as before this change.
+     */
+    const words = fragment.split(' ').filter(Boolean);
+    let fragmentScore = 0;
+    let allWordsFound = true;
+    for (const word of words) {
+      const variants = expandFragment(word);
+      const exactIndex = signal.indexOf(word);
+      const synonymHit = variants.slice(1).some((variant) => containsVariant(signal, variant));
+      if (exactIndex < 0 && !synonymHit && !containsVariant(signal, word)) {
+        allWordsFound = false;
+        break;
+      }
+      if (exactIndex >= 0) {
+        fragmentScore += 12 + Math.max(0, 8 - exactIndex / 24);
+      } else {
+        fragmentScore += 5;
+      }
     }
-    if (exactIndex >= 0) {
-      score += 12 + Math.max(0, 8 - exactIndex / 24);
-    } else {
-      score += 5;
-    }
+    if (!allWordsFound) return null;
+    // Bonus for the exact phrase appearing adjacent, same weighting as
+    // a direct substring match had before this change.
+    if (words.length > 1 && signal.includes(fragment)) fragmentScore += 6;
+    score += fragmentScore;
   }
   return score;
 }

@@ -77,6 +77,22 @@ class AndroidWakeWordModule : Module() {
       appContext.reactContext?.let { ctx ->
         // Warm the model so the first take is not delayed by a 40 MB unpack.
         VoskModelProvider.loadAsync(ctx) { _, _ -> }
+
+        /**
+         * One-time self-heal for the OPPO/ColorOS silent-mode bug: an older
+         * build force-muted several audio streams on every recording start
+         * and never reliably restored them (see RecognitionAudioGuard's own
+         * note for why). A device that hit that bug before updating is stuck
+         * with real-world muted streams regardless of what this build's code
+         * now does going forward - this repairs that once, then never runs
+         * again, so it can never fight a volume change the user makes
+         * themselves afterward.
+         */
+        val prefs = ctx.getSharedPreferences("thinktap_wake_word", Context.MODE_PRIVATE)
+        if (!prefs.getBoolean("mute_repair_done_v1", false)) {
+          RecognitionAudioGuard.repairStuckMute(ctx)
+          prefs.edit().putBoolean("mute_repair_done_v1", true).apply()
+        }
       }
     }
 

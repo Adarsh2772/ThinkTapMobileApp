@@ -3,166 +3,103 @@ package expo.modules.androidwakeword
 import android.content.Context
 import android.media.AudioManager
 import android.os.Build
-import android.os.Handler
-import android.os.Looper
 import android.util.Log
-import android.util.SparseIntArray
 
 /**
- * Suppress OEM SpeechRecognizer start chimes (OPPO / ColorOS / Vivo / Android 11+).
+ * WHY this whole class is now a no-op.
  *
- * ADJUST_MUTE alone is not enough on many Android 11 OEMs — they still play the
- * recognizer “tik” on SYSTEM/NOTIFICATION. Always re-apply mute + force volume=0
- * (saving prior volumes for restore). Stay muted for the whole listen window.
+ * This existed to suppress the OEM "recognizer chime" that Android's
+ * SpeechRecognizer plays on some devices (OPPO/ColorOS especially) when a
+ * voice-recognition session starts or stops. That chime comes from Android's
+ * SpeechRecognizer API specifically.
  *
- * Start/stop confirmation is UI toast only — [playStartCue] / [playStopCue]
- * are intentional no-ops (no tone, no haptic).
+ * This app does not use SpeechRecognizer. Audio capture is AudioRecord + an
+ * offline Vosk model - see AudioCaptureService. There is no recognizer chime
+ * to suppress, and never has been in this architecture.
+ *
+ * What this guard actually did instead: every recording start and stop
+ * called muteRecognizerCue(), which force-set SIX audio streams to volume 0 -
+ * STREAM_SYSTEM, STREAM_NOTIFICATION, STREAM_RING, STREAM_ALARM,
+ * STREAM_DTMF, and STREAM_MUSIC - saving the prior levels to restore later.
+ * That is the client's #1, recurring complaint: ringtone silenced, video and
+ * music audio silenced, every time the wake word or a recording activated.
+ *
+ * It was also unrecoverable without reinstalling. The restore only ran on an
+ * explicit unmute call. If the app was backgrounded or killed while muted -
+ * completely normal for an app that had just muted the ringtone and was then
+ * about to receive the call it just silenced - savedVolumes was lost with
+ * the process, and the streams stayed at zero permanently. Only uninstalling
+ * (which resets stream volumes as an OS side effect) brought sound back,
+ * exactly as reported.
+ *
+ * The fix is to stop doing this at all, not to tune which streams get muted
+ * or for how long. Every public method below is kept, so every call site in
+ * AudioCaptureService.kt and the module bridge still compiles unchanged -
+ * they simply no longer do anything.
  */
 object RecognitionAudioGuard {
   private const val TAG = "ThinkTapAudioGuard"
-  private val lock = Any()
-  private val mainHandler = Handler(Looper.getMainLooper())
 
-  @Volatile
-  private var cueMuted = false
+  fun muteRecognizerCue(context: Context) {}
 
-  /** Stream volumes saved before volume-0 fallback; restored on full release. */
-  private val savedVolumes = SparseIntArray()
+  fun unmuteRecognizerCue(context: Context) {}
 
-  fun muteRecognizerCue(context: Context) {
-    val app = context.applicationContext
-    val run = {
-      synchronized(lock) {
-        // Always re-apply — ColorOS can unmute between SpeechRecognizer restarts.
-        applyMute(app)
-      }
-    }
-    if (Looper.myLooper() == Looper.getMainLooper()) run() else mainHandler.post(run)
-  }
+  fun restore(context: Context) {}
 
-  fun unmuteRecognizerCue(context: Context) {
-    val app = context.applicationContext
-    val run = {
-      synchronized(lock) {
-        applyUnmute(app)
-      }
-    }
-    if (Looper.myLooper() == Looper.getMainLooper()) run() else mainHandler.post(run)
-  }
+  fun swallowRecognizerCue(context: Context) {}
 
-  fun restore(context: Context) {
-    unmuteRecognizerCue(context)
-  }
+  fun cancelRecognizerHaptic(context: Context) {}
 
-  /** JS silenceRecognitionUi — mute OEM SpeechRecognizer chimes. */
-  fun swallowRecognizerCue(context: Context) {
-    muteRecognizerCue(context)
-  }
+  fun playStartCue(context: Context) {}
 
-  fun cancelRecognizerHaptic(@Suppress("UNUSED_PARAMETER") context: Context) {}
-
-  /** Recording started — UI toast only; no sound / vibration. */
-  fun playStartCue(context: Context) {
-    muteRecognizerCue(context)
-  }
-
-  /** Recording stopped — UI toast only; no sound / vibration. */
-  fun playStopCue(context: Context) {
-    muteRecognizerCue(context)
-  }
-
-  private fun applyMute(app: Context) {
-    val am = app.getSystemService(Context.AUDIO_SERVICE) as? AudioManager ?: return
-    muteStreams(am)
-    enforceSilent(am)
-    cueMuted = true
-  }
-
-  private fun applyUnmute(app: Context) {
-    val am = app.getSystemService(Context.AUDIO_SERVICE) as? AudioManager ?: return
-    restoreVolumes(am)
-    unmuteStreams(am)
-    cueMuted = false
-  }
-
-  private fun muteStreams(am: AudioManager) {
-    if (Build.VERSION.SDK_INT < Build.VERSION_CODES.M) return
-    val flags = AudioManager.FLAG_REMOVE_SOUND_AND_VIBRATE
-    for (stream in cueStreams()) {
-      try {
-        am.adjustStreamVolume(stream, AudioManager.ADJUST_MUTE, flags)
-      } catch (_: Exception) {
-        // volume fallback in enforceSilent
-      }
-    }
-  }
-
-  private fun unmuteStreams(am: AudioManager) {
-    if (Build.VERSION.SDK_INT < Build.VERSION_CODES.M) return
-    val flags = AudioManager.FLAG_REMOVE_SOUND_AND_VIBRATE
-    for (stream in cueStreams()) {
-      try {
-        am.adjustStreamVolume(stream, AudioManager.ADJUST_UNMUTE, flags)
-      } catch (_: Exception) {
-        // ignore
-      }
-    }
-  }
+  fun playStopCue(context: Context) {}
 
   /**
-   * ColorOS / Android 11: ADJUST_MUTE may report success while the stream is
-   * still audible. Force volume to 0 once and remember the prior level.
+   * One-time repair for a device that is already stuck muted from a build
+   * before this fix. Unconditionally restores the six streams the old code
+   * used to force to zero, to a sane audible default - not to a "remembered"
+   * prior value, because the old saved-volume state that would have recorded
+   * that is long gone (lost the moment the app was backgrounded or killed
+   * while muted, which is exactly how devices ended up stuck in the first
+   * place).
+   *
+   * Deliberately idempotent and harmless to call on a device that was never
+   * affected: it only ever raises a stream already at zero, and does nothing
+   * to a stream already above zero.
    */
-  private fun enforceSilent(am: AudioManager) {
-    for (stream in cueStreams()) {
-      try {
-        val muted = try {
-          am.isStreamMute(stream)
-        } catch (_: Exception) {
-          false
-        }
-        val volume = try {
-          am.getStreamVolume(stream)
-        } catch (_: Exception) {
-          0
-        }
-        if (!muted || volume > 0) {
-          if (volume > 0 && savedVolumes.indexOfKey(stream) < 0) {
-            savedVolumes.put(stream, volume)
-          }
-          if (volume > 0) {
-            am.setStreamVolume(stream, 0, 0)
-          }
-        }
-      } catch (e: Exception) {
-        Log.w(TAG, "enforceSilent stream=$stream", e)
-      }
-    }
-  }
+  fun repairStuckMute(context: Context) {
+    try {
+      val am = context.applicationContext.getSystemService(Context.AUDIO_SERVICE)
+        as? AudioManager ?: return
+      if (Build.VERSION.SDK_INT < Build.VERSION_CODES.M) return
 
-  private fun restoreVolumes(am: AudioManager) {
-    for (i in 0 until savedVolumes.size()) {
-      val stream = savedVolumes.keyAt(i)
-      val volume = savedVolumes.valueAt(i)
-      try {
-        val maxVol = am.getStreamMaxVolume(stream)
-        am.setStreamVolume(stream, volume.coerceIn(0, maxVol), 0)
-      } catch (e: Exception) {
-        Log.w(TAG, "restoreVolumes stream=$stream", e)
-      }
-    }
-    savedVolumes.clear()
-  }
+      val streams = intArrayOf(
+        AudioManager.STREAM_SYSTEM,
+        AudioManager.STREAM_NOTIFICATION,
+        AudioManager.STREAM_RING,
+        AudioManager.STREAM_ALARM,
+        AudioManager.STREAM_DTMF,
+        AudioManager.STREAM_MUSIC,
+      )
 
-  private fun cueStreams(): IntArray {
-    // Include MUSIC — some ColorOS builds route recognizer cues there on API 30.
-    return intArrayOf(
-      AudioManager.STREAM_SYSTEM,
-      AudioManager.STREAM_NOTIFICATION,
-      AudioManager.STREAM_RING,
-      AudioManager.STREAM_ALARM,
-      AudioManager.STREAM_DTMF,
-      AudioManager.STREAM_MUSIC,
-    )
+      for (stream in streams) {
+        try {
+          val current = am.getStreamVolume(stream)
+          if (current <= 0) {
+            val max = am.getStreamMaxVolume(stream)
+            // Restore to roughly a third of max - audible, not jarringly
+            // loud, and never touches a stream the user had already set
+            // above zero themselves.
+            val target = (max / 3).coerceAtLeast(1)
+            am.setStreamVolume(stream, target, 0)
+            Log.i(TAG, "repairStuckMute: stream=$stream restored 0 -> $target")
+          }
+        } catch (e: Exception) {
+          Log.w(TAG, "repairStuckMute: stream=$stream failed", e)
+        }
+      }
+    } catch (e: Exception) {
+      Log.w(TAG, "repairStuckMute failed", e)
+    }
   }
 }

@@ -147,9 +147,20 @@ export async function toEnglish(
     '3. Keep proper nouns as they are: people, places, film and song titles.',
     '4. Keep the speaker\'s voice and every point they made. Do not summarise,',
     '   do not add anything, do not explain what you did.',
-    '5. If a phrase is genuinely untranslatable, give the closest English',
-    '   meaning rather than the original words.',
-    '6. Never add a note, comment, or remark about the transcript, its',
+    '5. A short word or phrase must stay short. "Socho" is one Hindi word',
+    '   meaning "think" - the correct translation is "Think." or "Think about',
+    '   it.", never an invented longer sentence like "think about what you and',
+    '   I have discovered about humans." If a source phrase feels',
+    '   incomplete or terse, translate it exactly that terse - do not add a',
+    '   subject, object, or clause that was not actually said, even if the',
+    '   result reads as an incomplete English sentence. An incomplete-',
+    '   sounding but faithful translation is correct; a complete-sounding',
+    '   but invented one is not.',
+    '6. If a phrase is genuinely untranslatable, give the closest English',
+    '   meaning rather than the original words - this still means the',
+    '   closest meaning to what was actually said, not a plausible-sounding',
+    '   elaboration of it.',
+    '7. Never add a note, comment, or remark about the transcript, its',
     '   quality, or whether it seems garbled or repetitive - translate',
     '   whatever text is there and stop. No parenthetical asides, no',
     '   "(Note: ...)", nothing after the translation itself.',
@@ -199,6 +210,24 @@ export async function toEnglish(
      * that does not look like a translation is discarded.
      */
     if (out.length < source.length * 0.25) return text;
+    /**
+     * WHY logged rather than discarded: a real report showed "Socho" (one
+     * Hindi word, "think") come back as "think about what you and I have
+     * discovered about humans" - fabricated content appended to a short
+     * source phrase. Rule 5 above targets this directly, but a prompt rule
+     * is not a guarantee against every case, and a hard length-based reject
+     * would also throw away a legitimately fuller translation of a terse
+     * source (English can genuinely need more words than Hindi for the same
+     * meaning). Logging when this ratio looks suspicious means the next
+     * occurrence is visible in diagnostics immediately, rather than only
+     * surfacing when a user happens to notice and report it days later.
+     */
+    if (out.length > source.length * 3 && source.length < 60) {
+      console.warn(
+        '[AI] toEnglish: output is much longer than a short source - possible fabrication',
+        { source, out },
+      );
+    }
     if (/^(here is|here's|translation:|sure[,!])/i.test(out)) {
       const stripped = out.replace(/^[^:\n]*[:\n]\s*/, '').trim();
       out = stripped.length > 0 ? stripped : out;

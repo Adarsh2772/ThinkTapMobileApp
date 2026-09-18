@@ -15,7 +15,7 @@ type Props = {
 
 function stageCopy(stage: ProcessingStage | undefined, organizing: boolean): string {
   if (!organizing) {
-    return 'It will appear in Ideas when ready.';
+    return 'It will appear in Tasset when ready.';
   }
   switch (stage) {
     case 'uploading':

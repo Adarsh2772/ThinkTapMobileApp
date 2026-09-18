@@ -77,7 +77,8 @@
             "com.google.android.as"
           ]
         }
-      ]
+      ],
+      "expo-sharing"
     ],
     "experiments": {
       "typedRoutes": true
