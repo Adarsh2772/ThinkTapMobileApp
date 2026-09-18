@@ -355,13 +355,28 @@ export default function IdeaDetailScreen() {
                   <Text style={styles.retryText}>Try again</Text>
                 </Pressable>
               </View>
+            ) : transcriptText ? (
+              <Text style={styles.body}>{idea.transcript}</Text>
             ) : (
-              <Text style={styles.body}>
-                {transcriptText
-                  ? idea.transcript
-                  : 'No transcript was produced. The audio is saved — play it above. ' +
-                    'If this keeps happening, transcription is not configured.'}
-              </Text>
+              /**
+               * WHY this branch gets its own retry button now: reaching here
+               * with an empty transcript and no queue entry at all used to be
+               * a dead end - no button, nothing to do but re-record. With
+               * failed entries now kept in the queue (see the loop guard in
+               * processTranscriptionQueue) this branch should be rare - it
+               * mainly covers an idea whose queue entry was already gone
+               * before that fix shipped. Giving it a button either way means
+               * there is never a state in this screen where the only way
+               * forward is starting over.
+               */
+              <View>
+                <Text style={styles.body}>
+                  No transcript was produced. The audio is saved — play it above.
+                </Text>
+                <Pressable onPress={() => void onRetry()} style={styles.retryBtn}>
+                  <Text style={styles.retryText}>Try again</Text>
+                </Pressable>
+              </View>
             )}
           </View>
         </View>

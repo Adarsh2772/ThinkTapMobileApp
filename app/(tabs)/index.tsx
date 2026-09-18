@@ -273,18 +273,35 @@ export default function HomeScreen() {
       let path: string | null = null;
       try {
         path = await AsyncStorage.getItem(ACTIVE_RECORDING_PATH_KEY);
-      } catch {
+      } catch (e) {
+        console.warn('[RECOVERY] could not read marker', e);
         return;
       }
-      if (!path || cancelled) return;
+      // WHY logged even on the "nothing to do" path: the previous version of
+      // this effect failed completely silently, which made a real bug (see
+      // the QA report this replaced) indistinguishable from "there was
+      // genuinely nothing to recover." These lines cost nothing in normal
+      // use and turn the next report into a one-line diagnosis instead of a
+      // guessing game.
+      if (!path) {
+        console.log('[RECOVERY] no marker found - nothing was left open');
+        return;
+      }
+      if (cancelled) return;
+      console.log('[RECOVERY] marker found:', path);
       // Clear immediately, before touching anything else - so a second
       // mount, or a crash during recovery itself, can't try this file twice.
       await AsyncStorage.removeItem(ACTIVE_RECORDING_PATH_KEY).catch(() => {});
 
-      if (!(await recordingExists(path))) return; // nothing left to recover
+      const exists = await recordingExists(path);
+      if (!exists) {
+        console.warn('[RECOVERY] marker pointed to', path, 'but the file is gone - nothing to recover');
+        return;
+      }
       if (cancelled) return;
 
       const durationSec = (await probeAudioDurationSec(path)) ?? 1;
+      console.log('[RECOVERY] file exists, duration probe:', durationSec, 'sec - saving as a Thought');
       if (cancelled) return;
 
       showToast('Found a recording from before the app closed — saving it now.', 'info');

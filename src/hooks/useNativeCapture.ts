@@ -126,7 +126,12 @@ export function useNativeCapture(options: Options = {}) {
             setCaptureActive(true);
             // See ACTIVE_RECORDING_PATH_KEY above - this is what lets a
             // recording still open when the phone dies get recovered later.
-            if (e.path) void AsyncStorage.setItem(ACTIVE_RECORDING_PATH_KEY, e.path).catch(() => {});
+            if (e.path) {
+              console.log('[RECOVERY] marker set at recording start:', e.path);
+              void AsyncStorage.setItem(ACTIVE_RECORDING_PATH_KEY, e.path).catch((err) =>
+                console.warn('[RECOVERY] failed to write marker', err),
+              );
+            }
             break;
 
           case 'paused':
@@ -158,6 +163,7 @@ export function useNativeCapture(options: Options = {}) {
             // A clean stop reached here, so there is nothing left to recover -
             // clear the marker now rather than after the async copy below,
             // so it can't be left behind if persistRecording throws.
+            console.log('[RECOVERY] clean stop - clearing marker');
             void AsyncStorage.removeItem(ACTIVE_RECORDING_PATH_KEY).catch(() => {});
             // Move out of the service's directory into app documents so the
             // file survives cache clearing and is reachable by the player.
@@ -463,12 +469,23 @@ export function useNativeCapture(options: Options = {}) {
   const resume = useCallback(async (): Promise<boolean> => {
     if (!supported || !AndroidWakeWord.isRecording()) return false;
     /**
-     * WHY resume is no longer blocked during a call: it was refused while a
-     * call was active, but starting a brand new recording was not - so the user
-     * could record during a call, just not continue the take they already had.
-     * That inconsistency is worse than the risk it was guarding against, and
-     * the user pressing Resume mid-call has made their intention clear.
+     * WHY resume is blocked during a call after all: it was deliberately
+     * unblocked at one point on the reasoning that refusing Resume while
+     * allowing Start was an inconsistency not worth the risk - but that
+     * reasoning was wrong. Resuming re-engages the same AudioRecord capture
+     * path Start does, and Start's own note above documents a real, already-
+     * seen failure mode: AudioRecord can accept being engaged during a call
+     * and then silently deliver nothing forever, on some devices needing a
+     * full uninstall to recover. That risk does not go away because the
+     * recording already existed before the call started - it is the same
+     * mic engagement either way. Consistency with Start is the correct call.
      */
+    if (AndroidWakeWord.isCallActive()) {
+      const msg = 'Cannot resume during a call. Try again once it has ended.';
+      setError(msg);
+      onErrorRef.current?.(msg);
+      return false;
+    }
     callHoldRef.current = false;
     setCallHold(false);
     return AndroidWakeWord.resumeRecording();

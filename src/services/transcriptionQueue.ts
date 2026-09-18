@@ -251,6 +251,27 @@ export async function processTranscriptionQueue(): Promise<void> {
       continue;
     }
 
+    /**
+     * WHY this entry is kept rather than dropped once it hits the cap: this
+     * used to `continue` here without pushing the entry back, which deleted
+     * it from the queue entirely. That meant queueStatus() and
+     * readQueueStatuses() had nothing left to find for this idea, so they
+     * silently reported 'none' - indistinguishable from a recording that had
+     * never been queued at all. The idea list card, which only knows to show
+     * a real "we gave up" message when it has that status, had no way to
+     * tell the difference and just kept showing "Preparing your Thought…"
+     * forever - while the idea's own detail screen, on a separate timer,
+     * eventually showed a different, disconnected fallback message. Same
+     * idea, two screens quietly disagreeing. Keeping the entry (attempts
+     * capped, not retried again below) means queueStatus() keeps reporting
+     * 'failed' everywhere that reads it, consistently, until the person
+     * presses "Try again" themselves.
+     */
+    if (entry.attempts >= MAX_ATTEMPTS) {
+      remaining.push(entry);
+      continue;
+    }
+
     try {
       const patch = await enrichPendingRecording(
         {
@@ -272,10 +293,14 @@ export async function processTranscriptionQueue(): Promise<void> {
        * counts against the budget and the UI may offer a manual retry.
        */
       const attempts = entry.attempts + 1;
-      if (attempts >= MAX_ATTEMPTS) continue;
       remaining.push({
         ...entry,
-        attempts,
+        // Capped rather than left to grow forever - readQueueStatuses() and
+        // queueStatus() only care whether this has reached
+        // FAILURES_BEFORE_RETRY_BUTTON, and the loop guard above already
+        // stops retrying once it reaches MAX_ATTEMPTS regardless of the
+        // exact number stored here.
+        attempts: Math.min(attempts, MAX_ATTEMPTS),
         lastAttemptFailed: true,
         lastAttemptAt: Date.now(),
       });
@@ -307,14 +332,18 @@ export async function processTranscriptionQueue(): Promise<void> {
       }
 
       const attempts = entry.attempts + 1;
-      if (attempts < MAX_ATTEMPTS) {
-        remaining.push({
-          ...entry,
-          attempts,
-          lastAttemptFailed: true,
-          lastAttemptAt: Date.now(),
-        });
-      }
+      // WHY no upper-bound check here any more: dropping the entry once
+      // attempts reached MAX_ATTEMPTS used to happen right here too, with
+      // the same effect as the one removed above - see that comment. The
+      // loop guard at the top of this function is what actually stops
+      // further retries; this just needs to keep the entry, capped, so its
+      // status stays visible.
+      remaining.push({
+        ...entry,
+        attempts: Math.min(attempts, MAX_ATTEMPTS),
+        lastAttemptFailed: true,
+        lastAttemptAt: Date.now(),
+      });
     }
   }
 
@@ -338,7 +367,19 @@ export function startAutoRetry(): void {
   autoTimer = setInterval(() => {
     void (async () => {
       const queue = await readQueue();
-      if (queue.length === 0) {
+      /**
+       * WHY "every entry capped" stops the timer, not just "empty": a
+       * permanently-failed entry (see the loop guard in
+       * processTranscriptionQueue) is kept in the queue on purpose now, so
+       * its status stays visible instead of silently vanishing - but that
+       * means the queue is never really "empty" again once anything fails
+       * for real. Without this check the timer would tick forever, once
+       * every 15s, for the rest of the app's life. Nothing left worth an
+       * automatic retry is the right condition to stop on; a manual "Try
+       * again" tap calls processTranscriptionQueue itself and does not need
+       * this timer running.
+       */
+      if (queue.length === 0 || queue.every((e) => e.attempts >= MAX_ATTEMPTS)) {
         stopAutoRetry();
         return;
       }

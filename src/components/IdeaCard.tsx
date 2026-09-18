@@ -64,14 +64,21 @@ function isAwaitingThought(idea: Idea): boolean {
  *
  * WHY this needs to be more than one message: "Preparing your Thought…"
  * with a spinner used to show for every awaiting idea, whether the app was
- * genuinely mid-attempt or had been offline for ten minutes with nothing
- * happening between 15-second retry ticks - both looked identical, like
- * active work was continuously underway. queueState tells the two apart:
- * 'waiting' means nothing is happening right now because there is no
- * connection, so it gets an honest, non-spinning message instead of one
- * that implies the app is busy. 'retrying' and no queue entry at all (still
- * on the very first attempt) are genuine in-flight work, so those keep the
- * spinner.
+ * genuinely mid-attempt, offline with nothing happening between 15-second
+ * retry ticks, or had already permanently given up - all three looked
+ * identical, an endless spinner with no way to tell them apart. queueState
+ * tells them apart: 'waiting' means nothing is happening right now because
+ * there is no connection, so it gets an honest, non-spinning message.
+ * 'failed' means the queue itself gave up (see the loop guard in
+ * processTranscriptionQueue) - previously that entry was silently dropped
+ * from the queue the moment this happened, which is exactly why this card
+ * used to spin forever even after the idea's own detail screen had already
+ * moved on to a "no transcript was produced" message on its own separate
+ * timer - same idea, two screens quietly disagreeing. Keeping the entry
+ * around (capped, not retried further) means this card can now say so
+ * plainly instead of pretending to still be working. 'retrying' and no
+ * queue entry at all (still on the very first attempt) are genuine
+ * in-flight work, so those keep the spinner.
  */
 function ThoughtStatus({ queueState }: { queueState?: QueueStatus }) {
   if (queueState?.state === 'waiting') {
@@ -79,6 +86,16 @@ function ThoughtStatus({ queueState }: { queueState?: QueueStatus }) {
       <View style={styles.pendingRow}>
         <Ionicons name="cloud-offline-outline" size={16} color={colors.onSurfaceVariant} />
         <Text style={styles.pendingText}>Waiting for a connection…</Text>
+      </View>
+    );
+  }
+  if (queueState?.state === 'failed') {
+    return (
+      <View style={styles.pendingRow}>
+        <Ionicons name="alert-circle-outline" size={16} color={colors.onSurfaceVariant} />
+        <Text style={styles.pendingText}>
+          Could not create a Thought — open it to try again.
+        </Text>
       </View>
     );
   }
