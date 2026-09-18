@@ -98,7 +98,6 @@ export default function IdeaDetailScreen() {
   const transcriptText = (idea?.transcript ?? '').trim();
   const createdAtMs = idea?.createdAt ? new Date(idea.createdAt).getTime() : 0;
   const updatedAtMs = idea?.updatedAt ? new Date(idea.updatedAt).getTime() : 0;
-  const createdMsAgo = createdAtMs ? Date.now() - createdAtMs : Number.MAX_SAFE_INTEGER;
 
   /**
    * WHY updatedAt is the signal: buildLocalIdea saves the take with
@@ -165,8 +164,19 @@ export default function IdeaDetailScreen() {
       Alert.alert('Could not transcribe', result.reason);
     }
   };
-  const transcribing =
-    !transcriptText && !pipelineFinished && createdMsAgo < 90_000;
+  /**
+   * WHY this no longer uses a fixed time window: `createdMsAgo < 90_000` was
+   * a guess standing in for "is the first, non-queued attempt still
+   * running". A long recording, a slow connection, or several sequential AI
+   * steps can genuinely take longer than 90 seconds while working
+   * correctly - and once the guess expired, the screen fell through to a
+   * message claiming failure while the real attempt was still quietly in
+   * progress. qStatus.state === 'attempting' is an authoritative, persisted
+   * signal (markEnrichmentStarted in transcriptionQueue.ts) instead of a
+   * guess, with its own staleness cap so a killed-mid-attempt app cannot
+   * leave this stuck true forever either.
+   */
+  const transcribing = !transcriptText && qStatus.state === 'attempting';
 
   const goBack = () => {
     router.replace('/(tabs)/ideas');
@@ -355,13 +365,32 @@ export default function IdeaDetailScreen() {
                   <Text style={styles.retryText}>Try again</Text>
                 </Pressable>
               </View>
-            ) : (
+            ) : transcriptText ? (
+              <Text style={styles.body}>{idea.transcript}</Text>
+            ) : pipelineFinished ? (
+              /**
+               * WHY this requires pipelineFinished specifically: this is now a
+               * genuinely definitive state - the pipeline ran, updated the
+               * record, and produced no text - rather than a guess based on a
+               * timer running out. Only here is it honest to say nothing more
+               * is coming on its own.
+               */
               <Text style={styles.body}>
-                {transcriptText
-                  ? idea.transcript
-                  : 'No transcript was produced. The audio is saved — play it above. ' +
-                    'If this keeps happening, transcription is not configured.'}
+                No speech could be made out in this recording. The audio is
+                saved — play it above.
               </Text>
+            ) : (
+              /**
+               * WHY a distinct branch: none of the states above matched, and
+               * the pipeline has not definitively finished either - a brief
+               * gap that can appear for a moment between poll ticks rather
+               * than a real problem. A calm, non-committal message here
+               * instead of a false "not configured" claim.
+               */
+              <View style={styles.transcribingRow}>
+                <ActivityIndicator size="small" color={colors.secondary} />
+                <Text style={styles.transcribingText}>Preparing your Thought…</Text>
+              </View>
             )}
           </View>
         </View>
@@ -402,6 +431,22 @@ export default function IdeaDetailScreen() {
                   </View>
                 );
               })}
+            </View>
+          ) : qStatus.state === 'attempting' || qStatus.state === 'waiting' || qStatus.state === 'retrying' ? (
+            /**
+             * WHY the stored idea.summary is skipped here: it is set once, at
+             * save time, to a placeholder like "the transcript will appear once
+             * transcription completes" - and nothing ever updates it while a
+             * take is still being retried. Showing that stale, permanently
+             * optimistic text here directly contradicted the Thought section
+             * above once it had already moved on to "trying again" or "could
+             * not be created" - two different messages on the same screen
+             * disagreeing about what was actually happening. Deferring to the
+             * live qStatus here keeps both sections telling the same story.
+             */
+            <View style={styles.summaryCard}>
+              <View style={styles.summaryAccent} />
+              <Text style={styles.body}>Available once your Thought is ready.</Text>
             </View>
           ) : (
             <View style={styles.summaryCard}>

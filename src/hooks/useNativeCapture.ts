@@ -463,12 +463,18 @@ export function useNativeCapture(options: Options = {}) {
   const resume = useCallback(async (): Promise<boolean> => {
     if (!supported || !AndroidWakeWord.isRecording()) return false;
     /**
-     * WHY resume is no longer blocked during a call: it was refused while a
-     * call was active, but starting a brand new recording was not - so the user
-     * could record during a call, just not continue the take they already had.
-     * That inconsistency is worse than the risk it was guarding against, and
-     * the user pressing Resume mid-call has made their intention clear.
+     * WHY resume is blocked during a call, matching start(): starting a new
+     * recording is refused while a call is active - allowing resume to
+     * continue exactly that situation was the actual inconsistency. A paused
+     * take stays paused through the whole call either way - nothing is lost
+     * by waiting for it to end.
      */
+    if (AndroidWakeWord.isCallActive()) {
+      const msg = 'Cannot resume during a call. Try again once it has ended.';
+      setError(msg);
+      onErrorRef.current?.(msg);
+      return false;
+    }
     callHoldRef.current = false;
     setCallHold(false);
     return AndroidWakeWord.resumeRecording();

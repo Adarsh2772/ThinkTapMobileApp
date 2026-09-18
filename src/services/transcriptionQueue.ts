@@ -1,4 +1,5 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import * as Network from 'expo-network';
 
 import { isNetworkError } from '@/src/services/aiService';
 import { recordingExists } from '@/src/services/audioStorage';
@@ -28,6 +29,21 @@ const QUEUE_KEY = '@thinktap/transcribe_queue';
 const MAX_ATTEMPTS = 5;
 
 /**
+ * WHY an exhausted entry is kept, not dropped: it used to be silently
+ * removed from the queue once MAX_ATTEMPTS genuine failures were reached.
+ * queueStatus() then found nothing at all for that idea and reported
+ * 'none' - and since a failed attempt never calls updateIdea(), the idea
+ * screen's pipelineFinished signal was also still false. The result: the
+ * screen fell through to its "still working" spinner forever, for a take
+ * the queue had already, permanently, given up on - exactly the stuck-
+ * loading-indicator failure this whole area of the app exists to prevent.
+ * An exhausted entry now stays in the queue at 'failed', visible and
+ * queryable, but is skipped rather than retried automatically - only the
+ * user's own "Try again" (retryNow, which ignores this counter entirely)
+ * can act on it from here.
+ */
+
+/**
  * Real failures needed before the UI offers a manual retry.
  *
  * WHY not one: the first request after a connection returns often fails while
@@ -53,6 +69,12 @@ export type QueueEntry = {
    */
   lastAttemptFailed?: boolean;
   lastAttemptAt?: number;
+  /**
+   * Set once MAX_ATTEMPTS genuine failures have been reached. The entry is
+   * kept, not dropped, once this is true - see the note at MAX_ATTEMPTS for
+   * why dropping it was the actual bug.
+   */
+  exhausted?: boolean;
 };
 
 let running = false;
@@ -68,6 +90,125 @@ let autoTimer: ReturnType<typeof setInterval> | null = null;
  * immediately.
  */
 const AUTO_RETRY_MS = 15_000;
+
+/**
+ * Tracks the FIRST, non-queued enrichment attempt for a recording - the one
+ * that runs synchronously right after a take is saved, before anything has
+ * failed and before queueForTranscription() has ever been called.
+ *
+ * WHY this exists: without it, "is a transcript genuinely still being worked
+ * on right now" had no real signal at all for that first attempt. The idea
+ * detail screen fell back to guessing from a hardcoded time window since idea
+ * creation, which meant a slow but perfectly healthy attempt (a long
+ * recording, a slow connection, several sequential AI steps) had its loading
+ * indicator vanish and replaced with a message claiming failure while the
+ * real attempt was still quietly working. This marker is the authoritative
+ * answer instead of a guess.
+ *
+ * Persisted, not just in-memory, so it survives the app being backgrounded
+ * and the idea screen being closed and reopened while the attempt runs.
+ */
+const ACTIVE_ENRICHMENT_KEY = '@thinktap/active_enrichment';
+
+/**
+ * WHY a stale cap: if the app is killed mid-attempt, nothing runs the
+ * "finished" cleanup, and without this cap the marker would claim "still
+ * attempting" forever - the exact stuck-loading-indicator failure this whole
+ * mechanism exists to prevent, just moved to a different signal. Three
+ * minutes is generously longer than any real attempt (upload capped at 20s,
+ * a couple of LLM calls after that) should ever take.
+ */
+const ACTIVE_ENRICHMENT_STALE_MS = 3 * 60_000;
+
+export async function markEnrichmentStarted(ideaId: string): Promise<void> {
+  try {
+    await AsyncStorage.setItem(
+      ACTIVE_ENRICHMENT_KEY,
+      JSON.stringify({ ideaId, startedAt: Date.now() }),
+    );
+  } catch {
+    // Best-effort - worst case the loading indicator falls back to the
+    // queue-based states, which still work correctly on their own.
+  }
+}
+
+/** Only clears the marker if it still belongs to this idea, so a second
+ * recording started before the first one's marker was cleared cannot have
+ * its own in-flight marker wiped out from under it. */
+export async function markEnrichmentFinished(ideaId: string): Promise<void> {
+  try {
+    const raw = await AsyncStorage.getItem(ACTIVE_ENRICHMENT_KEY);
+    if (!raw) return;
+    const parsed = JSON.parse(raw) as { ideaId?: string };
+    if (parsed?.ideaId === ideaId) {
+      await AsyncStorage.removeItem(ACTIVE_ENRICHMENT_KEY);
+    }
+  } catch {
+    // Best-effort.
+  }
+}
+
+async function isEnrichmentActive(ideaId: string): Promise<boolean> {
+  try {
+    const raw = await AsyncStorage.getItem(ACTIVE_ENRICHMENT_KEY);
+    if (!raw) return false;
+    const parsed = JSON.parse(raw) as { ideaId?: string; startedAt?: number };
+    if (parsed?.ideaId !== ideaId) return false;
+    if (
+      typeof parsed.startedAt === 'number' &&
+      Date.now() - parsed.startedAt > ACTIVE_ENRICHMENT_STALE_MS
+    ) {
+      return false;
+    }
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * WHY checked before attempting anything: without this, every scheduled poll
+ * made a real network request regardless of connectivity - wasted battery on
+ * a request known in advance to fail, and each attempt while genuinely
+ * offline was one more chance to hit a slow, doomed request instead of
+ * failing fast. No connection means nothing is attempted at all; the
+ * reconnect listener below and the next poll pick this back up the moment a
+ * connection actually exists.
+ *
+ * isInternetReachable can be null on some platforms/older OS versions where
+ * the OS does not report it - treated as "assume reachable" so those devices
+ * fall back to the old attempt-and-catch behaviour rather than never
+ * retrying at all.
+ */
+async function hasConnection(): Promise<boolean> {
+  try {
+    const state = await Network.getNetworkStateAsync();
+    if (!state.isConnected) return false;
+    if (state.isInternetReachable === false) return false;
+    return true;
+  } catch {
+    return true;
+  }
+}
+
+let reconnectSub: { remove: () => void } | null = null;
+
+/**
+ * Fires a retry the moment the OS reports connectivity returning, instead of
+ * waiting for the next scheduled poll (up to AUTO_RETRY_MS late).
+ */
+function ensureReconnectListener(): void {
+  if (reconnectSub) return;
+  try {
+    reconnectSub = Network.addNetworkStateListener((state) => {
+      if (state.isConnected && state.isInternetReachable !== false) {
+        void processTranscriptionQueue();
+      }
+    });
+  } catch {
+    // Not available on this platform - the interval poll still covers it.
+  }
+}
 
 async function readQueue(): Promise<QueueEntry[]> {
   try {
@@ -109,7 +250,9 @@ export async function queueSize(): Promise<number> {
 
 export type QueueStatus =
   | { state: 'none' }
-  /** Queued, nothing tried yet - almost always no connection. */
+  /** The FIRST, non-queued attempt is genuinely running right now. */
+  | { state: 'attempting' }
+  /** Queued, connection available, nothing tried yet. */
   | { state: 'waiting' }
   /** Tried and did not succeed, but worth another go on its own. */
   | { state: 'retrying'; attempts: number }
@@ -124,6 +267,13 @@ export type QueueStatus =
  * retry button to someone with no signal only produces another failure.
  */
 export async function queueStatus(ideaId: string): Promise<QueueStatus> {
+  /**
+   * WHY checked before the queue at all: an idea on its first, non-queued
+   * attempt is not IN the queue yet - queueForTranscription() only runs
+   * after that first attempt has already failed.
+   */
+  if (await isEnrichmentActive(ideaId)) return { state: 'attempting' };
+
   const queue = await readQueue();
   const entry = queue.find((q) => q.ideaId === ideaId);
   if (!entry) return { state: 'none' };
@@ -232,6 +382,14 @@ export async function processTranscriptionQueue(): Promise<void> {
   const queue = await readQueue();
   if (queue.length === 0) return;
 
+  /**
+   * WHY this comes before anything else: skips the attempt entirely rather
+   * than making a real request known in advance to fail. The queue simply
+   * waits, correctly reported as 'waiting', until hasConnection() or the
+   * reconnect listener says it is worth trying again.
+   */
+  if (!(await hasConnection())) return;
+
   running = true;
   const remaining: QueueEntry[] = [];
 
@@ -242,6 +400,13 @@ export async function processTranscriptionQueue(): Promise<void> {
       continue;
     }
     if ((idea.transcript ?? '').trim()) {
+      continue;
+    }
+
+    // Exhausted entries are kept for their status but never retried
+    // automatically again - see the note at MAX_ATTEMPTS above.
+    if (entry.exhausted) {
+      remaining.push(entry);
       continue;
     }
 
@@ -272,12 +437,12 @@ export async function processTranscriptionQueue(): Promise<void> {
        * counts against the budget and the UI may offer a manual retry.
        */
       const attempts = entry.attempts + 1;
-      if (attempts >= MAX_ATTEMPTS) continue;
       remaining.push({
         ...entry,
         attempts,
         lastAttemptFailed: true,
         lastAttemptAt: Date.now(),
+        exhausted: attempts >= MAX_ATTEMPTS,
       });
     } catch (e) {
       const msg = e instanceof Error ? e.message : '';
@@ -307,14 +472,13 @@ export async function processTranscriptionQueue(): Promise<void> {
       }
 
       const attempts = entry.attempts + 1;
-      if (attempts < MAX_ATTEMPTS) {
-        remaining.push({
-          ...entry,
-          attempts,
-          lastAttemptFailed: true,
-          lastAttemptAt: Date.now(),
-        });
-      }
+      remaining.push({
+        ...entry,
+        attempts,
+        lastAttemptFailed: true,
+        lastAttemptAt: Date.now(),
+        exhausted: attempts >= MAX_ATTEMPTS,
+      });
     }
   }
 
@@ -334,6 +498,7 @@ export async function processTranscriptionQueue(): Promise<void> {
  * the queue empties.
  */
 export function startAutoRetry(): void {
+  ensureReconnectListener();
   if (autoTimer) return;
   autoTimer = setInterval(() => {
     void (async () => {
@@ -348,9 +513,14 @@ export function startAutoRetry(): void {
 }
 
 export function stopAutoRetry(): void {
-  if (!autoTimer) return;
-  clearInterval(autoTimer);
-  autoTimer = null;
+  if (autoTimer) {
+    clearInterval(autoTimer);
+    autoTimer = null;
+  }
+  if (reconnectSub) {
+    reconnectSub.remove();
+    reconnectSub = null;
+  }
 }
 
 /** Clear everything. Exposed for Settings / debugging. */

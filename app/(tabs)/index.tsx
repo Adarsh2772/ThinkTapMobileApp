@@ -31,6 +31,8 @@ import { useSettingsStore } from '@/src/store/settingsStore';
 import { showToast } from '@/src/store/toastStore';
 import { useWakeWordStore } from '@/src/store/wakeWordStore';
 import {
+  markEnrichmentFinished,
+  markEnrichmentStarted,
   processTranscriptionQueue,
   queueForTranscription,
   startAutoRetry,
@@ -184,6 +186,14 @@ export default function HomeScreen() {
         return;
       }
 
+      /**
+       * WHY marked here, around the whole attempt: this is the first,
+       * non-queued try - it is not reflected in the queue at all until it
+       * fails, so without an explicit marker the idea detail screen had no
+       * authoritative way to know this was still genuinely in progress.
+       * Cleared in the finally block below on every exit path.
+       */
+      await markEnrichmentStarted(localIdea.id);
       try {
         const patch = await enrichPendingRecording(pending, languageCode, (stage) => {
           setOrganizeStage(stage);
@@ -228,6 +238,7 @@ export default function HomeScreen() {
         }
         showToast('Saved. The transcript will be added when the network is back.', 'info');
       } finally {
+        await markEnrichmentFinished(localIdea.id);
         setOrganizing(false);
         processLockRef.current = false;
       }
@@ -277,23 +288,53 @@ export default function HomeScreen() {
         return;
       }
       if (!path || cancelled) return;
-      // Clear immediately, before touching anything else - so a second
-      // mount, or a crash during recovery itself, can't try this file twice.
-      await AsyncStorage.removeItem(ACTIVE_RECORDING_PATH_KEY).catch(() => {});
 
-      if (!(await recordingExists(path))) return; // nothing left to recover
-      if (cancelled) return;
+      /**
+       * WHY the marker is NOT cleared yet here: everything below can fail
+       * for reasons that have nothing to do with whether the recording is
+       * actually recoverable - a transient probe failure, a store hiccup
+       * right after a cold boot from a real power-off. Clearing the marker
+       * before confirming the recording actually made it into a Thought
+       * meant any such failure orphaned the recording permanently: the
+       * marker was gone, so no future launch would ever try again, even
+       * though the audio file was sitting right there on disk the whole
+       * time. This was the actual cause of "recording stopped after a
+       * shutdown, but nothing showed up in Ideas." The marker is now only
+       * cleared once recovery has genuinely succeeded, or once we have
+       * confirmed there is nothing left to recover.
+       */
+      try {
+        const exists = await recordingExists(path);
+        if (!exists) {
+          // Genuinely nothing to recover - safe to clear.
+          await AsyncStorage.removeItem(ACTIVE_RECORDING_PATH_KEY).catch(() => {});
+          return;
+        }
+        if (cancelled) return;
 
-      const durationSec = (await probeAudioDurationSec(path)) ?? 1;
-      if (cancelled) return;
+        const durationSec = (await probeAudioDurationSec(path)) ?? 1;
+        if (cancelled) return;
 
-      showToast('Found a recording from before the app closed — saving it now.', 'info');
-      void runOrganizeInBackground({
-        audioUri: path,
-        durationSec,
-        transcript: '',
-        speechLocale,
-      });
+        // Committed to handing this off below - clear now so a future
+        // launch does not try the same file twice.
+        await AsyncStorage.removeItem(ACTIVE_RECORDING_PATH_KEY).catch(() => {});
+
+        showToast('Found a recording from before the app closed — saving it now.', 'info');
+        void runOrganizeInBackground({
+          audioUri: path,
+          durationSec,
+          transcript: '',
+          speechLocale,
+        });
+      } catch (e) {
+        /**
+         * WHY the marker is left in place here: something failed before we
+         * could hand this recording off. Leaving the marker means the next
+         * launch gets another chance, rather than silently losing the
+         * recording forever. The audio file on disk is untouched either way.
+         */
+        console.warn('[RECOVERY] failed to recover, will retry on next launch', e);
+      }
     })();
     return () => {
       cancelled = true;

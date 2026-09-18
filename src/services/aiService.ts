@@ -722,9 +722,44 @@ export function isNetworkError(error: unknown): boolean {
     return true;
   }
   const msg = error instanceof Error ? error.message : String(error ?? '');
-  return /network|fetch|timeout|connection|abort|ENOTFOUND|ECONN|EAI_AGAIN|ETIMEDOUT|socket|dns|unreachable|offline|reach the transcription service/i.test(
-    msg,
-  );
+  if (
+    /network|fetch|timeout|connection|abort|ENOTFOUND|ECONN|EAI_AGAIN|ETIMEDOUT|socket|dns|unreachable|offline|reach the transcription service/i.test(
+      msg,
+    )
+  ) {
+    return true;
+  }
+
+  /**
+   * WHY 5xx responses and JSON-parse failures are treated the same as a
+   * dropped connection: on a genuinely poor but not fully absent connection
+   * - weak signal, a carrier proxy under load - a request can complete
+   * quickly with a bad outcome instead of hanging. A flaky hop can return a
+   * 502/503/504 from an intermediate proxy, or truncate/corrupt the response
+   * body so JSON.parse throws. Neither means Whisper rejected the audio or
+   * the API key is wrong - both mean "the network was not good enough this
+   * time." Before this, those two cases were not recognised as network
+   * problems at all, so on a weak connection every attempt counted as a
+   * genuine failure and burned through the 5-attempt budget in under twenty
+   * seconds - the queue then permanently gave up while the user was still
+   * on the same bad connection, long before it had any real chance to
+   * improve.
+   *
+   * \berror\s+5\d{2}\b matches this file's own error-message shape
+   * ("Whisper error 502", "Backend enrich error 503") rather than any
+   * 3-digit number that happens to appear in a message for an unrelated
+   * reason.
+   */
+  if (/\berror\s+5\d{2}\b/i.test(msg)) return true;
+  if (
+    /invalid.*response|unexpected token|unexpected end of json|is not valid json|json parse error/i.test(
+      msg,
+    )
+  ) {
+    return true;
+  }
+
+  return false;
 }
 
 export function mapSttError(error: unknown): Error {
