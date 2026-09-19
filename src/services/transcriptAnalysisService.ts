@@ -2,12 +2,19 @@ import type { TranscriptAnalysis } from '@/src/types';
 
 const DEFAULT_ANALYZE_URL = 'https://thinktapai.shastrarth.in/api/v1/transcripts/analyze';
 
+/**
+ * WHY only two fields now: the backend endpoint moved from a five-field
+ * shape (the deferred AI Intelligence layer's fields) to the V1-spec-
+ * correct shape - see the backend's own prompts/transcript_analysis.py
+ * for the full reasoning. "thought" is deliberately gone from the
+ * response: it would have just been an AI-generated echo of the
+ * transcript this app already has verbatim locally as idea.transcript -
+ * this app does not need the backend to hand back a second, potentially-
+ * drifting copy of the user's own words.
+ */
 type ApiResponse = {
-  expansion_paths?: string;
   source_of_inspiration?: string;
-  thought?: string;
-  potential_value?: string;
-  connected_thoughts?: string;
+  ai_core_insight?: string;
 };
 
 function analyzeUrl(): string {
@@ -22,11 +29,30 @@ function asText(value: unknown): string {
 
 function mapResponse(json: ApiResponse): TranscriptAnalysis {
   return {
-    thought: asText(json.thought),
+    /**
+     * WHY ai_core_insight maps into the `thought` field of this local
+     * type: idea/[id].tsx already reads analysis.thought as the primary
+     * "AI Core Insight" display text - that mapping was correct before
+     * this change and stays correct now, it is simply fed by the new,
+     * properly-named backend field instead of the old five-field shape's
+     * repurposed "thought" field. Not renamed here to avoid a wider,
+     * riskier rename across every screen that already reads
+     * analysis.thought.
+     */
+    thought: asText(json.ai_core_insight),
     sourceOfInspiration: asText(json.source_of_inspiration),
-    potentialValue: asText(json.potential_value),
-    expansionPaths: asText(json.expansion_paths),
-    connectedThoughts: asText(json.connected_thoughts),
+    /**
+     * WHY these three stay as empty strings rather than being removed
+     * from TranscriptAnalysis entirely: the backend no longer sends them
+     * (they belonged to the deferred AI Intelligence layer, not V1's
+     * spec), but removing the fields from the type would mean touching
+     * every screen that reads them. They already render as an em-dash
+     * when empty (see idea/[id].tsx's ANALYSIS_FIELDS rendering), so
+     * this degrades gracefully with no UI change required here.
+     */
+    potentialValue: '',
+    expansionPaths: '',
+    connectedThoughts: '',
   };
 }
 

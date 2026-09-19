@@ -35,14 +35,31 @@ type AnalysisField = {
   soft: string;
 };
 
+/**
+ * WHY only two fields, not five: this used to render one card per key in
+ * TranscriptAnalysis, five of them - expansionPaths, sourceOfInspiration,
+ * thought, potentialValue, connectedThoughts. Per
+ * ThinkTap_MVP_V1_Specifications.docx Section 4.1/7.1, V1 shows exactly
+ * two Human Signal fields (Source of Inspiration, Thought) plus one AI
+ * Core Insight - expansionPaths, potentialValue, and connectedThoughts
+ * belong to the deferred AI Intelligence layer (Section 4.2/4.3), not V1.
+ * The backend was fixed to stop returning those three, but this screen
+ * was never updated to stop asking for them - so it kept rendering three
+ * permanently-empty cards labelled with a feature that has not been
+ * built yet, which reads as broken even though nothing actually is.
+ *
+ * WHY the remaining 'thought' key is labelled "AI Core Insight", not
+ * "Thought": this key's underlying value now comes from the backend's
+ * ai_core_insight field (see transcriptAnalysisService.ts's mapResponse -
+ * the key name was deliberately left alone there to avoid a wider rename
+ * across every screen that reads analysis.thought). Left labelled
+ * "Thought" here, it showed AI-generated insight text directly under a
+ * card that says "Thought" - right next to the *actual* Thought section
+ * elsewhere on this same screen, which shows the real verbatim
+ * transcript. Two differently-worded things both labelled "Thought" on
+ * one screen was confusing regardless of the data being correct.
+ */
 const ANALYSIS_FIELDS: AnalysisField[] = [
-  {
-    key: 'expansionPaths',
-    label: 'Expansion paths',
-    icon: 'git-branch-outline',
-    accent: '#4F46E5',
-    soft: '#E0E7FF',
-  },
   {
     key: 'sourceOfInspiration',
     label: 'Source of inspiration',
@@ -52,24 +69,10 @@ const ANALYSIS_FIELDS: AnalysisField[] = [
   },
   {
     key: 'thought',
-    label: 'Thought',
+    label: 'AI Core Insight',
     icon: 'bulb-outline',
     accent: colors.secondary,
     soft: colors.secondarySoft,
-  },
-  {
-    key: 'potentialValue',
-    label: 'Potential value',
-    icon: 'diamond-outline',
-    accent: '#16A34A',
-    soft: colors.successSoft,
-  },
-  {
-    key: 'connectedThoughts',
-    label: 'Connected thoughts',
-    icon: 'link-outline',
-    accent: '#D97706',
-    soft: colors.warningSoft,
   },
 ];
 
