@@ -19,7 +19,6 @@ import { useIdeasStore } from '@/src/store/ideasStore';
 import { useSettingsStore } from '@/src/store/settingsStore';
 import { readQueueStatuses, type QueueStatus } from '@/src/services/transcriptionQueue';
 import {
-    CATEGORIES,
     categoryColor,
     colors,
     fonts,
@@ -37,7 +36,7 @@ export default function IdeasScreen() {
   const languageCode = useSettingsStore((s) => s.languageCode);
   const tx = useSettingsStore((s) => s.tx);
   void languageCode;
-  const [category, setCategory] = useState<string>('All');
+  const [category, setCategory] = useState<string>('');
   const [queueStatuses, setQueueStatuses] = useState<Map<string, QueueStatus>>(new Map());
 
   /**
@@ -71,14 +70,77 @@ export default function IdeasScreen() {
     };
   }, []);
 
-  const ideas = useMemo(() => {
+  const myIdeas = useMemo(() => {
     if (!user) return [];
-    const all = allIdeas
+    return allIdeas
       .filter((idea) => idea.userId === user.id)
       .sort((a, b) => b.createdAt.localeCompare(a.createdAt));
-    if (category === 'All') return all;
-    return all.filter((idea) => normalizeCategory(idea.category) === category);
-  }, [user, allIdeas, category]);
+  }, [user, allIdeas]);
+
+  /**
+   * Which category tabs exist, and in what order - per the client's
+   * corrected spec: no fixed set of 7 tabs, no "All" tab. A tab exists
+   * only while at least one thought of that category exists, and tabs are
+   * ordered by which category was most recently added to - record a movie
+   * thought and only Movies shows; sing a song next and Songs jumps in
+   * front of Movies; another movie thought and Movies leads again.
+   *
+   * WHY "most recently touched", not creation order or a fixed order:
+   * this is what "whichever is recent it is first" actually means - the
+   * category ranking follows the single most recent thought in each
+   * category, not a running count. A category with one thought from a
+   * minute ago outranks one with ten thoughts from last month.
+   *
+   * WHY this needs no special-case deletion handling: like the count-
+   * based version this replaced, nothing here is cached - every render
+   * where allIdeas actually changed recomputes which categories still
+   * have at least one thought at all. Delete the last thought in a
+   * category and it simply is not in this list on the next render - the
+   * tab disappears because it was never anything more than "categories
+   * currently present", not because anything detected and reacted to a
+   * delete specifically.
+   */
+  const activeCategories = useMemo(() => {
+    const lastTouched = new Map<string, string>();
+    for (const idea of myIdeas) {
+      const cat = normalizeCategory(idea.category);
+      const existing = lastTouched.get(cat);
+      if (!existing || idea.createdAt > existing) {
+        lastTouched.set(cat, idea.createdAt);
+      }
+    }
+    return Array.from(lastTouched.entries())
+      .sort((a, b) => b[1].localeCompare(a[1]))
+      .map(([cat]) => cat);
+  }, [myIdeas]);
+
+  /**
+   * WHY this effect exists: the selected tab needs to stay a real,
+   * currently-visible tab at all times, since there is no "All" fallback
+   * to fall back to anymore. Two cases land here - the very first thought
+   * ever saved (category starts empty, nothing was selectable yet), and
+   * the selected tab's last thought just got deleted (its tab just
+   * vanished out from under the selection). Both are handled the same
+   * way: select whichever tab is now first. Deliberately does NOT run
+   * just because the order shifted - selecting a movie thought while
+   * viewing Business should not yank you over to Movies just because
+   * Movies became first; it only steps in when the tab actually being
+   * viewed is no longer on the list at all.
+   */
+  useEffect(() => {
+    if (activeCategories.length === 0) {
+      if (category !== '') setCategory('');
+      return;
+    }
+    if (!activeCategories.includes(category)) {
+      setCategory(activeCategories[0]);
+    }
+  }, [activeCategories, category]);
+
+  const ideas = useMemo(() => {
+    if (!category) return [];
+    return myIdeas.filter((idea) => normalizeCategory(idea.category) === category);
+  }, [myIdeas, category]);
 
   return (
     <SafeAreaView style={styles.safe} edges={['top']}>
@@ -93,40 +155,42 @@ export default function IdeasScreen() {
         </Text>
       </View>
 
-      <View style={styles.chipsWrap}>
-        <ScrollView
-          horizontal
-          showsHorizontalScrollIndicator={false}
-          contentContainerStyle={styles.chips}
-        >
-          {CATEGORIES.map((item) => {
-            const active = item === category;
-            const tint = categoryColor(item);
-            return (
-              <Pressable
-                key={item}
-                onPress={() => setCategory(item)}
-                style={[
-                  styles.chip,
-                  active
-                    ? { backgroundColor: tint.bg }
-                    : { backgroundColor: tint.soft },
-                ]}
-              >
-                <Text
+      {activeCategories.length > 0 ? (
+        <View style={styles.chipsWrap}>
+          <ScrollView
+            horizontal
+            showsHorizontalScrollIndicator={false}
+            contentContainerStyle={styles.chips}
+          >
+            {activeCategories.map((item) => {
+              const active = item === category;
+              const tint = categoryColor(item);
+              return (
+                <Pressable
+                  key={item}
+                  onPress={() => setCategory(item)}
                   style={[
-                    styles.chipText,
-                    { color: active ? tint.fg : tint.bg },
+                    styles.chip,
+                    active
+                      ? { backgroundColor: tint.bg }
+                      : { backgroundColor: tint.soft },
                   ]}
-                  numberOfLines={1}
                 >
-                  {item}
-                </Text>
-              </Pressable>
-            );
-          })}
-        </ScrollView>
-      </View>
+                  <Text
+                    style={[
+                      styles.chipText,
+                      { color: active ? tint.fg : tint.bg },
+                    ]}
+                    numberOfLines={1}
+                  >
+                    {item}
+                  </Text>
+                </Pressable>
+              );
+            })}
+          </ScrollView>
+        </View>
+      ) : null}
 
       <FlatList
         data={ideas}
@@ -134,7 +198,11 @@ export default function IdeasScreen() {
         contentContainerStyle={styles.list}
         ItemSeparatorComponent={() => <View style={{ height: spacing.stackMd }} />}
         ListEmptyComponent={
-          <Text style={styles.empty}>No thoughts in this category yet.</Text>
+          <Text style={styles.empty}>
+            {myIdeas.length === 0
+              ? 'No Thoughts captured yet.'
+              : 'No thoughts in this category yet.'}
+          </Text>
         }
         renderItem={({ item }) => (
           <IdeaCard
