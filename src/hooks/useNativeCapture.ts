@@ -63,8 +63,17 @@ export type NativeCaptureResult = {
 type Options = {
   /** Wake phrase heard while idle - the screen should begin a take. */
   onWake?: () => void;
-  /** A finished take. Transcription happens after this. */
-  onFinished?: (result: NativeCaptureResult) => void;
+  /**
+   * A finished take. Transcription happens after this.
+   *
+   * WHY it may return a Promise: the 'stopped' handler below awaits this
+   * before clearing ACTIVE_RECORDING_PATH_KEY, specifically so a shutdown
+   * that kills the process partway through saving does not clear the
+   * recovery marker before the Thought actually exists in Ideas. A
+   * synchronous implementation (returning void) still works exactly as
+   * before - awaiting a non-Promise resolves immediately.
+   */
+  onFinished?: (result: NativeCaptureResult) => void | Promise<void>;
   onError?: (message: string) => void;
   /** A call took the microphone; the take is paused and must not auto-resume. */
   onInterrupted?: () => void;
@@ -155,19 +164,42 @@ export function useNativeCapture(options: Options = {}) {
               return;
             }
             lastSavedPath = e.path;
-            // A clean stop reached here, so there is nothing left to recover -
-            // clear the marker now rather than after the async copy below,
-            // so it can't be left behind if persistRecording throws.
-            void AsyncStorage.removeItem(ACTIVE_RECORDING_PATH_KEY).catch(() => {});
-            // Move out of the service's directory into app documents so the
-            // file survives cache clearing and is reachable by the player.
+            /**
+             * WHY the marker is no longer cleared here, before the save: a
+             * manual power-off sends AudioCaptureService's shutdown receiver
+             * down this exact same 'stopped' path (see its own WHY note) -
+             * the file gets finalized correctly, but the OS gives very
+             * little time after that broadcast before the process dies.
+             * Clearing the marker immediately, before persistRecording and
+             * the save it triggers had actually run, meant a shutdown that
+             * killed the process anywhere in that gap left no marker AND no
+             * saved Thought - the recording was gone, silently, even though
+             * the audio file itself was sitting right there on disk the
+             * whole time. Reported by QA as "switched off, recording not in
+             * the app afterward."
+             *
+             * The marker now survives until the hand-off below has actually
+             * settled - success or failure - via the try/finally. On a
+             * normal stop this is not a meaningfully longer window than
+             * before; it only matters when the process dies partway
+             * through, which is exactly the case this exists to protect.
+             * If onFinished's own save throws, the marker survives and the
+             * already-hardened next-launch recovery (index.tsx) gets a
+             * chance to finish the job instead of the recording being lost
+             * outright - the same reasoning the original code used for why
+             * the marker should not survive a throw forever, just no longer
+             * applied so early that it fires before there was anything to
+             * protect against yet.
+             */
             void (async () => {
               try {
                 const uri = await persistRecording(e.path);
-                onFinishedRef.current?.({ uri, durationSec: seconds });
+                await onFinishedRef.current?.({ uri, durationSec: seconds });
               } catch (err) {
                 console.warn('[NATIVE] persist failed', err);
-                onFinishedRef.current?.({ uri: e.path, durationSec: seconds });
+                await onFinishedRef.current?.({ uri: e.path, durationSec: seconds });
+              } finally {
+                void AsyncStorage.removeItem(ACTIVE_RECORDING_PATH_KEY).catch(() => {});
               }
             })();
             break;

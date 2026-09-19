@@ -59,6 +59,7 @@ export default function HomeScreen() {
   const clearPending = usePendingRecordingStore((s) => s.clearPending);
   const addIdea = useIdeasStore((s) => s.addIdea);
   const updateIdea = useIdeasStore((s) => s.updateIdea);
+  const allIdeas = useIdeasStore((s) => s.ideas);
   const languageCode = useSettingsStore((s) => s.languageCode);
   const tx = useSettingsStore((s) => s.tx);
   const drawer = useDrawerOptional();
@@ -165,15 +166,18 @@ export default function HomeScreen() {
    * sends state transitions and waits for the finished file.
    */
   const nativeFinishRef = useRef<
-    ((r: { uri: string; durationSec: number }) => void) | null
+    ((r: { uri: string; durationSec: number }) => void | Promise<void>) | null
   >(null);
   const native = useNativeCapture({
     onWake: () => {
       if (native.isRecording) return;
       void native.start();
     },
+    // Returns the ref's result (rather than discarding it) so the
+    // Promise<void> nativeFinishRef.current now returns actually reaches
+    // useNativeCapture.ts's await - see that file's WHY note.
     onFinished: (result) => {
-      nativeFinishRef.current?.(result);
+      return nativeFinishRef.current?.(result);
     },
     onError: (message) => showToast(message, "error"),
     onInterrupted: () => showToast("Paused — call in progress", "info"),
@@ -182,6 +186,26 @@ export default function HomeScreen() {
   });
   const useNativePath = native.supported;
 
+  /**
+   * WHY this function's returned promise now resolves right after the local
+   * save, not after the whole thing: every existing caller here already
+   * only ever called this with `void` and never awaited it, so nothing
+   * observable changes for them. What changes is that a NEW caller - the
+   * native 'stopped' handler in useNativeCapture.ts - can now genuinely
+   * await "the Thought exists in Ideas" without also waiting out the full
+   * AI enrichment pipeline (network-bound, can take several seconds), which
+   * both defeats the purpose (enrichment finishing has nothing to do with
+   * whether the shutdown-recovery marker is still needed) and risks a worse
+   * bug: if the marker survived until enrichment finished and the process
+   * died sometime after addIdea() but before enrichment completed, next
+   * launch's recovery would find the marker still set, still pointing at a
+   * file whose Thought already exists, and create a duplicate.
+   *
+   * The split point is deliberately exactly where it already was
+   * conceptually - "save audio first, attach transcript when ready" - this
+   * only makes that boundary visible to a caller that needs it, via an
+   * inner, unawaited async block for everything after addIdea().
+   */
   const runOrganizeInBackground = useCallback(
     async (pending: {
       audioUri: string;
@@ -208,29 +232,58 @@ export default function HomeScreen() {
         return;
       }
 
-      /**
-       * WHY marked here, around the whole attempt: this is the first,
-       * non-queued try - it is not reflected in the queue at all until it
-       * fails, so without an explicit marker the idea detail screen had no
-       * authoritative way to know this was still genuinely in progress.
-       * Cleared in the finally block below on every exit path.
-       */
-      await markEnrichmentStarted(localIdea.id);
-      try {
-        const patch = await enrichPendingRecording(
-          pending,
-          languageCode,
-          (stage) => {
-            setOrganizeStage(stage);
-          },
-        );
+      // Everything from here on is the slower, network-bound enrichment
+      // step - intentionally not awaited by this function's own return, per
+      // the WHY note above.
+      void (async () => {
         /**
-         * WHY queue on empty text: the audio is already saved, so nothing is
-         * lost - but without a retry the transcript stayed empty forever after
-         * one offline attempt. Queued takes are retried when the app next opens
-         * with a connection.
+         * WHY marked here, around the whole attempt: this is the first,
+         * non-queued try - it is not reflected in the queue at all until it
+         * fails, so without an explicit marker the idea detail screen had no
+         * authoritative way to know this was still genuinely in progress.
+         * Cleared in the finally block below on every exit path.
          */
-        if (!patch || !(patch.transcript ?? "").trim()) {
+        await markEnrichmentStarted(localIdea.id);
+        try {
+          const patch = await enrichPendingRecording(
+            pending,
+            languageCode,
+            (stage) => {
+              setOrganizeStage(stage);
+            },
+          );
+          /**
+           * WHY queue on empty text: the audio is already saved, so nothing is
+           * lost - but without a retry the transcript stayed empty forever after
+           * one offline attempt. Queued takes are retried when the app next opens
+           * with a connection.
+           */
+          if (!patch || !(patch.transcript ?? "").trim()) {
+            if (pending.audioUri) {
+              void queueForTranscription({
+                ideaId: localIdea.id,
+                audioUri: pending.audioUri,
+                durationSec: pending.durationSec,
+                speechLocale: pending.speechLocale,
+                languageCode,
+              });
+              startAutoRetry();
+              showToast(
+                "Saved. Transcript will be added when you are back online.",
+                "info",
+              );
+            }
+          }
+          if (patch && (patch.transcript || patch.title)) {
+            if (patch.language && patch.transcript) {
+              setDetectedLanguageName(resolveSpokenLanguage(patch.language).name);
+            }
+            setOrganizeStage("done");
+            await updateIdea(localIdea.id, patch);
+            showToast("Transcript ready — open it in Tasset");
+          }
+        } catch (e) {
+          console.warn("Transcription failed after save", e);
           if (pending.audioUri) {
             void queueForTranscription({
               ideaId: localIdea.id,
@@ -239,41 +292,17 @@ export default function HomeScreen() {
               speechLocale: pending.speechLocale,
               languageCode,
             });
-            startAutoRetry();
-            showToast(
-              "Saved. Transcript will be added when you are back online.",
-              "info",
-            );
           }
+          showToast(
+            "Saved. The transcript will be added when the network is back.",
+            "info",
+          );
+        } finally {
+          await markEnrichmentFinished(localIdea.id);
+          setOrganizing(false);
+          processLockRef.current = false;
         }
-        if (patch && (patch.transcript || patch.title)) {
-          if (patch.language && patch.transcript) {
-            setDetectedLanguageName(resolveSpokenLanguage(patch.language).name);
-          }
-          setOrganizeStage("done");
-          await updateIdea(localIdea.id, patch);
-          showToast("Transcript ready — open it in Tasset");
-        }
-      } catch (e) {
-        console.warn("Transcription failed after save", e);
-        if (pending.audioUri) {
-          void queueForTranscription({
-            ideaId: localIdea.id,
-            audioUri: pending.audioUri,
-            durationSec: pending.durationSec,
-            speechLocale: pending.speechLocale,
-            languageCode,
-          });
-        }
-        showToast(
-          "Saved. The transcript will be added when the network is back.",
-          "info",
-        );
-      } finally {
-        await markEnrichmentFinished(localIdea.id);
-        setOrganizing(false);
-        processLockRef.current = false;
-      }
+      })();
     },
     [user, languageCode, addIdea, updateIdea, clearPending],
   );
@@ -289,7 +318,16 @@ export default function HomeScreen() {
       showToast("Saved. Preparing your transcript…");
       await announceRecordingStopped();
       setPending(pending);
-      void runOrganizeInBackground(pending);
+      /**
+       * WHY awaited now, not void: this function's own promise is what
+       * useNativeCapture.ts's 'stopped' handler awaits before clearing the
+       * shutdown-recovery marker - see nativeFinishRef below and
+       * useNativeCapture.ts's own WHY note on the same change. Awaiting here
+       * only waits for runOrganizeInBackground's local-save step (addIdea),
+       * not the slower enrichment after it - see that function's own WHY
+       * note for why that split is what makes this both correct and cheap.
+       */
+      await runOrganizeInBackground(pending);
     },
     [setPending, runOrganizeInBackground],
   );
@@ -355,6 +393,22 @@ export default function HomeScreen() {
           () => {},
         );
 
+        /**
+         * WHY checked here: the marker is now cleared right after the local
+         * save succeeds (addIdea), not right after the whole enrichment
+         * pipeline - see runOrganizeInBackground's own WHY note. That leaves
+         * a narrow window where the process could die after a Thought for
+         * this exact file already exists, but before this marker got
+         * cleared - without this check, recovery would not know that and
+         * would create a second Thought for the same audio. Far rarer and
+         * far less harmful than the loss this whole mechanism exists to
+         * prevent, but cheap enough to close outright rather than accept.
+         */
+        const alreadySaved = allIdeas.some((idea) => idea.audioUri === path);
+        if (alreadySaved) {
+          return;
+        }
+
         showToast(
           "Found a recording from before the app closed — saving it now.",
           "info",
@@ -381,11 +435,18 @@ export default function HomeScreen() {
     return () => {
       cancelled = true;
     };
+    // allIdeas is read for the idempotency check above but intentionally
+    // left out of this array - this effect should only ever run once at
+    // launch (gated by `user`), not re-run every time any idea changes
+    // elsewhere in the app for the rest of the session.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [user, speechLocale, runOrganizeInBackground]);
 
   // A native take finished — no transcript yet; Whisper produces it from the file.
+  // Returns savePending's promise (rather than voiding it) so
+  // useNativeCapture.ts can await it before clearing the recovery marker.
   nativeFinishRef.current = (result) => {
-    void savePending({
+    return savePending({
       audioUri: result.uri,
       durationSec: result.durationSec,
       transcript: "",
