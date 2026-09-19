@@ -60,6 +60,32 @@ function isAwaitingThought(idea: Idea): boolean {
 }
 
 /**
+ * What to show as this thought's category label and color key.
+ *
+ * WHY this exists: idea.category is set to emptySpeechEnrichment()'s
+ * hardcoded placeholder ("Business") the instant a take is saved, before
+ * the AI categorization step that would actually determine it has even
+ * run - it resolves at the exact same moment as the Thought text, in the
+ * same updateIdea() call. Showing that placeholder as if it were the real
+ * answer meant a thought about anything else briefly, sometimes not so
+ * briefly on a slow connection, showed a wrong category. This mirrors the
+ * ideas.tsx tab-list screen's own categoryStateFor exactly, so a card and
+ * the tab it lives under never disagree about what state a thought is in.
+ *
+ * A thought whose retries are genuinely exhausted (queueState 'failed')
+ * is neither pending (nothing more will happen on its own) nor the
+ * placeholder category (that was never real) - it gets its own honest
+ * "Uncategorized" label instead of either claiming a wrong category or
+ * showing Loading forever for something that has already, permanently,
+ * finished trying.
+ */
+function categoryLabelFor(idea: Idea, queueState?: QueueStatus): string {
+  if (!isAwaitingThought(idea)) return idea.category;
+  if (queueState?.state === 'failed') return 'Uncategorized';
+  return 'Loading';
+}
+
+/**
  * What to show while a thought is awaiting its transcript.
  *
  * WHY this needs to be more than one message: "Preparing your Thought…"
@@ -91,8 +117,10 @@ function ThoughtStatus({ queueState }: { queueState?: QueueStatus }) {
 }
 
 export function IdeaCard({ idea, variant = 'compact', onPress, onDelete, queueState }: Props) {
-  const icon = CATEGORY_ICONS[idea.category] ?? 'bulb-outline';
-  const tint = categoryColor(idea.category);
+  const categoryLabel = categoryLabelFor(idea, queueState);
+  const isPendingCategory = categoryLabel === 'Loading';
+  const icon = CATEGORY_ICONS[categoryLabel] ?? 'bulb-outline';
+  const tint = categoryColor(categoryLabel);
   const [confirmDelete, setConfirmDelete] = useState(false);
 
   if (variant === 'archive') {
@@ -100,7 +128,10 @@ export function IdeaCard({ idea, variant = 'compact', onPress, onDelete, queueSt
       <View style={styles.archiveCard}>
         <View style={styles.archiveHeader}>
           <View style={[styles.categoryPill, { backgroundColor: tint.bg }]}>
-            <Text style={styles.categoryPillText}>{idea.category.toUpperCase()}</Text>
+            {isPendingCategory ? (
+              <ActivityIndicator size="small" color={colors.onPrimary} style={styles.pillSpinner} />
+            ) : null}
+            <Text style={styles.categoryPillText}>{categoryLabel.toUpperCase()}</Text>
           </View>
           <View style={styles.archiveHeaderRight}>
             <Text style={styles.dateText}>{relativeDate(idea.createdAt)}</Text>
@@ -167,7 +198,7 @@ export function IdeaCard({ idea, variant = 'compact', onPress, onDelete, queueSt
         )}
         <View style={styles.chipRow}>
           <View style={[styles.chip, { backgroundColor: tint.soft }]}>
-            <Text style={[styles.chipText, { color: tint.bg }]}>{idea.category}</Text>
+            <Text style={[styles.chipText, { color: tint.bg }]}>{categoryLabel}</Text>
           </View>
           <Text style={styles.metaText}>• {relativeDate(idea.createdAt)}</Text>
         </View>
@@ -254,10 +285,14 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   categoryPill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
     paddingHorizontal: 12,
     paddingVertical: 4,
     borderRadius: radii.full,
   },
+  pillSpinner: { marginRight: -2 },
   categoryPillText: {
     color: colors.onPrimary,
     fontFamily: fonts.bodySemi,
