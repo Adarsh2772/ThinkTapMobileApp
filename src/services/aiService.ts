@@ -1,5 +1,3 @@
-import { File, UploadType } from 'expo-file-system';
-import { getInfoAsync } from 'expo-file-system/legacy';
 import { normalizeFileUri } from '@/src/services/audioStorage';
 import {
   cleanupChunks,
@@ -7,6 +5,8 @@ import {
   wavDurationSec,
   type WavChunk,
 } from '@/src/services/wavChunker';
+import { File, UploadType } from 'expo-file-system';
+import { getInfoAsync } from 'expo-file-system/legacy';
 
 import { hasDevanagari } from '@/src/features/wakeWord/phrases';
 import {
@@ -18,12 +18,12 @@ import {
   type AppLanguageCode,
   type SpokenLanguage,
 } from '@/src/i18n/languages';
-import { useAiConfigStore } from '@/src/store/aiConfigStore';
 import {
   isSarvamEnabled,
   sarvamApiKey,
   sarvamChatJson,
 } from '@/src/services/sarvamChat';
+import { useAiConfigStore } from '@/src/store/aiConfigStore';
 import { CATEGORIES, normalizeCategory } from '@/src/theme/tokens';
 import type { AiEnrichment } from '@/src/types';
 
@@ -471,10 +471,7 @@ export function emptySpeechEnrichment(): EnrichmentResult {
   return {
     transcript: '',
     title: 'Voice note',
-    // Uncategorized, not Business: this thought has not been processed yet
-    // (offline, or no STT key). Once the retry queue transcribes it online,
-    // its real category replaces this.
-    category: 'Uncategorized',
+    category: 'Business',
     summary: UNCLEAR_RECORDING_MESSAGE,
     aiStory: null,
     detectedLanguage: '',
@@ -653,7 +650,7 @@ export async function enrichIdeaFromAudio(input: {
   return {
     transcript: '',
     title: 'Voice note',
-    category: 'Uncategorized',
+    category: 'Business',
     summary:
       'Audio saved. Transcription is not set up yet - add a speech-to-text key to generate the transcript.',
     aiStory: null,

@@ -95,7 +95,6 @@ export const CATEGORIES = [
   'Scripts',
   'Design',
   'Music',
-  'Uncategorized',
 ] as const;
 
 export type Category = (typeof CATEGORIES)[number];
@@ -129,26 +128,12 @@ export const CATEGORY_ALIASES: Record<string, Exclude<Category, 'All'>> = {
   screenplay: 'Scripts',
   design: 'Design',
   music: 'Music',
-  uncategorized: 'Uncategorized',
-  uncategorised: 'Uncategorized',
 };
 
-/**
- * Map LLM / free-text labels onto the Ideas filter chips.
- *
- * WHY empty defaults to Uncategorized, not Business: an offline or not-yet-
- * processed thought has no category. Defaulting it to Business was dishonest
- * (it isn't business) and cluttered that tab. Uncategorized is the truthful
- * holding state; once the network returns and Sarvam categorises it, the
- * retry updates it to the real category and it leaves Uncategorized.
- *
- * A NON-empty but unrecognised label still falls back to Business, because
- * that only happens when a real categorisation actually ran and returned
- * something off-list - a genuine catch-all, not a "pending" state.
- */
+/** Map LLM / free-text labels onto the Ideas filter chips. */
 export function normalizeCategory(raw: string | undefined | null): Exclude<Category, 'All'> {
   const trimmed = (raw ?? '').trim();
-  if (!trimmed) return 'Uncategorized';
+  if (!trimmed) return 'Business';
   if (trimmed !== 'All' && (CATEGORIES as readonly string[]).includes(trimmed)) {
     return trimmed as Exclude<Category, 'All'>;
   }
@@ -168,8 +153,6 @@ export const CATEGORY_COLORS: Record<string, { bg: string; fg: string; soft: str
   Scripts: { bg: '#4F46E5', fg: '#FFFFFF', soft: '#E0E7FF' },
   Design: { bg: '#0284C7', fg: '#FFFFFF', soft: '#E0F2FE' },
   Music: { bg: '#2563EB', fg: '#FFFFFF', soft: '#DBEAFE' },
-  // Neutral grey - a holding state, visually distinct from real categories.
-  Uncategorized: { bg: '#64748B', fg: '#FFFFFF', soft: '#E2E8F0' },
 };
 
 export function categoryColor(category: string) {
