@@ -1,41 +1,19 @@
-import { useAiConfigStore } from '@/src/store/aiConfigStore';
+import { sarvamChat } from '@/src/services/sarvamChat';
 
 /**
  * Turns a partially-translated transcript into proper English.
  *
- * WHY this is needed on top of Whisper's translate endpoint: when Whisper is
- * unsure it *transliterates* rather than translates. "माझं जेवण तयार आहे"
- * comes back as "Majha jevan tayar ahe" — Marathi words spelled with English
- * letters, which is not English and is useless for search. Sometimes it leaves
- * the Devanagari in place entirely.
- *
- * A second pass over the text fixes both. It is text-to-text, so it is fast and
- * cheap compared with the audio call that produced it.
- *
- * Runs on Groq with the key already configured for transcription — no new
- * account, no cost beyond the same free tier.
+ * WHY this is (rarely) needed: in the normal Sarvam path this is a no-op -
+ * Sarvam's "translate" mode already returns English, so the caller reports
+ * detectedLanguage as 'en' and this function returns immediately. It only does
+ * real work on an edge path where non-English text arrives (e.g. a device
+ * on-device transcript), and it routes that through Sarvam's chat model.
  *
  * Failure returns the original text unchanged. A rough transcript is far better
  * than none, so this can never block a thought from being saved.
  */
 
-/**
- * WHY not llama-3.3-70b-versatile: Groq decommissioned it on 16 August 2026.
- * Requests using it return 400, and because both of these features fail
- * silently by design, the app quietly fell back to keyword matching with no
- * sign anything was wrong.
- *
- * openai/gpt-oss-120b is Groq's recommended replacement. Overridable so the
- * next deprecation is a config change rather than a release.
- */
-const MODEL = process.env.EXPO_PUBLIC_LLM_MODEL?.trim() || 'openai/gpt-oss-120b';
 const TIMEOUT_MS = 30_000;
-
-function baseUrlFor(apiKey: string): string {
-  return apiKey.startsWith('gsk_')
-    ? 'https://api.groq.com/openai/v1'
-    : 'https://api.openai.com/v1';
-}
 
 /** Non-Latin script that should not survive an English translation. */
 const NON_LATIN = /[\u0900-\u097F\u0980-\u09FF\u0A00-\u0A7F\u0A80-\u0AFF\u0B00-\u0B7F\u0B80-\u0BFF\u0C00-\u0C7F\u0C80-\u0CFF\u0D00-\u0D7F\u0600-\u06FF]/;
@@ -119,14 +97,13 @@ export async function toEnglish(
 
   if (!shouldTranslate) return text;
 
-  const apiKey = useAiConfigStore.getState().getApiKey();
-  if (!apiKey) return text;
-
   /**
-   * WHY the prompt is this specific: a general "translate this" instruction
-   * produced transliteration on song titles and proper nouns - "Ashi Banwa
-   * Banwi" came back unchanged because the model treated it as a name. Naming
-   * the failure mode explicitly is what stops it.
+   * WHY Sarvam and not Groq: Groq is removed from the app. In the normal
+   * Sarvam path this function is a no-op anyway (Sarvam already returns
+   * English, so detectedLanguage is 'en' and shouldTranslate is false). This
+   * branch only runs in edge cases - e.g. a device-transcript path that came
+   * in as non-English - and routes translation through Sarvam's chat model,
+   * which is strong on Indian languages.
    */
   const system = [
     'You translate personal voice notes into natural English.',
@@ -147,20 +124,9 @@ export async function toEnglish(
     '3. Keep proper nouns as they are: people, places, film and song titles.',
     '4. Keep the speaker\'s voice and every point they made. Do not summarise,',
     '   do not add anything, do not explain what you did.',
-    '5. A short word or phrase must stay short. "Socho" is one Hindi word',
-    '   meaning "think" - the correct translation is "Think." or "Think about',
-    '   it.", never an invented longer sentence like "think about what you and',
-    '   I have discovered about humans." If a source phrase feels',
-    '   incomplete or terse, translate it exactly that terse - do not add a',
-    '   subject, object, or clause that was not actually said, even if the',
-    '   result reads as an incomplete English sentence. An incomplete-',
-    '   sounding but faithful translation is correct; a complete-sounding',
-    '   but invented one is not.',
-    '6. If a phrase is genuinely untranslatable, give the closest English',
-    '   meaning rather than the original words - this still means the',
-    '   closest meaning to what was actually said, not a plausible-sounding',
-    '   elaboration of it.',
-    '7. Never add a note, comment, or remark about the transcript, its',
+    '5. If a phrase is genuinely untranslatable, give the closest English',
+    '   meaning rather than the original words.',
+    '6. Never add a note, comment, or remark about the transcript, its',
     '   quality, or whether it seems garbled or repetitive - translate',
     '   whatever text is there and stop. No parenthetical asides, no',
     '   "(Note: ...)", nothing after the translation itself.',
@@ -168,39 +134,16 @@ export async function toEnglish(
     'Reply with the translated text and nothing else.',
   ].join('\n');
 
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), TIMEOUT_MS);
-
   try {
-    const response = await fetch(`${baseUrlFor(apiKey)}/chat/completions`, {
-      method: 'POST',
-      headers: {
-        Authorization: `Bearer ${apiKey}`,
-        'Content-Type': 'application/json',
-      },
-      signal: controller.signal,
-      body: JSON.stringify({
-        model: MODEL,
-        // Deterministic: the same recording should always read the same way.
-        temperature: 0,
-        // WHY explicit: a multi-minute song's transcript is long, and the
-        // default output cap on some models is small enough to cut a real
-        // translation off mid-sentence - exactly the "And it goes 🎵" cutoff
-        // this was written to fix.
-        max_tokens: 4096,
-        messages: [
+    let out =
+      (await sarvamChat(
+        [
           { role: 'system', content: system },
           { role: 'user', content: source },
         ],
-      }),
-    });
-
-    if (!response.ok) return text;
-
-    const json = (await response.json()) as {
-      choices?: { message?: { content?: string } }[];
-    };
-    let out = json.choices?.[0]?.message?.content?.trim() ?? '';
+        { temperature: 0, maxTokens: 4096, timeoutMs: TIMEOUT_MS },
+      )) ?? '';
+    out = out.trim();
     if (!out) return text;
 
     /**
@@ -210,24 +153,6 @@ export async function toEnglish(
      * that does not look like a translation is discarded.
      */
     if (out.length < source.length * 0.25) return text;
-    /**
-     * WHY logged rather than discarded: a real report showed "Socho" (one
-     * Hindi word, "think") come back as "think about what you and I have
-     * discovered about humans" - fabricated content appended to a short
-     * source phrase. Rule 5 above targets this directly, but a prompt rule
-     * is not a guarantee against every case, and a hard length-based reject
-     * would also throw away a legitimately fuller translation of a terse
-     * source (English can genuinely need more words than Hindi for the same
-     * meaning). Logging when this ratio looks suspicious means the next
-     * occurrence is visible in diagnostics immediately, rather than only
-     * surfacing when a user happens to notice and report it days later.
-     */
-    if (out.length > source.length * 3 && source.length < 60) {
-      console.warn(
-        '[AI] toEnglish: output is much longer than a short source - possible fabrication',
-        { source, out },
-      );
-    }
     if (/^(here is|here's|translation:|sure[,!])/i.test(out)) {
       const stripped = out.replace(/^[^:\n]*[:\n]\s*/, '').trim();
       out = stripped.length > 0 ? stripped : out;
@@ -245,9 +170,7 @@ export async function toEnglish(
 
     return out || text;
   } catch {
-    // Offline, timed out, or rate limited - keep what Whisper gave us.
+    // Offline, timed out, or rate limited - keep what we already had.
     return text;
-  } finally {
-    clearTimeout(timer);
   }
 }

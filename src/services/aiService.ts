@@ -1,6 +1,12 @@
 import { File, UploadType } from 'expo-file-system';
 import { getInfoAsync } from 'expo-file-system/legacy';
 import { normalizeFileUri } from '@/src/services/audioStorage';
+import {
+  cleanupChunks,
+  splitWavIntoChunks,
+  wavDurationSec,
+  type WavChunk,
+} from '@/src/services/wavChunker';
 
 import { hasDevanagari } from '@/src/features/wakeWord/phrases';
 import {
@@ -13,7 +19,12 @@ import {
   type SpokenLanguage,
 } from '@/src/i18n/languages';
 import { useAiConfigStore } from '@/src/store/aiConfigStore';
-import { normalizeCategory } from '@/src/theme/tokens';
+import {
+  isSarvamEnabled,
+  sarvamApiKey,
+  sarvamChatJson,
+} from '@/src/services/sarvamChat';
+import { CATEGORIES, normalizeCategory } from '@/src/theme/tokens';
 import type { AiEnrichment } from '@/src/types';
 
 export type EnrichmentResult = AiEnrichment & {
@@ -460,7 +471,10 @@ export function emptySpeechEnrichment(): EnrichmentResult {
   return {
     transcript: '',
     title: 'Voice note',
-    category: 'Business',
+    // Uncategorized, not Business: this thought has not been processed yet
+    // (offline, or no STT key). Once the retry queue transcribes it online,
+    // its real category replaces this.
+    category: 'Uncategorized',
     summary: UNCLEAR_RECORDING_MESSAGE,
     aiStory: null,
     detectedLanguage: '',
@@ -524,6 +538,8 @@ export function enrichIdeaFromDeviceTranscript(input: {
 export function isCloudSttAvailable(): boolean {
   if (process.env.EXPO_PUBLIC_USE_MOCK_AI === 'true') return false;
   if (backendBaseUrl()) return true;
+  // A Sarvam key alone is enough to transcribe+translate, even without Groq.
+  if (isSarvamEnabled()) return true;
   return Boolean(useAiConfigStore.getState().getApiKey());
 }
 
@@ -576,10 +592,15 @@ export async function enrichIdeaFromAudio(input: {
   }
 
   const apiKey = useAiConfigStore.getState().getApiKey();
-  if (apiKey) {
+  // Run the cloud path when EITHER a Groq/OpenAI key OR a Sarvam key is set.
+  // With Sarvam-only, apiKey is '' and Sarvam does the transcription; the AI
+  // Core Insight step (finalizeFromTranscript) degrades gracefully without a
+  // Groq key (see its own guard), so a Sarvam-only setup still produces a
+  // fully translated English Thought.
+  if (apiKey || isSarvamEnabled()) {
     try {
       const live = await enrichWithCloudStt(
-        apiKey,
+        apiKey ?? '',
         input.audioUri,
         uiLanguageCode,
         input.onStage,
@@ -632,7 +653,7 @@ export async function enrichIdeaFromAudio(input: {
   return {
     transcript: '',
     title: 'Voice note',
-    category: 'Business',
+    category: 'Uncategorized',
     summary:
       'Audio saved. Transcription is not set up yet - add a speech-to-text key to generate the transcript.',
     aiStory: null,
@@ -885,6 +906,192 @@ export async function uploadAudioMultipart(input: {
   }
 }
 
+/**
+ * ── Sarvam AI speech-to-text (Indic languages) ────────────────────────────
+ *
+ * WHY Sarvam for Indic audio: Whisper transcribes Indian languages poorly and,
+ * when asked to translate, transliterates instead ("Ashi Banwa Banwi") - which
+ * is exactly the Tamil/Marathi accuracy problem reported. Sarvam's Saaras model
+ * is purpose-built for Indian languages: its /speech-to-text endpoint with
+ * mode="translate" DETECTS the spoken Indic language and returns ENGLISH text
+ * directly, in one call. That single call replaces the whole
+ * Whisper-transcribe -> restore-script -> LLM-translate chain for these
+ * languages, and is far more accurate for Tamil, Telugu, Kannada, Malayalam,
+ * Hindi, Marathi, Gujarati, Bengali, Punjabi and Odia.
+ *
+ * The Groq/LLM path is still used afterwards for the AI Core Insight analysis;
+ * only the transcription+translation step moves to Sarvam.
+ */
+const SARVAM_STT_URL = 'https://api.sarvam.ai/speech-to-text';
+const SARVAM_MODEL = process.env.EXPO_PUBLIC_SARVAM_MODEL?.trim() || 'saaras:v3';
+
+/**
+ * Transcribe + translate one recording to English via Sarvam.
+ *
+ * Sarvam's REST endpoint accepts at most ~30 seconds per request, but the
+ * app's recordings are often longer. So the audio is split into <=25s WAV
+ * chunks (byte-exact, no re-encode - see wavChunker), each chunk is sent to
+ * Sarvam, and the English results are stitched back in order. Nothing is lost
+ * at the seams: chunks overlap by ~1s and the duplicated overlap text is
+ * removed on stitch.
+ *
+ * Returns the English transcript and the detected source language (from the
+ * first chunk that reports one). Throws on failure, with network-recognisable
+ * messages so the existing offline queue keeps working.
+ */
+async function sarvamTranscribeTranslate(
+  apiKey: string,
+  audioUri: string,
+  mime: string,
+): Promise<{ text: string; language?: string }> {
+  // WAV is the app's own recording format; only WAV can be byte-split safely.
+  // Anything else (rare) goes straight to Sarvam as a single request and will
+  // simply error if over 30s, which is acceptable for non-WAV edge cases.
+  const isWav = /\.wav($|\?)/i.test(audioUri) || mime === 'audio/wav';
+  if (!isWav) {
+    return sarvamTranscribeOneFile(apiKey, audioUri, mime);
+  }
+
+  let chunks: WavChunk[] = [];
+  try {
+    chunks = await splitWavIntoChunks(audioUri);
+  } catch (splitError) {
+    /**
+     * WHY we no longer blindly send the whole file on split failure: the whole
+     * point of splitting is that the file is longer than Sarvam's 30s REST
+     * limit. Sending it whole just gets a 400 "exceeds 30 seconds", which is a
+     * worse, more confusing failure than the split error itself. Only fall back
+     * to a single whole-file send when the recording is actually short enough
+     * to succeed; otherwise surface the split error so the caller can handle it
+     * (and the offline queue can retry).
+     */
+    console.warn('WAV split failed', splitError);
+    let durationSec = 0;
+    try {
+      durationSec = await wavDurationSec(audioUri);
+    } catch {
+      durationSec = 0;
+    }
+    if (durationSec > 0 && durationSec <= 28) {
+      return sarvamTranscribeOneFile(apiKey, audioUri, mime);
+    }
+    throw splitError instanceof Error
+      ? splitError
+      : new Error('Could not split the recording for transcription.');
+  }
+
+  try {
+    if (chunks.length === 1) {
+      const only = await sarvamTranscribeOneFile(apiKey, chunks[0].uri, 'audio/wav');
+      return only;
+    }
+
+    const pieces: string[] = [];
+    let language: string | undefined;
+
+    // Sequential, not parallel: keeps order guaranteed, avoids hammering the
+    // rate limit, and lets a network error surface immediately so the offline
+    // queue can retry the whole recording rather than a half-done stitch.
+    for (const chunk of chunks) {
+      const part = await sarvamTranscribeOneFile(apiKey, chunk.uri, 'audio/wav');
+      if (!language && part.language) language = part.language;
+      pieces.push(part.text ?? '');
+    }
+
+    return { text: stitchChunks(pieces), language };
+  } finally {
+    void cleanupChunks(chunks);
+  }
+}
+
+/**
+ * Join per-chunk English texts, dropping the duplicated words that come from
+ * the ~1s overlap each chunk shares with the previous one. A light word-level
+ * de-dup: if the end of the accumulated text and the start of the next piece
+ * share a run of words, the shared run is written once.
+ */
+function stitchChunks(pieces: string[]): string {
+  const clean = pieces.map((p) => p.replace(/\s+/g, ' ').trim()).filter(Boolean);
+  if (clean.length === 0) return '';
+  let out = clean[0];
+
+  for (let i = 1; i < clean.length; i++) {
+    const next = clean[i];
+    const prevWords = out.split(' ');
+    const nextWords = next.split(' ');
+
+    // Look for the largest overlap (up to ~12 words) between the tail of `out`
+    // and the head of `next`, comparing case/punctuation-insensitively.
+    const norm = (w: string) => w.toLowerCase().replace(/[^a-z0-9]/g, '');
+    const maxK = Math.min(12, prevWords.length, nextWords.length);
+    let bestK = 0;
+    for (let k = maxK; k >= 2; k--) {
+      const tail = prevWords.slice(prevWords.length - k).map(norm).join(' ');
+      const head = nextWords.slice(0, k).map(norm).join(' ');
+      if (tail && tail === head) {
+        bestK = k;
+        break;
+      }
+    }
+    const joined = bestK > 0 ? nextWords.slice(bestK).join(' ') : next;
+    out = joined ? `${out} ${joined}`.trim() : out;
+  }
+
+  return out;
+}
+
+/** Send exactly one audio file (<=30s) to Sarvam and return its result. */
+async function sarvamTranscribeOneFile(
+  apiKey: string,
+  audioUri: string,
+  mime: string,
+): Promise<{ text: string; language?: string }> {
+  const { name: fileName } = mimeAndName(audioUri);
+
+  const uploadResult = await uploadAudioMultipart({
+    url: SARVAM_STT_URL,
+    audioUri,
+    mime,
+    fileName,
+    // Sarvam authenticates with a subscription-key header, not a Bearer token.
+    headers: { 'api-subscription-key': apiKey },
+    fields: {
+      model: SARVAM_MODEL,
+      // "translate" = detect the Indic language and return English directly.
+      mode: 'translate',
+    },
+  });
+
+  if (uploadResult.status === 429) {
+    throw new Error(`Sarvam rate limit (429): ${uploadResult.body.slice(0, 180)}`);
+  }
+  if (uploadResult.status === 401 || uploadResult.status === 403) {
+    throw new Error(`Sarvam auth error ${uploadResult.status}: invalid API key`);
+  }
+  if (uploadResult.status === 413 || uploadResult.status === 422) {
+    throw new Error(
+      `Sarvam could not process this audio (${uploadResult.status}).`,
+    );
+  }
+  if (uploadResult.status < 200 || uploadResult.status >= 300) {
+    throw new Error(`Sarvam error ${uploadResult.status}: ${uploadResult.body.slice(0, 180)}`);
+  }
+
+  try {
+    const json = JSON.parse(uploadResult.body) as {
+      transcript?: string;
+      language_code?: string;
+      request_id?: string;
+    };
+    return {
+      text: (json.transcript ?? '').trim(),
+      language: json.language_code ?? undefined,
+    };
+  } catch {
+    throw new Error('Sarvam returned an invalid response.');
+  }
+}
+
 async function whisperTranscribe(
   provider: ReturnType<typeof providerConfig>,
   apiKey: string,
@@ -1108,14 +1315,68 @@ async function enrichWithCloudStt(
   if (typeof info.size === 'number' && info.size < 32000) {
     throw new Error('This recording is too short to produce a Thought.');
   }
+
+  const provider = providerConfig(apiKey);
+  const { mime } = mimeAndName(resolved);
+
+  /**
+   * Sarvam runs FIRST and, when configured, is the only transcription path:
+   * it detects the spoken Indic language and returns English directly, and it
+   * handles ANY length by splitting the WAV into <=25s chunks internally (see
+   * sarvamTranscribeTranslate). So the 25 MB Whisper size cap below does not
+   * apply here - a long recording is fine.
+   *
+   * The transcript is already English, so the later toEnglish() pass in
+   * processRecording.ts sees English and leaves it untouched. Only the AI Core
+   * Insight step (finalizeFromTranscript) runs afterwards, on English; with a
+   * Sarvam-only setup (no Groq key) it degrades to a local title/summary.
+   *
+   * A NETWORK error propagates (so the offline queue retries). Any other
+   * Sarvam error is surfaced too rather than silently falling back - this is a
+   * Sarvam-only configuration by request, so a hidden Whisper fallback would
+   * mask real Sarvam problems.
+   */
+  if (isSarvamEnabled()) {
+    const sarvamKey = sarvamApiKey();
+    if (sarvamKey) {
+      onStage?.('transcribing');
+      const sarvam = await sarvamTranscribeTranslate(sarvamKey, resolved, mime);
+      const cleaned = collapseRepeatedPhrases(
+        stripSpokenCommands(stripSeedEcho(sarvam.text)),
+      );
+      if (!cleaned) {
+        throw new Error('No speech detected in this recording. Try speaking more clearly.');
+      }
+      // Sarvam's "translate" mode already returned ENGLISH text, so build the
+      // enrichment in English and finalise in English.
+      const englishLang = resolveSpokenLanguage('en', uiLanguageCode);
+      const enrichment = await finalizeFromTranscript(
+        provider,
+        apiKey,
+        cleaned,
+        englishLang,
+        onStage,
+      );
+      /**
+       * WHY detectedLanguage is set to 'en', not the spoken source language:
+       * the transcript is already English (Sarvam translated it). Downstream,
+       * processRecording.ts calls toEnglish(transcript, detectedLanguage) and
+       * only translates when detectedLanguage is non-English. Reporting the
+       * original Tamil/Hindi code here would make it try to translate text
+       * that is already English - pointless, and with Groq removed it cannot
+       * anyway. 'en' tells the pipeline the text is final English, so the
+       * toEnglish pass correctly skips it.
+       */
+      return { ...enrichment, detectedLanguage: 'en' };
+    }
+  }
+
+  // ── Whisper fallback (only when Sarvam is NOT configured) ────────────────
   if (typeof info.size === 'number' && info.size > MAX_STT_UPLOAD_BYTES) {
     throw new Error(
       'Recording is too long for transcription (max ~25 MB). Record a shorter clip or enable server-side chunking.',
     );
   }
-
-  const provider = providerConfig(apiKey);
-  const { mime } = mimeAndName(resolved);
 
   const whisper = await whisperTranscribe(
     provider,
@@ -1276,6 +1537,68 @@ Return JSON: { "transcript": string }`,
   }
 }
 
+/**
+ * Build the full enrichment (title, summary, category, aiStory) with Sarvam's
+ * chat model. This is the Groq replacement: every LLM job Groq did in
+ * finalizeFromTranscript now runs on Sarvam instead, so a Sarvam-only setup
+ * gets real LLM-quality titles/summaries/categories - not keyword/first-words
+ * heuristics.
+ *
+ * The transcript is already finished English (from Sarvam STT), so this asks
+ * only for the derived fields and echoes the transcript back unchanged.
+ * Falls back to local helpers per-field if Sarvam is unreachable, so a network
+ * blip downgrades quality rather than breaking the save.
+ */
+async function finalizeWithSarvam(
+  transcript: string,
+  targetLang: SpokenLanguage,
+  onStage?: (stage: 'transcribing' | 'extracting' | 'summarizing') => void,
+): Promise<AiEnrichment> {
+  onStage?.('extracting');
+  onStage?.('summarizing');
+
+  const categoryList = CATEGORIES.filter((c) => c !== 'All').join(', ');
+  const system =
+    'You organise a short personal voice note that has already been transcribed to English. ' +
+    'Return ONLY a JSON object with these keys: title, category, summary. ' +
+    `title: at most 8 words, a natural headline for the note. ` +
+    `category: exactly one of these words: ${categoryList}. Judge what the note is about, not which words it uses; if nothing fits clearly use Business. ` +
+    'summary: one or two sentences capturing the note, in English. ' +
+    'Do not add any other text, keys, or commentary.';
+
+  const parsed = await sarvamChatJson<{
+    title?: string;
+    category?: string;
+    summary?: string;
+  }>(
+    [
+      { role: 'system', content: system },
+      { role: 'user', content: transcript.slice(0, 4000) },
+    ],
+    { maxTokens: 512, timeoutMs: 20_000 },
+  );
+
+  const title =
+    (parsed?.title ?? '').trim() || titleFromTranscript(transcript);
+  const summary =
+    (parsed?.summary ?? '').trim() || summaryFromTranscript(transcript);
+  // Category: trust Sarvam's answer if it matches a known category, else the
+  // dedicated categorizeWithLlm pass (also Sarvam) will refine it downstream;
+  // guessCategory is the last-resort keyword fallback.
+  const rawCat = (parsed?.category ?? '').toLowerCase();
+  const matched = CATEGORIES.find((c) => c !== 'All' && rawCat.includes(c.toLowerCase()));
+  const category = matched ? normalizeCategory(matched) : guessCategory(transcript);
+
+  return {
+    title,
+    category,
+    summary,
+    transcript,
+    aiStory: summary,
+    detectedLanguage: targetLang.code,
+  };
+}
+
 async function finalizeFromTranscript(
   provider: ReturnType<typeof providerConfig>,
   apiKey: string,
@@ -1285,6 +1608,17 @@ async function finalizeFromTranscript(
 ): Promise<AiEnrichment> {
   if (!transcript) {
     throw new Error('No speech detected in this recording. Try speaking more clearly.');
+  }
+
+  /**
+   * WHY Sarvam handles this when there is no Groq/OpenAI key: Groq is removed
+   * from the app, so the only LLM available for the title/summary/category is
+   * Sarvam. finalizeWithSarvam produces real LLM-quality fields (not the crude
+   * first-8-words heuristic), keeping a Sarvam-only setup fully functional.
+   * The AI Core Insight remains the separate backend analyze endpoint.
+   */
+  if (!apiKey) {
+    return finalizeWithSarvam(transcript, targetLang, onStage);
   }
 
   onStage?.('extracting');
