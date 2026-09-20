@@ -17,12 +17,19 @@
         "buildType": "apk"
       },
       "env": {
-        "EXPO_PUBLIC_GROQ_API_KEY": ""
+        "EXPO_PUBLIC_SARVAM_API_KEY": "",
+        "EXPO_PUBLIC_SARVAM_MODEL": "saaras:v3",
+        "EXPO_PUBLIC_SARVAM_CHAT_MODEL": "sarvam-105b"
       }
     },
     "production": {
       "android": {
         "buildType": "apk"
+      },
+      "env": {
+        "EXPO_PUBLIC_SARVAM_API_KEY": "",
+        "EXPO_PUBLIC_SARVAM_MODEL": "saaras:v3",
+        "EXPO_PUBLIC_SARVAM_CHAT_MODEL": "sarvam-105b"
       }
     }
   },
