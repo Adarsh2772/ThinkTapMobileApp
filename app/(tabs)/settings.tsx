@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState } from "react";
 import {
   Alert,
   PermissionsAndroid,
@@ -10,24 +10,28 @@ import {
   Switch,
   Text,
   View,
-} from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
+} from "react-native";
+import {
+  SafeAreaView,
+  useSafeAreaInsets,
+} from "react-native-safe-area-context";
 
-import { ScreenHeader } from '@/src/components/ScreenHeader';
-import { SubscribeModal } from '@/src/components/SubscribeModal';
-import { Button } from '@/src/components/ui';
-import { supportsAudioWithLiveTranscript } from '@/src/features/capture/captureMode';
-import { useAuthStore } from '@/src/store/authStore';
-import { useSettingsStore } from '@/src/store/settingsStore';
-import { AndroidWakeWord } from 'android-wake-word';
-import { buildReport, clearLogs, logCount } from '@/src/services/diagnostics';
-import { queueSize } from '@/src/services/transcriptionQueue';
-import { SHOW_DIAGNOSTICS } from '@/src/config/features';
-import { useSubscriptionStore } from '@/src/store/subscriptionStore';
-import { useWakeWordStore } from '@/src/store/wakeWordStore';
-import { colors, fonts, radii, spacing, typography } from '@/src/theme/tokens';
+import { ScreenHeader } from "@/src/components/ScreenHeader";
+import { SubscribeModal } from "@/src/components/SubscribeModal";
+import { Button } from "@/src/components/ui";
+import { SHOW_DIAGNOSTICS } from "@/src/config/features";
+import { supportsAudioWithLiveTranscript } from "@/src/features/capture/captureMode";
+import { buildReport, clearLogs, logCount } from "@/src/services/diagnostics";
+import { queueSize } from "@/src/services/transcriptionQueue";
+import { useAuthStore } from "@/src/store/authStore";
+import { useSettingsStore } from "@/src/store/settingsStore";
+import { useSubscriptionStore } from "@/src/store/subscriptionStore";
+import { useWakeWordStore } from "@/src/store/wakeWordStore";
+import { colors, fonts, radii, spacing, typography } from "@/src/theme/tokens";
+import { AndroidWakeWord } from "android-wake-word";
 
 export default function SettingsScreen() {
+  const insets = useSafeAreaInsets();
   const user = useAuthStore((s) => s.session?.user);
   const tx = useSettingsStore((s) => s.tx);
   const subscription = useSubscriptionStore((s) => s.profile);
@@ -54,7 +58,7 @@ export default function SettingsScreen() {
       wakeEnabled,
       wakeAvailable,
       wakeListening,
-      lastHeard: wakeLastHeard ?? '(none)',
+      lastHeard: wakeLastHeard ?? "(none)",
       serviceListening: AndroidWakeWord.isListening(),
       serviceRecording: AndroidWakeWord.isRecording(),
       modelReady: AndroidWakeWord.isModelReady(),
@@ -65,9 +69,12 @@ export default function SettingsScreen() {
       speechLocale: useSettingsStore.getState().speechLocale,
     });
     try {
-      await Share.share({ message: report, title: 'ThinkTap diagnostics' });
+      await Share.share({ message: report, title: "ThinkTap diagnostics" });
     } catch (e) {
-      Alert.alert('Could not share', e instanceof Error ? e.message : 'Unknown error');
+      Alert.alert(
+        "Could not share",
+        e instanceof Error ? e.message : "Unknown error",
+      );
     }
   };
 
@@ -76,42 +83,58 @@ export default function SettingsScreen() {
       await setWakeEnabled(false);
       return;
     }
-    if (Platform.OS === 'android') {
+    if (Platform.OS === "android") {
       const mic = await PermissionsAndroid.request(
         PermissionsAndroid.PERMISSIONS.RECORD_AUDIO,
       );
       if (mic !== PermissionsAndroid.RESULTS.GRANTED) {
-        Alert.alert('Permission needed', 'Microphone access is required for Hey Think Tap.');
+        Alert.alert(
+          "Permission needed",
+          "Microphone access is required for Hey Think Tap.",
+        );
         return;
       }
       if (Platform.Version >= 33) {
-        await PermissionsAndroid.request(PermissionsAndroid.PERMISSIONS.POST_NOTIFICATIONS);
+        await PermissionsAndroid.request(
+          PermissionsAndroid.PERMISSIONS.POST_NOTIFICATIONS,
+        );
       }
     }
     await setWakeEnabled(true);
   };
 
   return (
-    <SafeAreaView style={styles.safe} edges={['top']}>
-      <ScrollView contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled">
-        <ScreenHeader title={tx('settings')} subtitle={tx('profile')} />
+    <SafeAreaView style={styles.safe} edges={["top", "bottom"]}>
+      <ScrollView
+        contentContainerStyle={[
+          styles.content,
+          // Generous bottom padding so the last card (app version) always
+          // clears the on-screen nav bar / gesture area, even on devices that
+          // under-report insets.bottom. edges now includes 'bottom' so the
+          // SafeAreaView frame itself also respects the nav area.
+          { paddingBottom: 64 + Math.max(insets.bottom, 24) },
+        ]}
+        showsVerticalScrollIndicator={false}
+        keyboardShouldPersistTaps="handled"
+      >
+        <ScreenHeader title={tx("settings")} subtitle={tx("profile")} />
 
         <View style={[styles.card, styles.cardAccent]}>
-          <Text style={styles.label}>{tx('profile')}</Text>
+          <Text style={styles.label}>{tx("profile")}</Text>
           <Text style={styles.value}>
             {user?.firstName} {user?.lastName}
           </Text>
           <Text style={styles.meta}>Local guest mode — no login required</Text>
           {subscription ? (
             <View style={styles.trialPill}>
-              <Text style={styles.trialPillText}>{tx('freeTrialActive')}</Text>
+              <Text style={styles.trialPillText}>{tx("freeTrialActive")}</Text>
             </View>
           ) : null}
           <View style={styles.subscribeWrap}>
             <Button
-              title={subscription ? tx('updateSubscription') : tx('subscribe')}
+              title={subscription ? tx("updateSubscription") : tx("subscribe")}
               onPress={() => setSubscribeOpen(true)}
-              variant={subscription ? 'secondary' : 'primary'}
+              variant={subscription ? "secondary" : "primary"}
             />
           </View>
         </View>
@@ -127,7 +150,10 @@ export default function SettingsScreen() {
             <Switch
               value={wakeEnabled}
               onValueChange={(v) => void onToggleWake(v)}
-              trackColor={{ false: colors.outlineVariant, true: colors.secondary }}
+              trackColor={{
+                false: colors.outlineVariant,
+                true: colors.secondary,
+              }}
               thumbColor={colors.surfaceContainerLowest}
             />
           </View>
@@ -138,11 +164,11 @@ export default function SettingsScreen() {
             resume” when you come back.
             {wakeEnabled
               ? wakeAvailable === false
-                ? ' Speech recognition is unavailable on this device/build.'
+                ? " Speech recognition is unavailable on this device/build."
                 : wakeListening
-                  ? ' Listening…'
-                  : ' Enabled.'
-              : ''}
+                  ? " Listening…"
+                  : " Enabled."
+              : ""}
           </Text>
           {wakeEnabled && wakeLastHeard ? (
             <Text style={styles.hint}>Last heard: “{wakeLastHeard}”</Text>
@@ -158,19 +184,19 @@ export default function SettingsScreen() {
           <View style={styles.cmdList}>
             <Text style={styles.cmdRow}>
               <Text style={styles.cmd}>“Hey Think Tap start”</Text>
-              {'  '}begin recording
+              {"  "}begin recording
             </Text>
             <Text style={styles.cmdRow}>
               <Text style={styles.cmd}>“Hey Think Tap stop”</Text>
-              {'  '}finish and save
+              {"  "}finish and save
             </Text>
             <Text style={styles.cmdRow}>
               <Text style={styles.cmd}>“Hey Think Tap pause”</Text>
-              {'  '}pause
+              {"  "}pause
             </Text>
             <Text style={styles.cmdRow}>
               <Text style={styles.cmd}>“Hey Think Tap resume”</Text>
-              {'  '}continue
+              {"  "}continue
             </Text>
           </View>
           <Text style={styles.hint}>
@@ -191,42 +217,43 @@ export default function SettingsScreen() {
           </View>
         ) : null}
 
-        <View style={styles.card}>
-          <Text style={styles.label}>{tx('comingSoon')}</Text>
-          <Text style={styles.meta}>Biometrics · iOS always-on wake word</Text>
-        </View>
-
         {SHOW_DIAGNOSTICS ? (
-        <View style={styles.card}>
-          <Text style={styles.label}>Diagnostics</Text>
-          <Text style={styles.value}>Share a report with the developer</Text>
-          <Text style={styles.hint}>
-            Includes recent warnings and device state. Use this when reporting a
-            problem. No recordings or transcripts are included.
-          </Text>
-          <View style={styles.subscribeWrap}>
-            <Button title="Share diagnostics" onPress={() => void onShareDiagnostics()} />
-          </View>
-          <Pressable
-            onPress={() => {
-              clearLogs();
-              Alert.alert('Cleared', 'Diagnostic log cleared.');
-            }}
-          >
-            <Text style={[styles.hint, { textDecorationLine: 'underline' }]}>
-              Clear log ({logCount()} entries)
+          <View style={styles.card}>
+            <Text style={styles.label}>Diagnostics</Text>
+            <Text style={styles.value}>Share a report with the developer</Text>
+            <Text style={styles.hint}>
+              Includes recent warnings and device state. Use this when reporting
+              a problem. No recordings or transcripts are included.
             </Text>
-          </Pressable>
-        </View>
+            <View style={styles.subscribeWrap}>
+              <Button
+                title="Share diagnostics"
+                onPress={() => void onShareDiagnostics()}
+              />
+            </View>
+            <Pressable
+              onPress={() => {
+                clearLogs();
+                Alert.alert("Cleared", "Diagnostic log cleared.");
+              }}
+            >
+              <Text style={[styles.hint, { textDecorationLine: "underline" }]}>
+                Clear log ({logCount()} entries)
+              </Text>
+            </Pressable>
+          </View>
         ) : null}
 
         <View style={styles.card}>
-          <Text style={styles.label}>{tx('appVersion')}</Text>
+          <Text style={styles.label}>{tx("appVersion")}</Text>
           <Text style={styles.meta}>1.0.0 · MVP</Text>
         </View>
       </ScrollView>
 
-      <SubscribeModal visible={subscribeOpen} onClose={() => setSubscribeOpen(false)} />
+      <SubscribeModal
+        visible={subscribeOpen}
+        onClose={() => setSubscribeOpen(false)}
+      />
     </SafeAreaView>
   );
 }
@@ -240,7 +267,7 @@ const styles = StyleSheet.create({
   },
   cmd: { fontFamily: fonts.bodySemi, color: colors.onSurface },
   safe: { flex: 1, backgroundColor: colors.background },
-  content: { padding: spacing.containerMargin, gap: spacing.stackMd, paddingBottom: 40 },
+  content: { padding: spacing.containerMargin, gap: spacing.stackMd },
   card: {
     backgroundColor: colors.surfaceContainerLowest,
     borderWidth: 1,
@@ -271,7 +298,7 @@ const styles = StyleSheet.create({
   },
   subscribeWrap: { marginTop: spacing.stackMd },
   trialPill: {
-    alignSelf: 'flex-start',
+    alignSelf: "flex-start",
     marginTop: 10,
     backgroundColor: colors.successSoft,
     paddingHorizontal: 10,
@@ -284,8 +311,8 @@ const styles = StyleSheet.create({
     color: colors.success,
   },
   wakeRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
+    flexDirection: "row",
+    alignItems: "center",
     gap: 12,
   },
   hint: {

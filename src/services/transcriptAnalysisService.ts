@@ -1,4 +1,5 @@
 import type { TranscriptAnalysis } from '@/src/types';
+import { isSarvamEnabled, sarvamChatJson } from '@/src/services/sarvamChat';
 
 const DEFAULT_ANALYZE_URL = 'https://thinktapai.shastrarth.in/api/v1/transcripts/analyze';
 
@@ -68,15 +69,57 @@ export function hasAnalysisContent(analysis: TranscriptAnalysis | null | undefin
 }
 
 /**
- * POST raw recording transcript → structured statement buckets.
- * https://thinktapai.shastrarth.in/api/v1/transcripts/analyze
+ * Generate the AI Core Insight with SARVAM (the primary provider per CR).
+ *
+ * Returns a TranscriptAnalysis on success, or null on any recoverable failure
+ * (no key, offline, timeout, bad/empty response) so the caller can fall back
+ * to Saarthi.ai. Never throws - a thrown error would defeat the fallback.
+ *
+ * The two fields V1 exposes are the AI Core Insight (a faithful, non-expansive
+ * compression) and the Source of Inspiration (what sparked the thought). Same
+ * shape the Saarthi.ai backend returns, so the rest of the app is unchanged.
  */
-export async function analyzeTranscript(transcript: string): Promise<TranscriptAnalysis> {
-  const cleaned = transcript.replace(/\s+/g, ' ').trim();
-  if (!cleaned) {
-    throw new Error('No speech detected in this recording. Try speaking more clearly.');
-  }
+async function analyzeWithSarvam(cleaned: string): Promise<TranscriptAnalysis | null> {
+  if (!isSarvamEnabled()) return null;
 
+  const system =
+    'You analyse a single personal voice note (already in English) and return ONLY a JSON object ' +
+    'with exactly these keys: source_of_inspiration, ai_core_insight.\n' +
+    '- source_of_inspiration: what sparked this thought - the trigger, moment or observation the ' +
+    'speaker names. If they do not say, use an empty string. Use their own wording; do not invent.\n' +
+    '- ai_core_insight: a FAITHFUL, NON-EXPANSIVE compression of what the speaker actually said - a ' +
+    'short, clear restatement. Do NOT add new ideas, opportunities, directions or applications the ' +
+    'speaker did not voice. One or two sentences. If the thought is thin, restate it plainly.\n' +
+    'Return only the JSON object, no other text.';
+
+  const parsed = await sarvamChatJson<{
+    source_of_inspiration?: string;
+    ai_core_insight?: string;
+  }>(
+    [
+      { role: 'system', content: system },
+      { role: 'user', content: cleaned.slice(0, 4000) },
+    ],
+    { maxTokens: 512, timeoutMs: 20_000 },
+  );
+
+  if (!parsed) return null;
+  const insight = asText(parsed.ai_core_insight);
+  const source = asText(parsed.source_of_inspiration);
+  // Treat an empty insight as a failure so we fall back rather than store blank.
+  if (!insight && !source) return null;
+
+  return {
+    thought: insight,
+    sourceOfInspiration: source,
+    potentialValue: '',
+    expansionPaths: '',
+    connectedThoughts: '',
+  };
+}
+
+/** Saarthi.ai (existing backend) analyze call - the FALLBACK provider. */
+async function analyzeWithSaarthi(cleaned: string): Promise<TranscriptAnalysis> {
   const response = await fetch(analyzeUrl(), {
     method: 'POST',
     headers: {
@@ -99,4 +142,33 @@ export async function analyzeTranscript(transcript: string): Promise<TranscriptA
 
   const json = (await response.json()) as ApiResponse;
   return mapResponse(json);
+}
+
+/**
+ * Generate the AI Core Insight.
+ *
+ * Provider order per CR: SARVAM primary, Saarthi.ai fallback.
+ *   1. Try Sarvam. If it returns a usable insight, use it.
+ *   2. On any recoverable Sarvam failure (no key, timeout, network, empty or
+ *      invalid response), fall back to the existing Saarthi.ai backend.
+ * All existing Saarthi.ai behaviour, response parsing and error handling is
+ * preserved - it is simply now the second choice rather than the only one.
+ */
+export async function analyzeTranscript(transcript: string): Promise<TranscriptAnalysis> {
+  const cleaned = transcript.replace(/\s+/g, ' ').trim();
+  if (!cleaned) {
+    throw new Error('No speech detected in this recording. Try speaking more clearly.');
+  }
+
+  // 1) Primary: Sarvam. analyzeWithSarvam never throws - null means "fall back".
+  try {
+    const sarvam = await analyzeWithSarvam(cleaned);
+    if (sarvam) return sarvam;
+  } catch {
+    // Defensive: even an unexpected throw must not block the fallback.
+  }
+
+  // 2) Fallback: Saarthi.ai (existing backend). This may throw, exactly as
+  // before, and the caller's existing error handling deals with it.
+  return analyzeWithSaarthi(cleaned);
 }

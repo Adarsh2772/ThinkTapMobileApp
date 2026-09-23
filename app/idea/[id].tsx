@@ -1,6 +1,6 @@
-import { Ionicons } from '@expo/vector-icons';
-import { useLocalSearchParams, useRouter } from 'expo-router';
-import { useEffect, useState } from 'react';
+import { Ionicons } from "@expo/vector-icons";
+import { useLocalSearchParams, useRouter } from "expo-router";
+import { useEffect, useState } from "react";
 import {
   ActivityIndicator,
   Alert,
@@ -10,22 +10,32 @@ import {
   StyleSheet,
   Text,
   View,
-} from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
+} from "react-native";
+import { SafeAreaView } from "react-native-safe-area-context";
 
-import { AudioPlayer } from '@/src/components/AudioPlayer';
+import { AudioPlayer } from "@/src/components/AudioPlayer";
+import { DeleteThoughtDialog } from "@/src/components/DeleteThoughtDialog";
+import {
+  findLanguageByWhisperCode,
+  resolveSpokenLanguage,
+} from "@/src/i18n/languages";
 import {
   processTranscriptionQueue,
   queueStatus,
   retryNow,
   type QueueStatus,
-} from '@/src/services/transcriptionQueue';
-import { DeleteThoughtDialog } from '@/src/components/DeleteThoughtDialog';
-import { findLanguageByWhisperCode, resolveSpokenLanguage } from '@/src/i18n/languages';
-import { useIdeasStore } from '@/src/store/ideasStore';
-import { categoryColor, colors, fonts, radii, spacing, typography } from '@/src/theme/tokens';
-import type { TranscriptAnalysis } from '@/src/types';
-import { relativeDate } from '@/src/utils/format';
+} from "@/src/services/transcriptionQueue";
+import { useIdeasStore } from "@/src/store/ideasStore";
+import {
+  categoryColor,
+  colors,
+  fonts,
+  radii,
+  spacing,
+  typography,
+} from "@/src/theme/tokens";
+import type { TranscriptAnalysis } from "@/src/types";
+import { relativeDate } from "@/src/utils/format";
 
 type AnalysisField = {
   key: keyof TranscriptAnalysis;
@@ -61,16 +71,16 @@ type AnalysisField = {
  */
 const ANALYSIS_FIELDS: AnalysisField[] = [
   {
-    key: 'sourceOfInspiration',
-    label: 'Source of inspiration',
-    icon: 'sparkles-outline',
-    accent: '#0EA5E9',
-    soft: '#E0F2FE',
+    key: "sourceOfInspiration",
+    label: "Source of inspiration",
+    icon: "sparkles-outline",
+    accent: "#0EA5E9",
+    soft: "#E0F2FE",
   },
   {
-    key: 'thought',
-    label: 'AI Core Insight',
-    icon: 'bulb-outline',
+    key: "thought",
+    label: "AI Core Insight",
+    icon: "bulb-outline",
     accent: colors.secondary,
     soft: colors.secondarySoft,
   },
@@ -80,16 +90,20 @@ export default function IdeaDetailScreen() {
   const params = useLocalSearchParams<{ id: string | string[] }>();
   const id = Array.isArray(params.id) ? params.id[0] : params.id;
   const router = useRouter();
-  const idea = useIdeasStore((s) => (id ? s.ideas.find((item) => item.id === id) : undefined));
-  const updateIdea = useIdeasStore((s) => s.updateIdea);
+  const idea = useIdeasStore((s) =>
+    id ? s.ideas.find((item) => item.id === id) : undefined,
+  );
+  // (star action removed per CR; updateIdea selector no longer needed here)
   const deleteIdea = useIdeasStore((s) => s.deleteIdea);
   const touchIdea = useIdeasStore((s) => s.touchIdea);
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [, forceTick] = useState(0);
-  const knownLanguage = idea ? findLanguageByWhisperCode(idea.language) : undefined;
+  const knownLanguage = idea
+    ? findLanguageByWhisperCode(idea.language)
+    : undefined;
   const spoken = idea ? resolveSpokenLanguage(idea.language) : null;
-  const isLive = idea?.transcriptSource === 'live';
-  const isDevice = idea?.transcriptSource === 'device';
+  const isLive = idea?.transcriptSource === "live";
+  const isDevice = idea?.transcriptSource === "device";
 
   /**
    * WHY a pending state: the thought is saved the moment you press stop so the
@@ -98,7 +112,7 @@ export default function IdeaDetailScreen() {
    * read as "transcription failed" - the text only seemed to appear when
    * something else caused a re-render.
    */
-  const transcriptText = (idea?.transcript ?? '').trim();
+  const transcriptText = (idea?.transcript ?? "").trim();
   const createdAtMs = idea?.createdAt ? new Date(idea.createdAt).getTime() : 0;
   const updatedAtMs = idea?.updatedAt ? new Date(idea.updatedAt).getTime() : 0;
 
@@ -120,8 +134,18 @@ export default function IdeaDetailScreen() {
    * offers no way forward. Knowing the recording is waiting for a connection -
    * and being able to retry - is the difference between a bug and a status.
    */
-  const [qStatus, setQStatus] = useState<QueueStatus>({ state: 'none' });
+  const [qStatus, setQStatus] = useState<QueueStatus>({ state: "none" });
   const [retrying, setRetrying] = useState(false);
+  /**
+   * Which detail tab is showing. Defaults to 'thought' per CR: opening a
+   * thought must land on the Thought tab, never Human Signal or AI Core
+   * Insight. Switching tabs only changes this state - it never navigates away,
+   * so the selected tab stays active while viewing the thought and no state is
+   * lost.
+   */
+  const [activeTab, setActiveTab] = useState<"thought" | "insight" | "signal">(
+    "thought",
+  );
 
   /**
    * WHY the poll: the queue retries on its own every 15 seconds, so the moment
@@ -164,7 +188,7 @@ export default function IdeaDetailScreen() {
     const result = await retryNow(idea.id);
     setRetrying(false);
     if (!result.ok) {
-      Alert.alert('Could not transcribe', result.reason);
+      Alert.alert("Could not transcribe", result.reason);
     }
   };
   /**
@@ -179,10 +203,10 @@ export default function IdeaDetailScreen() {
    * guess, with its own staleness cap so a killed-mid-attempt app cannot
    * leave this stuck true forever either.
    */
-  const transcribing = !transcriptText && qStatus.state === 'attempting';
+  const transcribing = !transcriptText && qStatus.state === "attempting";
 
   const goBack = () => {
-    router.replace('/(tabs)/ideas');
+    router.replace("/(tabs)/ideas");
   };
 
   /**
@@ -197,8 +221,8 @@ export default function IdeaDetailScreen() {
   }, []);
 
   useEffect(() => {
-    const sub = BackHandler.addEventListener('hardwareBackPress', () => {
-      router.replace('/(tabs)/ideas');
+    const sub = BackHandler.addEventListener("hardwareBackPress", () => {
+      router.replace("/(tabs)/ideas");
       return true;
     });
     return () => sub.remove();
@@ -225,7 +249,7 @@ export default function IdeaDetailScreen() {
   const onDeleteConfirm = async () => {
     setConfirmDelete(false);
     await deleteIdea(idea.id);
-    router.replace('/(tabs)/ideas');
+    router.replace("/(tabs)/ideas");
   };
 
   /**
@@ -233,46 +257,44 @@ export default function IdeaDetailScreen() {
    * alongside fabricated content, which read as if the app had transcribed
    * something. When there is no transcript, say so plainly.
    */
-  const hasTranscript = Boolean((idea.transcript ?? '').trim());
+  const hasTranscript = Boolean((idea.transcript ?? "").trim());
   void hasTranscript;
   // Every non-English recording now goes through a translation pass (see
   // processRecording.ts), so what's shown below is translated English, not
   // a raw transcript, whenever the spoken language wasn't English already.
-  const wasTranslated = Boolean(idea.language?.trim()) && !idea.language!.toLowerCase().startsWith('en');
+  const wasTranslated =
+    Boolean(idea.language?.trim()) &&
+    !idea.language!.toLowerCase().startsWith("en");
   const sourceLabel = isDevice
-    ? 'Transcribed on this device'
+    ? "Transcribed on this device"
     : isLive
       ? wasTranslated
-        ? 'Translated to English from your recording'
-        : 'Transcribed from your recording'
+        ? "Translated to English from your recording"
+        : "Transcribed from your recording"
       : hasTranscript
-        ? 'Sample content — not your recording'
-        : 'Transcript not available — audio is saved and can be transcribed later';
+        ? "Sample content — not your recording"
+        : "Transcript not available — audio is saved and can be transcribed later";
   const tint = categoryColor(idea.category);
   const analysis = idea.analysis ?? null;
   const showAnalysis = analysis !== null;
 
   return (
-    <SafeAreaView style={styles.safe} edges={['top']}>
+    <SafeAreaView style={styles.safe} edges={["top"]}>
       <View style={styles.topBar}>
-        <Pressable onPress={goBack} hitSlop={12} style={styles.iconBtn} accessibilityLabel="Go back">
+        <Pressable
+          onPress={goBack}
+          hitSlop={12}
+          style={styles.iconBtn}
+          accessibilityLabel="Go back"
+        >
           <Ionicons name="arrow-back" size={22} color={colors.primary} />
         </Pressable>
-        <View style={[styles.brandHit, { pointerEvents: 'none' }]}>
+        <View style={[styles.brandHit, { pointerEvents: "none" }]}>
           <Text style={styles.brand}>Think Tap</Text>
         </View>
         <View style={styles.topActions}>
-          <Pressable
-            onPress={() => void updateIdea(idea.id, { favorite: !idea.favorite })}
-            hitSlop={12}
-            style={styles.iconBtn}
-          >
-            <Ionicons
-              name={idea.favorite ? 'star' : 'star-outline'}
-              size={22}
-              color={idea.favorite ? colors.accent : colors.primary}
-            />
-          </Pressable>
+          {/* Star action removed per CR - it had no functionality. Delete and
+              recording controls are unaffected. */}
           <Pressable
             onPress={() => setConfirmDelete(true)}
             hitSlop={12}
@@ -284,14 +306,17 @@ export default function IdeaDetailScreen() {
         </View>
       </View>
 
-      <ScrollView contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
+      <ScrollView
+        contentContainerStyle={styles.content}
+        showsVerticalScrollIndicator={false}
+      >
         <View style={styles.metaRow}>
           <View style={[styles.category, { backgroundColor: tint.bg }]}>
             <Text style={styles.categoryText}>{idea.category}</Text>
           </View>
           {idea.language?.trim() && spoken ? (
             <Text style={styles.date}>
-              {knownLanguage ? `${knownLanguage.flag} ` : ''}
+              {knownLanguage ? `${knownLanguage.flag} ` : ""}
               {spoken.name}
             </Text>
           ) : null}
@@ -300,29 +325,77 @@ export default function IdeaDetailScreen() {
 
         <Text style={styles.title}>{idea.title}</Text>
 
-        <AudioPlayer uri={idea.audioUri} durationSec={idea.durationSec} />
-
-        <View
-          style={[
-            styles.sourceBanner,
-            isDevice || isLive ? styles.sourceLive : styles.sourceDemo,
-          ]}
-        >
-          <Ionicons
-            name={isDevice || isLive ? 'mic' : 'information-circle-outline'}
-            size={16}
-            color={colors.primary}
-          />
-          <Text style={styles.sourceText}>{sourceLabel}</Text>
+        {/* Tabs styled like the Tasset category chips: pill-shaped, filled
+            when active. Switching tabs only flips local state - never leaves
+            the screen. */}
+        <View style={styles.tabBar}>
+          {(
+            [
+              { key: "thought", label: "Thought" },
+              { key: "insight", label: "AI Core Insight" },
+              { key: "signal", label: "Human Signal" },
+            ] as const
+          ).map((t) => {
+            const active = activeTab === t.key;
+            return (
+              <Pressable
+                key={t.key}
+                onPress={() => setActiveTab(t.key)}
+                style={[
+                  styles.tabChip,
+                  active
+                    ? { backgroundColor: tint.bg }
+                    : { backgroundColor: tint.soft },
+                ]}
+                accessibilityRole="button"
+                accessibilityState={{ selected: active }}
+              >
+                <Text
+                  style={[
+                    styles.tabChipText,
+                    { color: active ? tint.fg : tint.bg },
+                  ]}
+                  numberOfLines={1}
+                >
+                  {t.label}
+                </Text>
+              </Pressable>
+            );
+          })}
         </View>
 
-        <View style={styles.section}>
-          <View style={styles.sectionHeader}>
-            <Ionicons name="mic-outline" size={18} color={colors.secondary} />
-            <Text style={[styles.sectionTitle, styles.sectionTitleInline]}>Thought</Text>
+        {activeTab === "signal" ? (
+          <View style={styles.tabSection}>
+            <AudioPlayer uri={idea.audioUri} durationSec={idea.durationSec} />
           </View>
-          <View style={styles.transcriptCard}>
-            {/*
+        ) : null}
+
+        {activeTab === "thought" ? (
+          <View style={styles.tabSection}>
+            {/* Source label ("Transcribed from your recording" / "Translated…")
+              lives in the Thought tab per CR - it describes where the Thought
+              text came from. */}
+            <View
+              style={[
+                styles.sourceBanner,
+                isDevice || isLive ? styles.sourceLive : styles.sourceDemo,
+              ]}
+            >
+              <Ionicons
+                name={isDevice || isLive ? "mic" : "information-circle-outline"}
+                size={16}
+                color={colors.primary}
+              />
+              <Text style={styles.sourceText}>{sourceLabel}</Text>
+            </View>
+            <View style={styles.sectionHeader}>
+              <Ionicons name="mic-outline" size={18} color={colors.secondary} />
+              <Text style={[styles.sectionTitle, styles.sectionTitleInline]}>
+                Thought
+              </Text>
+            </View>
+            <View style={styles.transcriptCard}>
+              {/*
               WHY 'waiting' is checked first, ahead of the generic transcribing
               window: transcribing was true for the first 90 seconds no matter
               what, so a take that got queued for having no connection in the
@@ -334,130 +407,170 @@ export default function IdeaDetailScreen() {
               in-flight attempt (first try, or an active retry) gets the
               spinner.
             */}
-            {qStatus.state === 'waiting' ? (
-              <View style={styles.transcribingRow}>
-                <Ionicons name="cloud-offline-outline" size={18} color={colors.onSurfaceVariant} />
-                <Text style={styles.transcribingText}>
-                  Waiting for a connection. Your Human Signal is saved — the
-                  Thought will appear on its own once you are online.
+              {qStatus.state === "waiting" ? (
+                <View style={styles.transcribingRow}>
+                  <Ionicons
+                    name="cloud-offline-outline"
+                    size={18}
+                    color={colors.onSurfaceVariant}
+                  />
+                  <Text style={styles.transcribingText}>
+                    Waiting for a connection. Your Human Signal is saved — the
+                    Thought will appear on its own once you are online.
+                  </Text>
+                </View>
+              ) : transcribing || retrying ? (
+                <View style={styles.transcribingRow}>
+                  <ActivityIndicator size="small" color={colors.secondary} />
+                  <Text style={styles.transcribingText}>
+                    Preparing your Thought…
+                  </Text>
+                </View>
+              ) : qStatus.state === "retrying" ? (
+                <View style={styles.transcribingRow}>
+                  <ActivityIndicator size="small" color={colors.secondary} />
+                  <Text style={styles.transcribingText}>
+                    Trying again… (attempt {qStatus.attempts + 1}). Your
+                    recording is safe — no need to do anything.
+                  </Text>
+                </View>
+              ) : qStatus.state === "failed" ? (
+                <View>
+                  <Text style={styles.transcribingText}>
+                    We could not create the Thought after{" "}
+                    {qStatus.state === "failed" ? qStatus.attempts : 0}{" "}
+                    attempts. Your Human Signal is saved — you can play it
+                    above.
+                  </Text>
+                  <Pressable
+                    onPress={() => void onRetry()}
+                    style={styles.retryBtn}
+                  >
+                    <Text style={styles.retryText}>Try again</Text>
+                  </Pressable>
+                </View>
+              ) : transcriptText ? (
+                <Text style={styles.body}>{idea.transcript}</Text>
+              ) : pipelineFinished ? (
+                /**
+                 * WHY this requires pipelineFinished specifically: this is now a
+                 * genuinely definitive state - the pipeline ran, updated the
+                 * record, and produced no text - rather than a guess based on a
+                 * timer running out. Only here is it honest to say nothing more
+                 * is coming on its own.
+                 */
+                <Text style={styles.body}>
+                  No speech could be made out in this recording. The audio is
+                  saved — play it above.
                 </Text>
-              </View>
-            ) : transcribing || retrying ? (
-              <View style={styles.transcribingRow}>
-                <ActivityIndicator size="small" color={colors.secondary} />
-                <Text style={styles.transcribingText}>
-                  Preparing your Thought…
-                </Text>
-              </View>
-            ) : qStatus.state === 'retrying' ? (
-              <View style={styles.transcribingRow}>
-                <ActivityIndicator size="small" color={colors.secondary} />
-                <Text style={styles.transcribingText}>
-                  Trying again… (attempt {qStatus.attempts + 1}). Your recording
-                  is safe — no need to do anything.
-                </Text>
-              </View>
-            ) : qStatus.state === 'failed' ? (
-              <View>
-                <Text style={styles.transcribingText}>
-                  We could not create the Thought after{' '}
-                  {qStatus.state === 'failed' ? qStatus.attempts : 0} attempts.
-                  Your Human Signal is saved — you can play it above.
-                </Text>
-                <Pressable onPress={() => void onRetry()} style={styles.retryBtn}>
-                  <Text style={styles.retryText}>Try again</Text>
-                </Pressable>
-              </View>
-            ) : transcriptText ? (
-              <Text style={styles.body}>{idea.transcript}</Text>
-            ) : pipelineFinished ? (
-              /**
-               * WHY this requires pipelineFinished specifically: this is now a
-               * genuinely definitive state - the pipeline ran, updated the
-               * record, and produced no text - rather than a guess based on a
-               * timer running out. Only here is it honest to say nothing more
-               * is coming on its own.
-               */
-              <Text style={styles.body}>
-                No speech could be made out in this recording. The audio is
-                saved — play it above.
+              ) : (
+                /**
+                 * WHY a distinct branch: none of the states above matched, and
+                 * the pipeline has not definitively finished either - a brief
+                 * gap that can appear for a moment between poll ticks rather
+                 * than a real problem. A calm, non-committal message here
+                 * instead of a false "not configured" claim.
+                 */
+                <View style={styles.transcribingRow}>
+                  <ActivityIndicator size="small" color={colors.secondary} />
+                  <Text style={styles.transcribingText}>
+                    Preparing your Thought…
+                  </Text>
+                </View>
+              )}
+            </View>
+          </View>
+        ) : null}
+
+        {activeTab === "insight" ? (
+          <View style={styles.tabSection}>
+            <View style={styles.sectionHeader}>
+              <Ionicons
+                name="sparkles-outline"
+                size={18}
+                color={colors.secondary}
+              />
+              <Text style={[styles.sectionTitle, styles.sectionTitleInline]}>
+                AI Core Insight
               </Text>
-            ) : (
+            </View>
+            <Text style={styles.sectionHint}>Generated from the Thought</Text>
+
+            {showAnalysis ? (
+              <View style={styles.analysisStack}>
+                {ANALYSIS_FIELDS.map((field) => {
+                  const value = analysis?.[field.key]?.trim() ?? "";
+                  return (
+                    <View
+                      key={field.key}
+                      style={[
+                        styles.analysisCard,
+                        { backgroundColor: field.soft },
+                      ]}
+                    >
+                      <View
+                        style={[
+                          styles.analysisAccent,
+                          { backgroundColor: field.accent },
+                        ]}
+                      />
+                      <View style={styles.analysisHeader}>
+                        <View
+                          style={[
+                            styles.analysisIcon,
+                            { backgroundColor: colors.surfaceContainerLowest },
+                          ]}
+                        >
+                          <Ionicons
+                            name={field.icon}
+                            size={16}
+                            color={field.accent}
+                          />
+                        </View>
+                        <Text
+                          style={[
+                            styles.analysisLabel,
+                            { color: field.accent },
+                          ]}
+                        >
+                          {field.label}
+                        </Text>
+                      </View>
+                      <Text style={[styles.body, !value && styles.emptyValue]}>
+                        {value || "—"}
+                      </Text>
+                    </View>
+                  );
+                })}
+              </View>
+            ) : qStatus.state === "attempting" ||
+              qStatus.state === "waiting" ||
+              qStatus.state === "retrying" ? (
               /**
-               * WHY a distinct branch: none of the states above matched, and
-               * the pipeline has not definitively finished either - a brief
-               * gap that can appear for a moment between poll ticks rather
-               * than a real problem. A calm, non-committal message here
-               * instead of a false "not configured" claim.
+               * WHY the stored idea.summary is skipped here: it is set once, at
+               * save time, to a placeholder like "the transcript will appear once
+               * transcription completes" - and nothing ever updates it while a
+               * take is still being retried. Showing that stale, permanently
+               * optimistic text here directly contradicted the Thought section
+               * above once it had already moved on to "trying again" or "could
+               * not be created" - two different messages on the same screen
+               * disagreeing about what was actually happening. Deferring to the
+               * live qStatus here keeps both sections telling the same story.
                */
-              <View style={styles.transcribingRow}>
-                <ActivityIndicator size="small" color={colors.secondary} />
-                <Text style={styles.transcribingText}>Preparing your Thought…</Text>
+              <View style={styles.summaryCard}>
+                <View style={styles.summaryAccent} />
+                <Text style={styles.body}>
+                  Available once your Thought is ready.
+                </Text>
+              </View>
+            ) : (
+              <View style={styles.summaryCard}>
+                <View style={styles.summaryAccent} />
+                <Text style={styles.body}>{idea.summary}</Text>
               </View>
             )}
           </View>
-        </View>
-
-        <View style={styles.section}>
-          <View style={styles.sectionHeader}>
-            <Ionicons name="sparkles-outline" size={18} color={colors.secondary} />
-            <Text style={[styles.sectionTitle, styles.sectionTitleInline]}>AI Core Insight</Text>
-          </View>
-          <Text style={styles.sectionHint}>Generated from the Thought above</Text>
-
-          {showAnalysis ? (
-            <View style={styles.analysisStack}>
-              {ANALYSIS_FIELDS.map((field) => {
-                const value = analysis?.[field.key]?.trim() ?? '';
-                return (
-                  <View
-                    key={field.key}
-                    style={[styles.analysisCard, { backgroundColor: field.soft }]}
-                  >
-                    <View style={[styles.analysisAccent, { backgroundColor: field.accent }]} />
-                    <View style={styles.analysisHeader}>
-                      <View
-                        style={[
-                          styles.analysisIcon,
-                          { backgroundColor: colors.surfaceContainerLowest },
-                        ]}
-                      >
-                        <Ionicons name={field.icon} size={16} color={field.accent} />
-                      </View>
-                      <Text style={[styles.analysisLabel, { color: field.accent }]}>
-                        {field.label}
-                      </Text>
-                    </View>
-                    <Text style={[styles.body, !value && styles.emptyValue]}>
-                      {value || '—'}
-                    </Text>
-                  </View>
-                );
-              })}
-            </View>
-          ) : qStatus.state === 'attempting' || qStatus.state === 'waiting' || qStatus.state === 'retrying' ? (
-            /**
-             * WHY the stored idea.summary is skipped here: it is set once, at
-             * save time, to a placeholder like "the transcript will appear once
-             * transcription completes" - and nothing ever updates it while a
-             * take is still being retried. Showing that stale, permanently
-             * optimistic text here directly contradicted the Thought section
-             * above once it had already moved on to "trying again" or "could
-             * not be created" - two different messages on the same screen
-             * disagreeing about what was actually happening. Deferring to the
-             * live qStatus here keeps both sections telling the same story.
-             */
-            <View style={styles.summaryCard}>
-              <View style={styles.summaryAccent} />
-              <Text style={styles.body}>Available once your Thought is ready.</Text>
-            </View>
-          ) : (
-            <View style={styles.summaryCard}>
-              <View style={styles.summaryAccent} />
-              <Text style={styles.body}>{idea.summary}</Text>
-            </View>
-          )}
-        </View>
+        ) : null}
       </ScrollView>
       <DeleteThoughtDialog
         visible={confirmDelete}
@@ -471,7 +584,7 @@ export default function IdeaDetailScreen() {
 
 const styles = StyleSheet.create({
   retryBtn: {
-    alignSelf: 'flex-start',
+    alignSelf: "flex-start",
     marginTop: 14,
     paddingHorizontal: 16,
     paddingVertical: 9,
@@ -484,8 +597,8 @@ const styles = StyleSheet.create({
     color: colors.onSecondaryFixedVariant,
   },
   transcribingRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
+    flexDirection: "row",
+    alignItems: "center",
     gap: 10,
   },
   transcribingText: {
@@ -496,8 +609,8 @@ const styles = StyleSheet.create({
   },
   safe: { flex: 1, backgroundColor: colors.background },
   topBar: {
-    flexDirection: 'row',
-    alignItems: 'center',
+    flexDirection: "row",
+    alignItems: "center",
     paddingHorizontal: spacing.containerMargin,
     paddingVertical: spacing.stackMd,
     zIndex: 4,
@@ -505,27 +618,27 @@ const styles = StyleSheet.create({
   iconBtn: {
     width: 44,
     height: 44,
-    alignItems: 'center',
-    justifyContent: 'center',
+    alignItems: "center",
+    justifyContent: "center",
     zIndex: 5,
   },
-  brandHit: { flex: 1, alignItems: 'center' },
+  brandHit: { flex: 1, alignItems: "center" },
   brand: {
     fontFamily: fonts.headlineBold,
     fontSize: typography.titleMd.fontSize,
     color: colors.primary,
   },
-  topActions: { flexDirection: 'row', gap: 4, alignItems: 'center' },
+  topActions: { flexDirection: "row", gap: 4, alignItems: "center" },
   content: {
     paddingHorizontal: spacing.containerMargin,
     paddingBottom: 48,
   },
   metaRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
+    flexDirection: "row",
+    alignItems: "center",
     gap: 8,
     marginBottom: 8,
-    flexWrap: 'wrap',
+    flexWrap: "wrap",
   },
   category: {
     paddingHorizontal: 12,
@@ -536,7 +649,7 @@ const styles = StyleSheet.create({
     color: colors.onPrimary,
     fontFamily: fonts.label,
     fontSize: typography.labelSm.fontSize,
-    textTransform: 'uppercase',
+    textTransform: "uppercase",
     letterSpacing: 0.6,
   },
   date: {
@@ -553,8 +666,8 @@ const styles = StyleSheet.create({
   },
   sourceBanner: {
     marginTop: spacing.stackMd,
-    flexDirection: 'row',
-    alignItems: 'flex-start',
+    flexDirection: "row",
+    alignItems: "flex-start",
     gap: 8,
     padding: 12,
     borderRadius: radii.md,
@@ -569,9 +682,35 @@ const styles = StyleSheet.create({
     color: colors.primary,
   },
   section: { marginTop: spacing.sectionGap },
+  // Content shown inside a tab sits directly under the tab bar, so it uses a
+  // small top gap instead of the big 48px sectionGap that was meant to
+  // separate stacked sections. That large gap was the empty space under the
+  // tabs.
+  tabSection: { marginTop: spacing.stackMd },
+  tabBar: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: 8,
+    marginTop: spacing.stackMd,
+    marginBottom: 0,
+  },
+  tabChip: {
+    height: 36,
+    paddingHorizontal: 16,
+    borderRadius: radii.full,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  tabChipText: {
+    fontFamily: fonts.label,
+    fontSize: 14,
+    lineHeight: 18,
+    includeFontPadding: false,
+    textAlignVertical: "center",
+  },
   sectionHeader: {
-    flexDirection: 'row',
-    alignItems: 'center',
+    flexDirection: "row",
+    alignItems: "center",
     gap: 8,
     marginBottom: spacing.stackSm,
   },
@@ -601,10 +740,10 @@ const styles = StyleSheet.create({
     padding: 20,
     borderWidth: 1,
     borderColor: colors.secondaryFixed,
-    overflow: 'hidden',
+    overflow: "hidden",
   },
   summaryAccent: {
-    position: 'absolute',
+    position: "absolute",
     left: 0,
     top: 0,
     bottom: 0,
@@ -617,20 +756,20 @@ const styles = StyleSheet.create({
     paddingVertical: 16,
     paddingHorizontal: 18,
     paddingLeft: 22,
-    overflow: 'hidden',
+    overflow: "hidden",
     borderWidth: 1,
     borderColor: colors.border,
   },
   analysisAccent: {
-    position: 'absolute',
+    position: "absolute",
     left: 0,
     top: 0,
     bottom: 0,
     width: 4,
   },
   analysisHeader: {
-    flexDirection: 'row',
-    alignItems: 'center',
+    flexDirection: "row",
+    alignItems: "center",
     gap: 8,
     marginBottom: 8,
   },
@@ -638,14 +777,14 @@ const styles = StyleSheet.create({
     width: 28,
     height: 28,
     borderRadius: radii.sm,
-    alignItems: 'center',
-    justifyContent: 'center',
+    alignItems: "center",
+    justifyContent: "center",
   },
   analysisLabel: {
     fontFamily: fonts.bodySemi,
     fontSize: typography.labelMd.fontSize,
     letterSpacing: 0.2,
-    textTransform: 'uppercase',
+    textTransform: "uppercase",
   },
   body: {
     fontFamily: fonts.body,
@@ -655,9 +794,9 @@ const styles = StyleSheet.create({
   },
   emptyValue: {
     color: colors.onSurfaceVariant,
-    fontStyle: 'italic',
+    fontStyle: "italic",
   },
-  missing: { flex: 1, alignItems: 'center', justifyContent: 'center', gap: 12 },
+  missing: { flex: 1, alignItems: "center", justifyContent: "center", gap: 12 },
   missingText: { fontFamily: fonts.body, color: colors.onSurfaceVariant },
   link: { fontFamily: fonts.bodySemi, color: colors.secondary },
 });

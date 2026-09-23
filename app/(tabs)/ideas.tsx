@@ -254,7 +254,9 @@ export default function IdeasScreen() {
   return (
     <SafeAreaView style={styles.safe} edges={["top"]}>
       <View style={styles.pad}>
-        <ScreenHeader title="Think Tap" subtitle={tx("myArchive")} />
+        {/* Subtitle removed: "My Thoughts" should appear only once, as the
+            main heading below - not also under the brand here. */}
+        <ScreenHeader title="Think Tap" />
       </View>
 
       <View style={styles.titleBlock}>
